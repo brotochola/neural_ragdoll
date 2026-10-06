@@ -1,0 +1,12 @@
+{
+  "name": "neural-ragdoll",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "train": "node src/train.js",
+    "eval": "node src/train.js --eval"
+  },
+  "dependencies": {
+    "phaser-box2d": "^1.1.0"
+  }
+}

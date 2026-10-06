@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ragdoll: equilibrio, impactos y levantarse</title>
+  <style>
+    :root { --bg:#f3f4f8; --fg:#1b1f33; --ac:#3b6cf5; box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px) }
+    @media (prefers-color-scheme:dark) { :root:not([data-theme="light"]) { --bg:#0f1220; --fg:#e7e9f5; --ac:#6f95ff } }
+    :root[data-theme="dark"] { --bg:#0f1220; --fg:#e7e9f5; --ac:#6f95ff }
+    html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",sans-serif }
+    body { display:flex; flex-direction:column }
+    header { padding:10px 14px; font-weight:600 }
+    header small { font-weight:400; opacity:.7; margin-left:8px }
+    #c { flex:1; min-height:320px; margin:0 10px; border-radius:12px; overflow:hidden; background:#12162a }
+    #bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:10px 14px }
+    button { background:var(--ac); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer }
+    label { font-size:13px; display:flex; gap:6px; align-items:center }
+    #hint { padding:0 14px 10px; font-size:12px; opacity:.75 }
+    select { font-size:13px }
+    #err { color:#e5484d; padding:0 14px; font-size:13px }
+  </style>
+</head>
+<body>
+  <header>Ragdoll neuronal<small>Phaser Box2D + PixiJS · Elman + acciones · entrenado en Node</small></header>
+  <div id="c"></div>
+  <div id="bar">
+    <button id="p">Reanudar entrenamiento</button>
+    <button id="r">Reiniciar desde cero</button>
+    <button id="l">Volver al entrenado</button>
+    <button id="b">Ir al mejor</button>
+    <label><input type="radio" name="fw" id="fwBest" checked> Seguir el mejor</label>
+    <label><input type="radio" name="fw" id="fwLive"> Seguir vivo</label>
+    <button id="cp">Copiar pesos</button>
+    <label>Cómputo de entrenamiento <input id="s" type="range" min="0" max="40" value="0"> <span id="sv">0 ms/frame</span></label>
+    <button id="q">Reponer</button>
+    <label><input id="m" type="checkbox" checked> Modo libre</label>
+    <label>Objeto <select id="o">
+        <option value="0">Pelota 4,5 kg</option>
+        <option value="1">Caja 9 kg</option>
+        <option value="2">Pesa 25 kg</option>
+      </select></label>
+    <label>Plataforma ± <input id="pa" type="range" min="0" max="10" value="10"> <span id="pv">10°</span></label>
+    <button id="f">Disparar</button>
+    <label>Velocidad <input id="v" type="range" min="3" max="25" value="8"> <span id="vv">8 m/s</span></label>
+  </div>
+  <div id="hint">El canvas sigue la <b>mejor red</b> de Node (<code>bestTheta</code>). Cuando mejora el eval, se repone solo. “Seguir vivo” muestra la generación actual. Entrenamiento en el browser pausado por defecto.</div>
+  <div id="err"></div>
+  <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js"></script>
+  <script type="module">
+    import { CreateWorld, CreateBoxPolygon, CreateRevoluteJoint, b2Vec2, b2BodyType, b2World_Step, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Body_SetTransform, b2MakeRot, b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake, b2Body_GetLinearVelocity, b2Body_GetAngularVelocity, b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed, CreateCircle, CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2DestroyBody } from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
+    import * as Box2D from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
+    import { createSim, NW, KINDS, PW, HH, rngMk, cl } from './src/core.js';
+
+    const S = createSim(Box2D);
+    const V = (x, y) => new b2Vec2(x, y);
+    let rng = rngMk(7);
+    const $ = id => document.getElementById(id);
+
+    function* trainer(st) {
+      const TR = S.build();
+      while (true) {
+        const pop = S.esAsk(st, 10), fits = [];
+        for (const w of pop.ws) {
+          const ep = new S.Ep(TR, w, pop.o.tilt, pop.o.drop, pop.o);
+          while (!ep.step()); ep.cleanup(); fits.push(ep.stats); yield;
+        }
+        S.esTell(st, pop, fits); yield;
+      }
+    }
+
+    const fromWeights = c => ({
+      theta: Float32Array.from(c.theta),
+      bestTheta: c.bestTheta && c.bestTheta.length === NW ? Float32Array.from(c.bestTheta) : null,
+      gen: c.gen || 0, bestGen: c.bestGen || 0, hist: c.hist || [],
+      A: 0.12, Pm: 0, Q: 0, Pa: 0, G: 0,
+      fromFile: true, lastEval: c.eval || null
+    });
+    const loadFile = async () => {
+      try {
+        const c = await fetch('weights.json?t=' + Date.now()).then(r => { if (!r.ok) throw new Error('sin weights.json'); return r.json(); });
+        if (c && c.theta && c.theta.length === NW) return fromWeights(c);
+      } catch (e) { }
+      return null;
+    };
+    const loadSaved = () => {
+      try {
+        const c = JSON.parse(localStorage.getItem('ragdoll6'));
+        if (c && c.theta && c.theta.length === NW) return { theta: Float32Array.from(c.theta), gen: c.gen, hist: [], A: c.A, Pm: c.Pm, Q: c.Q, Pa: c.Pa, G: c.G || 0, resumed: true };
+      } catch (e) { }
+      return null;
+    };
+    const saveLocal = s => { try { localStorage.setItem('ragdoll6', JSON.stringify({ gen: s.gen, A: s.A, Pm: s.Pm, Q: s.Q, Pa: s.Pa, G: s.G || 0, theta: Array.from(s.theta, x => +x.toFixed(4)) })); } catch (e) { } };
+
+    const pool = { ok: false, ws: [], np: 0, err: '' };
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    let fileNet = null, paused = true, st, tr, newEp = () => { };
+
+    async function initPool() {
+      const ws = [];
+      try {
+        const K = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
+        await Promise.all(Array.from({ length: K }, () => new Promise((res, rej) => {
+          const w = new Worker('./src/browser-worker.js', { type: 'module' }), to = setTimeout(() => rej(new Error('sin respuesta en 15 s')), 15000);
+          w.onmessage = e => { if (e.data === 'ready') { clearTimeout(to); res(); } };
+          w.onerror = e => { clearTimeout(to); rej(new Error(e.message || 'error al crear el worker')); };
+          ws.push(w);
+        })));
+        pool.ws = ws; pool.ok = true; return K;
+      } catch (e) { pool.err = e.message; for (const w of ws) try { w.terminate(); } catch (_) { } pool.ws = []; pool.ok = false; return 0; }
+    }
+    function evalPop(items) {
+      const K = pool.ws.length, bk = Array.from({ length: K }, () => []);
+      items.forEach((it, i) => bk[i % K].push({ i, w: it.w, o: it.o }));
+      return Promise.all(bk.map((b, k) => b.length ? new Promise((res, rej) => {
+        const w = pool.ws[k]; w.onmessage = e => res(e.data); w.onerror = e => rej(new Error(e.message || 'error de worker')); w.postMessage({ tasks: b });
+      }) : [])).then(rs => { const out = new Array(items.length); for (const r of rs.flat()) out[r.i] = r; return out; });
+    }
+    async function poolLoop() {
+      while (pool.ok) {
+        if (paused) { await sleep(150); continue; }
+        const s = st;
+        try {
+          const pop = S.esAsk(s, Math.max(10, pool.ws.length * 2)); pool.np = pop.np;
+          const fits = await evalPop(pop.ws.map(w => ({ w, o: pop.o })));
+          if (st !== s) continue;
+          S.esTell(s, pop, fits);
+          if (s.gen % 20 === 0) saveLocal(s);
+        } catch (e) { $('err').textContent = 'Workers: ' + e.message; pool.ok = false; }
+      }
+    }
+    let nodeGen = -1, nodeBestGen = -1, downN = 0;
+    const followBest = () => $('fwBest').checked;
+    const followOn = () => $('fwBest').checked || $('fwLive').checked;
+    const displayW = () => (followBest() && st.bestTheta && st.bestTheta.length === NW) ? st.bestTheta : st.theta;
+    const status = () => {
+      const ev = st.lastEval ? `  ·  eval stand ${Math.round((st.lastEval.stand?.stood || 0) * 100)}% getup ${Math.round((st.lastEval.getup?.rec || 0) * 100)}%` : '';
+      const mode = followBest() ? 'mejor' : ($('fwLive').checked ? 'vivo' : 'manual');
+      return (pool.ok ? `${pool.ws.length} workers · población ${pool.np * 2}${paused ? ' · en pausa' : ''}` : (paused || +$('s').value === 0 ? 'sin entrenar en vivo' : 'un solo hilo')) + `  ·  ${mode}` + (st.fromFile ? '  ·  pesos de Node' : '') + (st.resumed ? '  ·  sesión local' : '') + ev;
+    };
+
+    fileNet = await loadFile();
+    st = fileNet || loadSaved() || S.freshState();
+    if (fileNet) { nodeGen = st.gen; nodeBestGen = st.bestGen ?? -1; }
+    tr = trainer(st);
+
+    $('v').oninput = e => $('vv').textContent = e.target.value + ' m/s';
+    $('s').oninput = e => $('sv').textContent = e.target.value + ' ms/frame';
+    $('p').onclick = e => {
+      paused = !paused;
+      e.target.textContent = paused ? 'Reanudar entrenamiento' : 'Pausar entrenamiento';
+    };
+    $('r').onclick = () => {
+      rng = rngMk(Date.now() & 0xffff); S.setRng(Date.now() & 0xffff);
+      st = S.freshState(); tr = trainer(st); st.t0 = performance.now(); newEp();
+    };
+    $('l').onclick = async () => {
+      try { localStorage.removeItem('ragdoll6'); } catch (e) { }
+      $('fwBest').checked = true;
+      fileNet = await loadFile();
+      st = fileNet || S.freshState(); tr = trainer(st); st.t0 = performance.now();
+      if (fileNet) { nodeGen = st.gen; nodeBestGen = st.bestGen ?? -1; }
+      newEp();
+    };
+    $('fwBest').onchange = () => newEp();
+    $('fwLive').onchange = () => newEp();
+
+    try {
+      const host = $('c'), app = new PIXI.Application();
+      await app.init({ resizeTo: host, background: 0x12162a, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+      host.appendChild(app.canvas);
+      initPool().then(k => { if (k) $('s').parentElement.style.display = 'none'; poolLoop(); });
+      const D = S.build(), g = new PIXI.Graphics(), ch = new PIXI.Graphics();
+      const tx = new PIXI.Text({ text: '', style: { fill: 0xdfe4ff, fontSize: 13, fontFamily: 'system-ui,sans-serif', lineHeight: 18 } });
+      tx.position.set(12, 10); app.stage.addChild(g, ch, tx);
+      let ep, hold = 0;
+      const view = { W: 300, S: 100, gy: 300, cx: 0 }, objs = [];
+      let drag = null, aim = null;
+      const clearObjs = () => { while (objs.length) b2DestroyBody(objs.pop().id); if (drag) { b2DestroyJoint(drag.jid); drag = null; } };
+      newEp = () => {
+        clearObjs(); const fr = $('m').checked;
+        if (ep) ep.cleanup();
+        const o = fr ? { amp: +$('pa').value * Math.PI / 180, T: 8, steps: 1e9 } : S.genOpts(Math.random, st);
+        ep = new S.Ep(D, displayW().slice(), fr ? (Math.random() * 2 - 1) * 0.1 : o.tilt, fr ? 0.12 : o.drop, o);
+        ep.free = fr; hold = 0;
+      };
+      newEp(); view.cx = ep.m.cx;
+      $('q').onclick = () => newEp();
+      $('b').onclick = () => { $('fwBest').checked = true; newEp(); };
+      $('cp').onclick = () => { try { navigator.clipboard.writeText(JSON.stringify({ gen: st.gen, H: 20, NI: 58, theta: Array.from(st.theta, x => +x.toFixed(4)) })).then(() => $('err').textContent = 'Pesos copiados', () => $('err').textContent = 'El navegador bloqueó el portapapeles'); } catch (e) { $('err').textContent = 'No se pudo copiar: ' + e.message; } };
+      $('pa').oninput = e => { $('pv').textContent = e.target.value + '°'; if (ep && ep.free) ep.o.amp = +e.target.value * Math.PI / 180; };
+      $('m').onchange = () => newEp();
+      const cv = app.canvas; cv.style.touchAction = 'none';
+      const toW = (sx, sy) => ({ x: (sx - view.W / 2) / view.S + view.cx, y: (view.gy - sy) / view.S });
+      const scr = e => { const r = cv.getBoundingClientRect(); return { sx: e.clientX - r.left, sy: e.clientY - r.top }; };
+      function pick(x, y) {
+        let best = null, bd = 1e9;
+        for (const p of D.P) {
+          const q = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id)), dx = x - q.x, dy = y - q.y, c = Math.cos(a), s = Math.sin(a), lx = c * dx + s * dy, ly = -s * dx + c * dy;
+          if (Math.abs(lx) <= p.hx + 0.05 && Math.abs(ly) <= p.hy + 0.05) { const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = p; } }
+        }
+        return best;
+      }
+      function spawn(x, y, vx, vy, ki) {
+        const k = KINDS[ki], pos = V(x, y);
+        const r = k.box ? CreateBoxPolygon({ worldId: D.wid, type: b2BodyType.b2_dynamicBody, position: pos, size: V(k.hx, k.hx), density: k.d, friction: 0.6, restitution: 0.2 }) : CreateCircle({ worldId: D.wid, type: b2BodyType.b2_dynamicBody, position: pos, radius: k.r, density: k.d, friction: 0.6, restitution: 0.3 });
+        b2Body_SetLinearVelocity(r.bodyId, V(vx, vy)); objs.push({ id: r.bodyId, k }); if (objs.length > 15) b2DestroyBody(objs.shift().id);
+      }
+      cv.addEventListener('pointerdown', e => {
+        const { sx, sy } = scr(e), w = toW(sx, sy), p = pick(w.x, w.y); cv.setPointerCapture(e.pointerId);
+        if (p) { const j = CreateMouseJoint({ worldId: D.wid, bodyIdA: D.ground, bodyIdB: p.id, target: V(w.x, w.y), hertz: 5, dampingRatio: 0.7, maxForce: 1500 }); drag = { jid: j.jointId, sx, sy, p }; }
+        else aim = { sx0: sx, sy0: sy, sx, sy };
+      });
+      cv.addEventListener('pointermove', e => { const { sx, sy } = scr(e); if (drag) { drag.sx = sx; drag.sy = sy; } if (aim) { aim.sx = sx; aim.sy = sy; } });
+      const up = () => {
+        if (drag) { b2DestroyJoint(drag.jid); drag = null; }
+        if (aim) {
+          const w = toW(aim.sx0, aim.sy0); let vx = (aim.sx - aim.sx0) / view.S * 5, vy = -(aim.sy - aim.sy0) / view.S * 5; const n = Math.hypot(vx, vy); if (n > 25) { vx *= 25 / n; vy *= 25 / n; }
+          spawn(w.x, Math.max(w.y, 0.2), vx, vy, +$('o').value); aim = null;
+        }
+      };
+      cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+      $('f').onclick = () => { const sd = Math.random() < 0.5 ? -1 : 1, v = +$('v').value; spawn(ep.m.cx + sd * 3.5, 1 + Math.random() * 0.6, -sd * v, 1.5, +$('o').value); };
+      const COL = [0x4f8cff, 0xffd166, 0x7aa2ff, 0x7aa2ff, 0xffd166, 0x43d9ad, 0x43d9ad, 0xf78c6c];
+      const order = [8, 9, 10, 11, 12, 13, 0, 1, 2, 3, 4, 5, 6, 7];
+      let acc = 0, fr = 0;
+      st.t0 = performance.now();
+      app.ticker.add(tk => {
+        const budget = +$('s').value, t0 = performance.now();
+        if (!pool.ok && !paused && budget > 0) while (performance.now() - t0 < budget) tr.next();
+        acc += Math.min(tk.deltaMS, 50);
+        while (acc >= 1000 / 60) { acc -= 1000 / 60; if (hold > 0) { hold--; if (!hold) newEp(); } else if (ep.step()) hold = 60; }
+        if (followOn() && paused && ep.fallen) { downN++; if (downN > 1200) { newEp(); downN = 0; } } else downN = 0;
+        const W = app.screen.width, Hh = app.screen.height, Sc = Math.min(Hh / 2.8, 150), gy = Hh * 0.78;
+        view.cx += (ep.m.cx - view.cx) * Math.min(1, tk.deltaMS / 250); const cx = view.cx; view.W = W; view.S = Sc; view.gy = gy;
+        if (drag) { const w = toW(drag.sx, drag.sy); b2MouseJoint_SetTarget(drag.jid, V(w.x, w.y)); }
+        const px = x => (x - cx) * Sc + W / 2, py = y => gy - y * Sc;
+        g.clear().rect(0, py(-0.5), W, Hh).fill(0x232a47);
+        for (let k = Math.floor(cx - W / Sc / 2) - 1; k <= cx + W / Sc / 2 + 1; k++) g.rect(px(k) - 1, py(-0.5), 2, 8).fill(0x3a4570);
+        {
+          const pq = b2Body_GetPosition(D.plat), pa = b2Rot_GetAngle(b2Body_GetRotation(D.plat)), pc = Math.cos(pa), ps = Math.sin(pa), pp = [];
+          for (const [lx, ly] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const x = lx * PW, y = ly * HH; pp.push(px(pq.x + pc * x - ps * y), py(pq.y + ps * x + pc * y)); }
+          g.poly([px(-0.15), py(-HH), px(0.15), py(-HH), px(0.25), py(-0.5), px(-0.25), py(-0.5)]).fill(0x3a4570); g.poly(pp).fill(0x5a6aa0);
+        }
+        for (const i of order) {
+          const p = D.P[i], pos = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id)), c = Math.cos(a), s = Math.sin(a), pts = [];
+          for (const [lx, ly] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const x = lx * p.hx, y = ly * p.hy; pts.push(px(pos.x + c * x - s * y), py(pos.y + s * x + c * y)); }
+          g.poly(pts).fill({ color: i < 2 ? COL[i] : COL[2 + (i - 2) % 6], alpha: i >= 8 ? 0.6 : 1 });
+        }
+        for (const o of objs) {
+          const q = b2Body_GetPosition(o.id), a = b2Rot_GetAngle(b2Body_GetRotation(o.id));
+          if (o.k.box) { const c = Math.cos(a), s = Math.sin(a), pts = []; for (const [lx, ly] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const x = lx * o.k.hx, y = ly * o.k.hx; pts.push(px(q.x + c * x - s * y), py(q.y + s * x + c * y)); } g.poly(pts).fill(o.k.c); }
+          else { const X = px(q.x), Y = py(q.y); g.circle(X, Y, o.k.r * Sc).fill(o.k.c); g.moveTo(X, Y).lineTo(X + Math.cos(-a) * o.k.r * Sc, Y + Math.sin(-a) * o.k.r * Sc).stroke({ width: 2, color: 0x12162a }); }
+        }
+        if (drag) { const q = b2Body_GetPosition(drag.p.id); g.moveTo(px(q.x), py(q.y)).lineTo(drag.sx, drag.sy).stroke({ width: 2, color: 0xffffff, alpha: 0.8 }); g.circle(drag.sx, drag.sy, 5).fill(0xffffff); }
+        if (aim) { g.moveTo(aim.sx0, aim.sy0).lineTo(aim.sx, aim.sy).stroke({ width: 2, color: 0xffffff, alpha: 0.8 }); g.circle(aim.sx0, aim.sy0, KINDS[+$('o').value].r * Sc || 8).fill({ color: KINDS[+$('o').value].c, alpha: 0.7 }); }
+        ch.clear(); const cw = Math.min(240, W - 24), chh = 70, x0 = W - cw - 12, y0 = 12, h = st.hist;
+        ch.roundRect(x0, y0, cw, chh, 6).fill({ color: 0x000000, alpha: 0.35 });
+        if (h.length > 1) {
+          const n = h.length, mx = 2.5, mn = 0;
+          for (const [key, c, sc] of [['m', 0x6f95ff, 1], ['b', 0x43d9ad, 1], ['s', 0xffb454, 2.5]]) {
+            h.forEach((q, i) => { const X = x0 + 4 + i / (n - 1) * (cw - 8), Y = y0 + chh - 4 - cl((q[key] * sc - mn) / (mx - mn), 0, 1) * (chh - 8); i ? ch.lineTo(X, Y) : ch.moveTo(X, Y); });
+            ch.stroke({ width: 1.5, color: c });
+          }
+        }
+        if (++fr % 8 === 0) {
+          const last = st.hist[st.hist.length - 1], ev = st.lastEval, m = ep.m;
+          const pose = m.footOn && !m.bodyOn ? (m.stance < 0.42 ? 'de pie' : 'apertura ancha') : (m.bodyOn ? 'en el suelo' : '');
+          tx.text = `Node gen ${st.gen}${st.bestGen != null ? '  ·  best gen ' + st.bestGen : ''}  ·  ${followBest() ? 'mejor' : 'vivo'}${ev ? `  ·  eval stand ${Math.round((ev.stand?.stood || 0) * 100)}% getup ${Math.round((ev.getup?.rec || 0) * 100)}%` : ''}\nFitness medio ${last ? last.m.toFixed(2) : '–'}  ·  mejor ${last ? last.b.toFixed(2) : '–'}  ·  en pie ${last ? Math.round(last.s * 100) : '–'}%\nCabeza ${m.hy.toFixed(2)} m  ·  apertura ${(m.stance || 0).toFixed(2)} m  ·  t ${(ep.t / 60).toFixed(1)} s  ·  ${pose}${m.handOn ? ' · manos' : ''}\n${status()}`;
+        }
+      });
+      async function pollWeights() {
+        try {
+          const c = await fetch('weights.json?t=' + Date.now()).then(r => r.ok ? r.json() : null);
+          if (!c || !c.theta || c.theta.length !== NW) return;
+          fileNet = fromWeights(c);
+          st.gen = c.gen; st.bestGen = c.bestGen; st.fromFile = true;
+          st.lastEval = c.eval || st.lastEval;
+          if (c.hist) st.hist = c.hist;
+          st.theta = Float32Array.from(c.theta);
+          if (c.bestTheta && c.bestTheta.length === NW) st.bestTheta = Float32Array.from(c.bestTheta);
+          if (!paused) return;
+          if (followBest()) {
+            const b = c.bestGen ?? -1;
+            if (b !== nodeBestGen && st.bestTheta) { nodeBestGen = b; newEp(); }
+            else if (ep && ep.fallen && downN > 1200) { newEp(); downN = 0; }
+          } else if ($('fwLive').checked && c.gen !== nodeGen) {
+            nodeGen = c.gen;
+            if (ep) {
+              ep.w = st.theta;
+              if (ep.fallen && downN > 1200) { newEp(); downN = 0; }
+            }
+          }
+        } catch (e) { }
+      }
+      pollWeights();
+      setInterval(pollWeights, 2000);
+    } catch (e) { $('err').textContent = 'Error: ' + e.message; console.error(e); }
+  </script>
+</body>
+</html>
