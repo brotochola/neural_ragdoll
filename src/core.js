@@ -13,7 +13,8 @@ export const MAXTILT = 0.1745;
 export const SIG0 = 0.1;
 export const SIG_GETUP = 0.12;
 export const getupTask = t => t === 'getup';
-const UP_ANG = 15 * Math.PI / 180, UP_HEAD = 1.45, STANCE_LO = 0.15, STANCE_HI = 0.45;
+// Gate only. Comfort (~0.29 m) stays in the stand reward (STANCE_PEAK), not here.
+const UP_ANG = 15 * Math.PI / 180, UP_HEAD = 1.45, STANCE_LO = 0.05, STANCE_HI = 0.9;
 export function isUp(m) {
   if (!m || !m.touch || !m.touch[7] || !m.touch[13]) return false;
   for (let i = 0; i < m.touch.length; i++) if (i !== 7 && i !== 13 && m.touch[i]) return false;
@@ -145,7 +146,8 @@ export function createSim(B, opts = {}) {
     for (const j of R.J) b2RevoluteJoint_SetMotorSpeed(j.id, 0);
   }
 
-  const TOUCH = 0.03, STANCE_PEAK = 0.29, FEET = [7, 13], HANDS = [4, 10];
+  // ponytail: 5mm, box2d slop. Resting parts overlap (<=0). 3cm was air.
+  const TOUCH = 0.005, STANCE_PEAK = 0.29, FEET = [7, 13], HANDS = [4, 10];
   const QF = b2DefaultQueryFilter(), RAY = 2;
   function rayDown(wid, x, y) {
     let frac = 1;
@@ -156,24 +158,27 @@ export function createSim(B, opts = {}) {
     }, 0);
     return frac;
   }
-  function partClear(p, tp) {
+  // Gap from the drawn box to the platform slab or the ground top. Not limb-on-limb, not the infinite tilt line.
+  function partClear(p, pq, pc, ps) {
     const q = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id)), c = Math.cos(a), s = Math.sin(a);
-    let plat = 1e9, gnd = 1e9;
+    let gap = 1e9;
     for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-      const lx = sx * p.hx, ly = sy * p.hy, wx = q.x + c * lx - s * ly, wy = q.y + s * lx + c * ly;
-      plat = Math.min(plat, wy - wx * tp);
-      gnd = Math.min(gnd, wy + 0.5);
+      const wx = q.x + c * sx * p.hx - s * sy * p.hy, wy = q.y + s * sx * p.hx + c * sy * p.hy;
+      const dx = wx - pq.x, dy = wy - pq.y, lx = pc * dx + ps * dy, ly = -ps * dx + pc * dy;
+      const ax = Math.abs(lx) - PW, ay = Math.abs(ly) - HH;
+      gap = Math.min(gap, ax > 0 && ay > 0 ? Math.hypot(ax, ay) : Math.max(ax, ay), wy + 0.5);
     }
-    return Math.min(plat, gnd);
+    return gap;
   }
   function sense(R) {
     const P = R.P, ys = new Float32Array(P.length), pa = b2Rot_GetAngle(b2Body_GetRotation(R.plat)), tp = Math.tan(pa);
+    const pq = b2Body_GetPosition(R.plat), pc = Math.cos(pa), ps = Math.sin(pa);
     let X = 0, Y = 0, VX = 0, VY = 0, M = 0, qx = [0, 0, 0], qy = [0, 0, 0];
     const m = { ys, pa, pw: b2Body_GetAngularVelocity(R.plat), touch: new Array(P.length), clear: new Array(P.length) };
     for (let i = 0; i < P.length; i++) {
       const p = P[i], q = b2Body_GetPosition(p.id), v = b2Body_GetLinearVelocity(p.id);
       ys[i] = q.y - q.x * tp; M += p.m; X += p.m * q.x; Y += p.m * ys[i]; VX += p.m * v.x; VY += p.m * v.y;
-      m.clear[i] = partClear(p, tp);
+      m.clear[i] = partClear(p, pq, pc, ps);
       m.touch[i] = m.clear[i] < TOUCH;
       if (i === 0) { m.tx = q.x; m.tvx = v.x; m.tvy = v.y; qx[0] = q.x; qy[0] = q.y; }
       if (i === 1) m.hvy = v.y;
