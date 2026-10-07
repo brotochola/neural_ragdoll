@@ -12,18 +12,50 @@
     body { display:flex; flex-direction:column }
     header { padding:10px 14px; font-weight:600 }
     header small { font-weight:400; opacity:.7; margin-left:8px }
-    #c { flex:1; min-height:320px; margin:0 10px; border-radius:12px; overflow:hidden; background:#12162a }
+    #stage { flex:1; min-height:320px; margin:0 10px; display:flex; gap:8px }
+    #c { flex:1.4; min-width:280px; min-height:280px; border-radius:12px; overflow:hidden; background:#12162a }
+    #side { width:min(420px, 38vw); min-width:280px; display:flex; flex-direction:column; gap:8px; min-height:0 }
+    #reward, #netbox { background:#12162a; color:#e7e9f5; border-radius:12px; padding:10px 12px }
+    #reward { flex:none }
+    #reward h2, #netbox h2 { margin:0 0 6px; font-size:13px; font-weight:600; letter-spacing:.02em }
+    #ptotal { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums }
+    #ptotal small { font-size:12px; font-weight:500; opacity:.7; margin-left:8px }
+    .row { display:grid; grid-template-columns:88px 1fr 64px; gap:8px; align-items:center; font-size:12px; padding:3px 0; cursor:help }
+    .bar { height:8px; border-radius:4px; background:#1c2238; position:relative; overflow:hidden }
+    .bar i { position:absolute; top:0; bottom:0; width:0 }
+    .pos { color:#3ecf8e } .neg { color:#ff4d5a }
+    #netbox { flex:1; min-height:0; display:flex; flex-direction:column }
+    #netlist { overflow:auto; flex:1; min-height:80px }
+    #netlist h3 { margin:8px 0 4px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; opacity:.6 }
+    #nvwrap { height:200px; position:relative; flex:none; border-top:1px solid #2a3148; margin:8px -12px -10px }
+    #nv { position:absolute; inset:0; width:100%; height:100% }
+    @media (max-width:900px) { #stage { flex-direction:column } #side { width:auto; height:520px } }
     #bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:10px 14px }
     button { background:var(--ac); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer }
     label { font-size:13px; display:flex; gap:6px; align-items:center }
     #hint { padding:0 14px 10px; font-size:12px; opacity:.75 }
     select { font-size:13px }
     #err { color:#e5484d; padding:0 14px; font-size:13px }
+    #tip { position:fixed; z-index:40; max-width:min(280px, calc(100vw - 16px)); padding:6px 9px; border-radius:8px; background:var(--fg); color:var(--bg); font-size:12px; font-weight:500; line-height:1.35; pointer-events:none; box-shadow:0 6px 18px rgba(0,0,0,.28) }
   </style>
 </head>
 <body>
   <header>Ragdoll neuronal<small>Phaser Box2D + PixiJS · Elman + acciones · entrenado en Node</small></header>
-  <div id="c"></div>
+  <div id="stage">
+    <div id="c"></div>
+    <div id="side">
+      <section id="reward">
+        <h2 title="Suma de esta decisión. El máximo es estar erguido, solo con los dos pies, cadera y cabeza altas.">Premio de esta decisión</h2>
+        <div id="ptotal">–</div>
+        <div id="pfactors"></div>
+      </section>
+      <section id="netbox">
+        <h2 title="La misma pasada que mueve el cuerpo. Verde suma, rojo resta. Pasá el mouse para la explicación.">Red completa</h2>
+        <div id="netlist"></div>
+        <div id="nvwrap" title="Solo los caminos más fuertes hacia las ocultas más activas. Verde excita, rojo inhibe."><canvas id="nv"></canvas></div>
+      </section>
+    </div>
+  </div>
   <div id="bar">
     <button id="p">Reanudar entrenamiento</button>
     <button id="r">Reiniciar desde cero</button>
@@ -31,16 +63,13 @@
     <button id="b">Ir al mejor</button>
     <label><input type="radio" name="fw" id="fwBest"> Seguir el mejor</label>
     <label><input type="radio" name="fw" id="fwLive" checked> Seguir vivo</label>
-    <label><input type="radio" name="net" id="netAuto" checked> Auto</label>
-    <label><input type="radio" name="net" id="netStand"> Equilibrio</label>
-    <label><input type="radio" name="net" id="netGetup"> Levantar</label>
     <button id="cp">Copiar pesos</button>
     <label>Cómputo de entrenamiento <input id="s" type="range" min="0" max="40" value="0"> <span id="sv">0 ms/frame</span></label>
     <button id="q">Reponer</button>
     <label><input id="m" type="checkbox" checked> Modo libre</label>
-    <label><input id="lie" type="checkbox"> Empezar acostado</label>
-    <label><input type="radio" name="liepose" id="lieSupine" checked> Boca arriba</label>
-    <label><input type="radio" name="liepose" id="lieProne"> Boca abajo</label>
+    <label><input id="lie" type="checkbox" checked> Empezar acostado</label>
+    <label><input type="radio" name="liepose" id="lieSupine"> Boca arriba</label>
+    <label><input type="radio" name="liepose" id="lieProne" checked> Boca abajo</label>
     <label>Objeto <select id="o">
         <option value="0">Pelota 4,5 kg</option>
         <option value="1">Caja 9 kg</option>
@@ -50,16 +79,140 @@
     <button id="f">Disparar</button>
     <label>Velocidad <input id="v" type="range" min="3" max="25" value="8"> <span id="vv">8 m/s</span></label>
   </div>
-  <div id="hint">Dos redes: <b>equilibrio</b> y <b>levantar</b>. <b>Auto</b> usa levantar mientras no está de pie y pasa a equilibrio tras ~0,5–1 s de pie. <b>Empezar acostado</b> arranca con levantar. F5 recarga.</div>
+  <div id="hint">Una sola red. El premio de la derecha es el de esta decisión: verde suma, rojo resta. <b>De pie</b> solo entra si están los dos pies, nada más toca, el torso está erguido y la cabeza alta. Abajo, los caminos más fuertes. F5 recarga.</div>
   <div id="err"></div>
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js"></script>
   <script type="module">
     import { CreateWorld, CreateBoxPolygon, CreateRevoluteJoint, b2Vec2, b2BodyType, b2World_Step, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Body_SetTransform, b2MakeRot, b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake, b2Body_GetLinearVelocity, b2Body_GetAngularVelocity, b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed, CreateCircle, CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2DestroyBody } from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
     import * as Box2D from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
-    import { createSim, NW, NI, KINDS, PW, HH, rngMk, cl, netsFromCkpt, padWeights, isUp } from './src/core.js';
+    import { createSim, NW, NI, H, O, KINDS, PW, HH, rngMk, cl, netsFromCkpt, padWeights, isUp, prizeBreakdown } from './src/core.js';
 
     const S = createSim(Box2D);
     const V = (x, y) => new b2Vec2(x, y);
+    const JN = ['cuello', 'hombro I', 'codo I', 'muñeca I', 'cadera I', 'rodilla I', 'tobillo I', 'hombro D', 'codo D', 'muñeca D', 'cadera D', 'rodilla D', 'tobillo D'];
+    const inName = i => {
+      if (i < 13) return '∠ ' + JN[i];
+      if (i < 26) return 'ω ' + JN[i - 13];
+      if (i < 39) return ['seno', 'cos', 'ω torso', 'vx torso', 'vy torso', 'com x', 'com y', 'vx', 'vy', 'apoyo', 'cae cabeza', 'cae torso', 'altura'][i - 26];
+      if (i < 43) return 'planta ' + (i - 38);
+      if (i === 43) return 'plat ∠';
+      if (i === 44) return 'plat ω';
+      if (i < 58) return 'prev ' + JN[i - 45];
+      if (i < 64) return ['toca torso', 'toca cabeza', 'toca mano I', 'toca mano D', 'toca pie I', 'toca pie D'][i - 58];
+      if (i < 67) return ['rayo torso', 'rayo pie I', 'rayo pie D'][i - 64];
+      if (i < 72) return ['libre mano I', 'libre mano D', 'libre espin I', 'libre espin D', 'libre cabeza'][i - 67];
+      if (i === 72) return 'rayo cabeza';
+      if (i < 75) return i === 73 ? 'sen cabeza' : 'cos cabeza';
+      return ['libre muslo I', 'libre muslo D', 'libre codo I', 'libre codo D'][i - 75];
+    };
+    const inTip = i => {
+      if (i < 13) return 'Ángulo de la articulación ' + JN[i] + ', normalizado por su rango.';
+      if (i < 26) return 'Velocidad angular de ' + JN[i - 13] + '.';
+      if (i < 58 && i >= 45) return 'Acción anterior de ' + JN[i - 45] + '.';
+      return ({
+        26: 'Seno del ángulo del torso. Junto con el coseno dice si está erguido o acostado.',
+        27: 'Coseno del torso. 1 es vertical, 0 es acostado, negativo es dado vuelta.',
+        28: 'Qué tan rápido gira el torso.',
+        72: 'Rayo hacia abajo desde la cabeza. 1 es lejos, 0 es que chocó.',
+        73: 'Seno del ángulo de la cabeza.',
+        74: 'Coseno de la cabeza. 1 es erguida.'
+      })[i] || inName(i);
+    };
+    function paintPanels(ep, pz) {
+      const tot = $('ptotal');
+      tot.className = pz.total >= 0 ? 'pos' : 'neg';
+      tot.innerHTML = pz.total.toFixed(2) + '<small title="Techo si está erguido, solo con los pies, cabeza y cadera altas.">máx ' + pz.max.toFixed(2) + '</small>';
+      $('pfactors').innerHTML = pz.terms.map(t => {
+        const w = Math.min(48, Math.abs(t.v) / 1.2 * 48);
+        const left = t.v >= 0 ? 50 : 50 - w;
+        return '<div class="row" title="' + t.tip + '"><span>' + t.n + '</span><span class="bar"><i style="left:' + left + '%;width:' + w + '%;background:' + (t.v >= 0 ? '#3ecf8e' : '#ff4d5a') + '"></i></span><span class="' + (t.v >= 0 ? 'pos' : 'neg') + '">' + (t.v >= 0 ? '+' : '') + t.v.toFixed(2) + '</span></div>';
+      }).join('');
+      const x = ep && ep.x, h = ep && ep.h, y = ep && ep.a;
+      if (!x || !h || !y) return;
+      const line = (name, v, tip) => '<div class="row" title="' + tip + '"><span>' + name + '</span><span class="bar"><i style="width:' + Math.min(100, Math.abs(v) * 100) + '%;background:' + (v >= 0 ? '#3ecf8e' : '#ff4d5a') + '"></i></span><span>' + (v >= 0 ? '+' : '') + v.toFixed(2) + '</span></div>';
+      let html = '<h3>Entradas (' + x.length + ')</h3>';
+      for (let i = 0; i < x.length; i++) html += line(inName(i), x[i], inTip(i));
+      html += '<h3>Ocultas (' + h.length + ')</h3>';
+      for (let j = 0; j < h.length; j++) html += line(String(j), h[j], 'Estado de la neurona oculta ' + j + '. Se acuerda un poco del paso anterior.');
+      html += '<h3>Salidas</h3>';
+      for (let o = 0; o < y.length; o++) html += line(JN[o], y[o], 'Torque pedido en ' + JN[o] + '. Positivo y negativo doblan para lados distintos.');
+      $('netlist').innerHTML = html;
+    }
+    function drawNet(ep) {
+      const cv = $('nv'), dpr = Math.min(2, window.devicePixelRatio || 1);
+      const W = cv.clientWidth, Ht = cv.clientHeight;
+      if (W < 20 || Ht < 20) return;
+      const pw = Math.floor(W * dpr), ph = Math.floor(Ht * dpr);
+      if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+      const g = cv.getContext('2d');
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, W, Ht);
+      const getup = ep && ep.activeNet !== 'stand';
+      g.font = '12px system-ui,sans-serif';
+      g.fillStyle = getup ? '#ff4455' : '#8eb4ff';
+      g.fillText('Una red · caminos fuertes', 10, 16);
+      const x = ep && ep.x, h = ep && ep.h, y = ep && ep.a, w = ep && ep.w;
+      if (!x || !h || !y || !w) return;
+      const hdn = h.length;
+      const STR = 1 + NI + hdn, top = 48, bot = Ht - 8, xH = Math.max(168, W * 0.46), xO = W - 112;
+      const yAt = (i, n) => top + (i + 0.5) * (bot - top) / n;
+      const hotIdx = [...Array(hdn).keys()].sort((a, b) => Math.abs(h[b]) - Math.abs(h[a])).slice(0, 5);
+      const hot = new Set(hotIdx), ins = [], outs = [];
+      for (const j of hotIdx) {
+        const base = j * STR + 1;
+        for (let i = 0; i < NI; i++) { const c = w[base + i] * x[i]; ins.push({ i, j, s: Math.abs(c), p: c }); }
+        for (let o = 0; o < O; o++) { const c = w[hdn * STR + o * (hdn + 1) + 1 + j] * h[j]; outs.push({ o, j, s: Math.abs(c), p: c }); }
+      }
+      ins.sort((a, b) => b.s - a.s); outs.sort((a, b) => b.s - a.s);
+      const inE = ins.slice(0, 8), outE = outs.slice(0, 8);
+      const show = [], seen = new Set();
+      for (const e of inE) if (!seen.has(e.i)) { seen.add(e.i); show.push(e.i); }
+      for (const i of [...Array(NI).keys()].sort((a, b) => Math.abs(x[b]) - Math.abs(x[a]))) {
+        if (show.length >= 8) break;
+        if (!seen.has(i)) { seen.add(i); show.push(i); }
+      }
+      show.sort((a, b) => Math.abs(x[b]) - Math.abs(x[a]));
+      const rowOf = new Map(show.map((i, k) => [i, k]));
+      const maxIn = inE[0] ? inE[0].s : 1, maxOut = outE[0] ? outE[0].s : 1;
+      const link = (e, x0, y0, x1, y1, maxS) => {
+        const t = e.s / (maxS || 1);
+        g.strokeStyle = e.p >= 0 ? `rgba(62,207,142,${0.2 + 0.75 * t})` : `rgba(255,77,90,${0.2 + 0.75 * t})`;
+        g.lineWidth = 1 + 2.2 * t;
+        g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      };
+      for (const e of inE) if (rowOf.has(e.i)) link(e, 150, yAt(rowOf.get(e.i), show.length), xH - 12, yAt(e.j, hdn), maxIn);
+      for (const e of outE) link(e, xH + 12, yAt(e.j, hdn), xO - 6, yAt(e.o, O), maxOut);
+      g.font = '11px system-ui,sans-serif';
+      g.fillStyle = '#9aa3c7';
+      g.fillText('Entradas', 10, 34); g.fillText('Ocultas', xH - 22, 34); g.fillText('Salidas', xO, 34);
+      show.forEach((i, k) => {
+        const yy = yAt(k, show.length), v = x[i], bw = Math.min(78, Math.abs(v) * 40);
+        g.fillStyle = v >= 0 ? 'rgba(62,207,142,0.85)' : 'rgba(255,77,90,0.85)';
+        g.fillRect(8, yy - 5, Math.max(2, bw), 10);
+        g.fillStyle = '#e7e9f5';
+        g.fillText(inName(i), 12, yy + 3);
+      });
+      for (let j = 0; j < hdn; j++) {
+        const yy = yAt(j, hdn), mag = Math.min(1, Math.abs(h[j]));
+        g.beginPath();
+        g.fillStyle = h[j] >= 0 ? `rgba(255,214,120,${0.12 + 0.88 * mag})` : `rgba(130,170,255,${0.12 + 0.88 * mag})`;
+        g.arc(xH, yy, 4 + 5 * mag, 0, 6.3); g.fill();
+        g.font = '10px system-ui,sans-serif';
+        g.fillStyle = hot.has(j) ? '#fff' : 'rgba(255,255,255,0.35)';
+        g.fillText(String(j), xH + 14, yy + 3);
+      }
+      g.font = '11px system-ui,sans-serif';
+      const hitO = new Set(outE.map(e => e.o));
+      for (let o = 0; o < O; o++) {
+        const yy = yAt(o, O), v = y[o], bw = Math.min(46, Math.abs(v) * 46);
+        g.globalAlpha = hitO.has(o) ? 1 : 0.4;
+        g.fillStyle = v >= 0 ? '#3ecf8e' : '#ff4d5a';
+        g.fillRect(v >= 0 ? xO : xO - bw, yy - 4, Math.max(2, bw), 8);
+        g.fillStyle = '#e7e9f5';
+        g.fillText(JN[o], xO + 6, yy + 3);
+      }
+      g.globalAlpha = 1;
+    }
     let rng = rngMk(7);
     const $ = id => document.getElementById(id);
 
@@ -78,10 +231,10 @@
     const fromWeights = c => {
       const n = netsFromCkpt(c);
       return {
-        thetaStand: n.thetaStand, thetaGetup: n.thetaGetup, theta: n.thetaStand,
-        bestStand: n.bestStand, bestGetup: n.bestGetup, bestTheta: n.bestStand,
-        gen: c.gen || 0, bestGen: c.bestStandGen || c.bestGen || 0,
-        bestStandGen: c.bestStandGen ?? c.bestGen, bestGetupGen: c.bestGetupGen,
+        theta: n.thetaStand, bestTheta: n.bestStand, thetaStand: n.thetaStand, thetaGetup: n.thetaStand,
+        bestStand: n.bestStand, bestGetup: n.bestStand,
+        gen: c.gen || 0, bestGen: c.bestGen || 0,
+        bestStandGen: c.bestStandGen ?? c.bestGen, bestSupineGen: c.bestSupineGen ?? c.bestGetupGen, bestProneGen: c.bestProneGen,
         hist: c.hist || [],
         A: 0.12, Pm: 0, Q: 0, Pa: 0, G: 0,
         fromFile: true, lastEval: c.eval || null
@@ -100,8 +253,8 @@
         if (c && (padWeights(c.theta) || padWeights(c.thetaStand))) {
           const n = netsFromCkpt(c);
           return {
-            thetaStand: n.thetaStand, thetaGetup: n.thetaGetup, theta: n.thetaStand,
-            bestStand: n.bestStand, bestGetup: n.bestGetup, bestTheta: n.bestStand,
+            thetaStand: n.thetaStand, thetaSupine: n.thetaSupine, thetaProne: n.thetaProne, thetaGetup: n.thetaSupine, theta: n.thetaStand,
+            bestStand: n.bestStand, bestSupine: n.bestSupine, bestProne: n.bestProne, bestGetup: n.bestSupine, bestTheta: n.bestStand,
             gen: c.gen, hist: [], A: c.A, Pm: c.Pm, Q: c.Q, Pa: c.Pa, G: c.G || 0, resumed: true
           };
         }
@@ -152,9 +305,9 @@
     const followOn = () => $('fwBest').checked || $('fwLive').checked;
     const netMode = () => $('netGetup').checked ? 'getup' : $('netStand').checked ? 'stand' : 'auto';
     const displayNets = () => {
-      const stand = (followBest() ? (st.bestStand || st.bestTheta) : (st.thetaStand || st.theta));
-      const getup = (followBest() ? (st.bestGetup || st.bestStand || st.bestTheta) : (st.thetaGetup || st.theta));
-      return { stand: stand.slice(), getup: getup.slice(), mode: netMode() };
+      const one = (followBest() ? (st.bestTheta || st.theta) : (st.theta || st.thetaStand));
+      const w = one.slice();
+      return { stand: w, supine: w.slice(), prone: w.slice(), getup: w.slice(), mode: 'auto' };
     };
     const status = () => {
       const ev = st.lastEval ? `  ·  eval stand ${Math.round((st.lastEval.stand?.stood || 0) * 100)}% getup ${Math.round((st.lastEval.getup?.rec || 0) * 100)}%` : '';
@@ -187,9 +340,6 @@
     };
     $('fwBest').onchange = () => newEp();
     $('fwLive').onchange = () => newEp();
-    $('netAuto').onchange = () => newEp();
-    $('netStand').onchange = () => newEp();
-    $('netGetup').onchange = () => newEp();
 
     try {
       const host = $('c'), app = new PIXI.Application();
@@ -209,8 +359,9 @@
         if (ep) ep.cleanup();
         let o, tilt, drop;
         if (lie) {
-          const p = $('lieProne').checked ? S.pronePose(Math.random) : S.supinePose(Math.random);
-          o = { amp: 0, T: 8, ph: 0, proj: [], task: 'getup', steps: 1e9 };
+          const pose = $('lieProne').checked ? 'prone' : 'supine';
+          const p = pose === 'prone' ? S.pronePose(Math.random) : S.supinePose(Math.random);
+          o = { amp: 0, T: 8, ph: 0, proj: [], task: 'getup', steps: 1e9, pose };
           tilt = p.tilt; drop = p.drop;
         } else if (fr) {
           o = { amp: +$('pa').value * Math.PI / 180, T: 8, steps: 1e9 };
@@ -220,8 +371,7 @@
           tilt = o.tilt; drop = o.drop;
         }
         const nets = displayNets();
-        if (lie && nets.mode === 'stand') nets.mode = 'getup';
-        ep = new S.Ep(D, (lie || nets.mode === 'getup') ? nets.getup : nets.stand, tilt, drop, Object.assign(o, { policy: nets }));
+        ep = new S.Ep(D, (st.theta || nets.getup).slice(), tilt, drop, o);
         ep.free = fr || lie; hold = 0;
       };
       newEp(); view.cx = ep.m.cx;
@@ -265,7 +415,7 @@
       cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
       $('f').onclick = () => { const sd = Math.random() < 0.5 ? -1 : 1, v = +$('v').value; spawn(ep.m.cx + sd * 3.5, 1 + Math.random() * 0.6, -sd * v, 1.5, +$('o').value); };
       const COL = [0x4f8cff, 0xffd166, 0x7aa2ff, 0x7aa2ff, 0xffd166, 0x43d9ad, 0x43d9ad, 0xf78c6c];
-      const order = [8, 9, 10, 11, 12, 13, 0, 1, 2, 3, 4, 5, 6, 7];
+      const order = [8, 9, 10, 11, 12, 13, 0, 1, 2, 3, 4, 5, 6, 7, 14];
       let acc = 0, fr = 0;
       st.t0 = performance.now();
       app.ticker.add(tk => {
@@ -288,7 +438,20 @@
         for (const i of order) {
           const p = D.P[i], pos = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id)), c = Math.cos(a), s = Math.sin(a), pts = [];
           for (const [lx, ly] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const x = lx * p.hx, y = ly * p.hy; pts.push(px(pos.x + c * x - s * y), py(pos.y + s * x + c * y)); }
+          if (p.circle) { g.circle(px(pos.x), py(pos.y), p.r * Sc).fill(0xe8b86a); continue; }
           g.poly(pts).fill({ color: i < 2 ? COL[i] : COL[2 + (i - 2) % 6], alpha: i >= 8 ? 0.6 : 1 });
+        }
+        {
+          const hips = [];
+          for (const j of D.J) {
+            if (!j.mark) continue;
+            const p = D.P[j.a], pos = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id));
+            const c = Math.cos(a), s = Math.sin(a);
+            const x = pos.x + c * j.ax - s * j.ay, y = pos.y + s * j.ax + c * j.ay;
+            if (j.mark === 'hip') hips.push([x, y]);
+            else g.circle(px(x), py(y), (j.mark === 'knee' ? 0.055 : 0.045) * Sc).fill(0xf2d48a);
+          }
+          if (hips.length === 2) g.circle(px((hips[0][0] + hips[1][0]) / 2), py((hips[0][1] + hips[1][1]) / 2), D.P[0].hx * 1.1 * Sc).fill(0xe8b86a);
         }
         for (const o of objs) {
           const q = b2Body_GetPosition(o.id), a = b2Rot_GetAngle(b2Body_GetRotation(o.id));
@@ -310,9 +473,13 @@
           const last = st.hist[st.hist.length - 1], ev = st.lastEval, m = ep.m;
           const upv = Math.max(0, Math.cos(m.a));
           const pose = isUp(m) ? 'de pie' : ((m.handOn || m.shinOn) && !m.touch[0] ? 'apoyado en manos' : (upv < 0.35 && m.bodyOn ? 'acostado' : (m.bodyOn ? 'en el suelo' : '')));
-          const red = ep.activeNet === 'getup' ? 'levantar' : 'equilibrio';
-          tx.text = `Node gen ${st.gen}${st.bestStandGen != null || st.bestGen != null ? '  ·  best eq ' + (st.bestStandGen ?? st.bestGen) : ''}${st.bestGetupGen != null ? '  ·  best lev ' + st.bestGetupGen : ''}  ·  ${followBest() ? 'mejor' : 'vivo'}  ·  red ${red}${ev ? `  ·  eval stand ${Math.round((ev.stand?.stood || 0) * 100)}% getup ${Math.round((ev.getup?.rec || 0) * 100)}%` : ''}\nFitness medio ${last ? last.m.toFixed(2) : '–'}  ·  mejor ${last ? last.b.toFixed(2) : '–'}  ·  en pie ${last ? Math.round(last.s * 100) : '–'}%\nCabeza ${m.hy.toFixed(2)} m  ·  |α| ${(Math.abs(m.a) * 180 / Math.PI).toFixed(0)}°  ·  apertura ${(m.stance || 0).toFixed(2)} m  ·  t ${(ep.t / 60).toFixed(1)} s  ·  ${pose}${m.handOn ? ' · manos' : ''}\n${status()}`;
+          tx.style.fill = 0xff4455;
+          const evTxt = !ev ? '' : `  ·  eval arriba ${Math.round((ev.supine?.up || 0) * 100)}% abajo ${Math.round((ev.prone?.up || 0) * 100)}% parado ${Math.round((ev.up?.up || 0) * 100)}%`;
+          const pz = prizeBreakdown(m);
+          paintPanels(ep, pz);
+          tx.text = `gen ${st.gen}  ·  ${followBest() ? 'mejor' : 'vivo'}${evTxt}\nCabeza ${m.hy.toFixed(2)} m  ·  |α| ${(Math.abs(m.a) * 180 / Math.PI).toFixed(0)}°  ·  apertura ${(m.stance || 0).toFixed(2)} m  ·  ${pose}\n${status()}`;
         }
+        drawNet(ep);
       });
       async function pollWeights() {
         try {
@@ -323,8 +490,10 @@
           st.bestStandGen = c.bestStandGen ?? c.bestGen; st.bestGetupGen = c.bestGetupGen;
           st.lastEval = c.eval || st.lastEval;
           if (c.hist) st.hist = c.hist;
-          st.thetaStand = fileNet.thetaStand; st.thetaGetup = fileNet.thetaGetup; st.theta = fileNet.thetaStand;
-          st.bestStand = fileNet.bestStand; st.bestGetup = fileNet.bestGetup; st.bestTheta = fileNet.bestStand;
+          st.thetaStand = fileNet.thetaStand; st.thetaSupine = fileNet.thetaSupine; st.thetaProne = fileNet.thetaProne;
+          st.thetaGetup = fileNet.thetaSupine; st.theta = fileNet.thetaStand;
+          st.bestStand = fileNet.bestStand; st.bestSupine = fileNet.bestSupine; st.bestProne = fileNet.bestProne;
+          st.bestGetup = fileNet.bestSupine; st.bestTheta = fileNet.bestStand;
           if (!paused) return;
           if (followBest()) {
             const b = c.bestStandGen ?? c.bestGen ?? -1;
@@ -334,15 +503,18 @@
             nodeGen = c.gen;
             if (ep && ep.policy) {
               ep.policy.stand = st.thetaStand;
-              ep.policy.getup = st.thetaGetup;
-              ep.w = ep.activeNet === 'getup' ? st.thetaGetup : st.thetaStand;
+              ep.policy.supine = st.thetaSupine;
+              ep.policy.prone = st.thetaProne;
+              ep.policy.getup = st.thetaSupine;
+              const use = ep.activeNet === 'stand' ? st.thetaStand : ep.activeNet === 'prone' ? st.thetaProne : st.thetaSupine;
+              if (use) ep.w = use;
               if (ep.fallen && downN > 1200) { newEp(); downN = 0; }
             }
           }
         } catch (e) { }
       }
       pollWeights();
-      setInterval(pollWeights, 2000);
+      setInterval(pollWeights, 1000);
     } catch (e) { $('err').textContent = 'Error: ' + e.message; console.error(e); }
   </script>
 </body>

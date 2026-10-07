@@ -4,8 +4,16 @@ export const DT = 1 / 60;
 export const H = 20;
 export const O = 13;
 export const NI0 = 58;
-export const NI = 72;
-export const NW = H * (NI + H + 1) + O * (H + 1);
+export const NI = 79;
+export function nwOf(h) { return h * (NI + h + 1) + O * (h + 1); }
+export function hiddenOf(len) {
+  const b = NI + 1 + O;
+  const disc = b * b - 4 * (O - len);
+  if (!(disc >= 0)) return 0;
+  const h = Math.round((-b + Math.sqrt(disc)) / 2);
+  return h >= 1 && nwOf(h) === len ? h : 0;
+}
+export const NW = nwOf(H);
 export const LEAK = 0.25;
 export const PW = 2;
 export const HH = 0.1;
@@ -18,11 +26,59 @@ const UP_ANG = 15 * Math.PI / 180, UP_HEAD = 1.45, STANCE_LO = 0.05, STANCE_HI =
 export function isUp(m) {
   if (!m || !m.touch || !m.touch[7] || !m.touch[13]) return false;
   for (let i = 0; i < m.touch.length; i++) if (i !== 7 && i !== 13 && m.touch[i]) return false;
-  return Math.abs(m.a) < UP_ANG && m.hy > UP_HEAD && m.stance >= STANCE_LO && m.stance <= STANCE_HI;
+  return Math.abs(m.a) < UP_ANG && m.hy > UP_HEAD && m.stance >= STANCE_LO && m.stance <= STANCE_HI
+    && Math.abs(m.w) < 1.5 && Math.abs(m.cvx) < 0.5;
+}
+// ponytail: viz copy of the trainer score. Height pays as the torso turns up, unless the hands are holding it.
+export function prizeBreakdown(m) {
+  const s = liveScore(m);
+  return { total: s.total, max: s.max, up: s.onFeet > 0.5, terms: s.terms };
+}
+export function liveScore(m) {
+  const face = Math.cos(m.a || 0);
+  const hip01 = cl((m.ty || 0) / 1.26, 0, 1);
+  const head01 = cl((m.hy || 0) / 1.68, 0, 1);
+  // Height pays as the torso turns up, and only while the hands are not the support.
+  const rise = cl((face + 0.2) / 1.2, 0, 1);
+  const hands = (1 - cl((m.clear?.[4] ?? 1) / 0.15, 0, 1)) + (1 - cl((m.clear?.[10] ?? 1) / 0.15, 0, 1));
+  const handFree = 1 - cl(hands, 0, 1);
+  const headTerm = -1 + rise * handFree * 2 * head01;
+  const hipTerm = -1.2 + rise * handFree * 2.4 * hip01;
+  const posture = (3 * face + Math.cos(m.ha || 0) + 2 * (m.legCos || 0)) / 6 - 1;
+  const postureTerm = 1.2 * posture;
+  const thigh = i => 1 - cl((m.clear?.[i] ?? 1) / 0.35, 0, 1);
+  const feet = (m.touch?.[7] ? 1 : 0) + (m.touch?.[13] ? 1 : 0);
+  const near = i => 1 - cl((m.clear?.[i] ?? 1) / 0.4, 0, 1);
+  let other = 0;
+  if (m.touch) for (let i = 0; i < m.touch.length; i++) if (i !== 7 && i !== 13 && m.touch[i]) other = 1;
+  const upright = cl((face - 0.7) / 0.3, 0, 1);
+  const onFeet = (feet === 2 ? 1 : 0) * (1 - other) * upright * cl((m.hy || 0) / 1.45, 0, 1);
+  const stance = Math.exp(-14 * ((m.stance || 0) - 0.29) * ((m.stance || 0) - 0.29));
+  const impact = (m.clear && m.clear[1] < 0.03 && m.hvy < -1) ? 0.8 * cl(-m.hvy / 3, 0, 2) : 0;
+  const stay = onFeet * (2.5 + 0.4 * stance);
+  const park = cl((face - 0.55) / 0.35, 0, 1);
+  const handTerm = -(0.1 + 1.5 * park) * hands;
+  const legTerm = -0.35 * (thigh(5) + thigh(11));
+  const footTerm = -0.5 * (2 - feet) + 0.35 * (near(7) + near(13));
+  const inv = -1.2 * Math.max(0, -face);
+  const total = headTerm + hipTerm + postureTerm + inv + legTerm + handTerm + footTerm - impact + stay;
+  const terms = [
+    { n: 'Cabeza', tip: 'La altura suma si el torso se endereza y las manos no sostienen el cuerpo. Si no, resta 1. De pie, a 1,68 m, suma 1.', v: headTerm },
+    { n: 'Cadera', tip: 'Igual que la cabeza: la altura no paga apoyado en las manos. En el piso resta 1,2. De pie suma 1,2.', v: hipTerm },
+    { n: 'Postura', tip: 'Torso, cabeza, muslos y tibias. El torso pesa más: enderezarse suma aunque sigas en el piso. Vale 0 solo si todo está vertical.', v: postureTerm },
+    { n: 'Invertido', tip: 'Resta extra si el torso está dado vuelta.', v: inv },
+    { n: 'Piernas', tip: 'Resta si un muslo está cerca del piso. La tibia no entra: de pie queda baja. Hasta −0,35 por muslo.', v: legTerm },
+    { n: 'Manos', tip: 'Empujar casi no resta. Si el torso ya está bastante erguido y la mano sigue en el piso, resta hasta cerca de 1,6 por mano.', v: handTerm },
+    { n: 'Pies', tip: 'Resta 0,5 por cada pie en el aire. Suma hasta 0,35 por pie cuanto más cerca del piso está.', v: footTerm },
+    { n: 'Golpe', tip: 'Resta solo si la cabeza baja rápido a menos de 3 cm del piso. Quieta no cuenta.', v: -impact },
+    { n: 'De pie', tip: 'Extra si ya está sobre los dos pies, erguido, con la cabeza alta y sin otra cosa en el piso.', v: stay }
+  ];
+  return { total, max: 1 + 1.2 + 0.7 + 2.9, onFeet, terms };
 }
 export function padWeights(src) {
   if (!src || !src.length) return null;
-  if (src.length === NW) return Float32Array.from(src);
+  const hNow = hiddenOf(src.length);
+  if (hNow) return Float32Array.from(src);
   const oldNI = (src.length - O * (H + 1)) / H - H - 1;
   if (oldNI !== (oldNI | 0) || oldNI < 1 || oldNI >= NI) return null;
   const extra = NI - oldNI, t = new Float32Array(NW);
@@ -41,13 +97,20 @@ export function netsFromCkpt(c) {
   if (!seed) throw new Error('checkpoint NW mismatch');
   const take = a => padWeights(a) || seed;
   const old = a => a && a.length && a.length !== NW;
+  const getup = take(c.thetaGetup);
+  const supine = (padWeights(c.thetaSupine) || getup).slice();
+  const prone = (padWeights(c.thetaProne) || getup).slice();
   return {
     thetaStand: take(c.thetaStand),
-    thetaGetup: take(c.thetaGetup),
+    thetaGetup: supine,
+    thetaSupine: supine,
+    thetaProne: prone,
     bestStand: take(c.bestStand || c.bestTheta),
-    bestGetup: take(c.bestGetup || c.bestTheta),
+    bestGetup: (padWeights(c.bestSupine) || padWeights(c.bestGetup) || supine).slice(),
+    bestSupine: (padWeights(c.bestSupine) || padWeights(c.bestGetup) || supine).slice(),
+    bestProne: (padWeights(c.bestProne) || padWeights(c.bestGetup) || prone).slice(),
     migrated: !(c.thetaStand && c.thetaStand.length),
-    padded: old(c.theta) || old(c.thetaStand) || old(c.thetaGetup) || old(c.bestTheta)
+    padded: old(c.theta) || old(c.thetaStand) || old(c.thetaGetup) || old(c.thetaSupine) || old(c.bestTheta)
   };
 }
 export const KINDS = [
@@ -105,7 +168,7 @@ export function createSim(B, opts = {}) {
         anchorA: V(wx - A.cx, wy - A.cy), anchorB: V(wx - B.cx, wy - B.cy),
         lowerAngle: lo, upperAngle: hi, enableLimit: true, enableMotor: true, motorSpeed: 0, maxMotorTorque: tq
       });
-      J.push({ id: r.jointId, lo, hi, n: Math.max(-lo, hi) });
+      J.push({ id: r.jointId, lo, hi, n: Math.max(-lo, hi), a, ax: wx - A.cx, ay: wy - A.cy, mark: '' });
     };
     box(0, 1.26, 0.13, 0.30); box(0, 1.68, 0.11, 0.12, 40);
     for (let s = 0; s < 2; s++) {
@@ -117,7 +180,16 @@ export function createSim(B, opts = {}) {
       const b = 2 + 6 * s;
       jt(0, b, 0, 1.48, -2, 2.5, 70); jt(b, b + 1, 0, 1.2, 0, 2.4, 50); jt(b + 1, b + 2, 0, 0.94, -1.0, 1.0, 25);
       jt(0, b + 3, 0, 0.96, -0.7, 2, 140); jt(b + 3, b + 4, 0, 0.52, -2.4, 0, 140); jt(b + 4, b + 5, 0, 0.1, -0.6, 0.6, 60);
+      J[J.length - 5].mark = 'elbow'; J[J.length - 3].mark = 'hip'; J[J.length - 2].mark = 'knee';
     }
+    const rHip = 0.13 * 1.1;
+    const hip = CreateCircle({ worldId, type: DYN, position: V(0, 0.96), radius: rHip, density: 40, friction: 0.9, groupIndex: -1 });
+    P.push({ id: hip.bodyId, cx: 0, cy: 0.96, hx: rHip, hy: rHip, r: rHip, circle: true, m: 40 * Math.PI * rHip * rHip, th: rHip + 0.04 });
+    CreateRevoluteJoint({
+      worldId, bodyIdA: P[0].id, bodyIdB: hip.bodyId,
+      anchorA: V(0 - P[0].cx, 0.96 - P[0].cy), anchorB: V(0, 0),
+      lowerAngle: 0, upperAngle: 0, enableLimit: true, enableMotor: false, motorSpeed: 0, maxMotorTorque: 0
+    });
     return { wid: worldId, P, J, ground: gr.bodyId, plat: pl.bodyId };
   }
 
@@ -148,16 +220,18 @@ export function createSim(B, opts = {}) {
 
   // ponytail: 5mm, box2d slop. Resting parts overlap (<=0). 3cm was air.
   const TOUCH = 0.005, STANCE_PEAK = 0.29, FEET = [7, 13], HANDS = [4, 10];
-  const QF = b2DefaultQueryFilter(), RAY = 2;
-  function rayDown(wid, x, y) {
+  const QF = b2DefaultQueryFilter(), RAY = 2, LOOK = 0.2;
+  function rayCast(wid, x, y, dx, dy) {
+    if (dx * dx + dy * dy < 1e-8) return 1;
     let frac = 1;
-    b2World_CastRay(wid, V(x, y), V(0, -RAY), QF, (shapeId, _p, _n, f) => {
+    b2World_CastRay(wid, V(x, y), V(dx, dy), QF, (shapeId, _p, _n, f) => {
       if (b2Shape_GetFilter(shapeId).groupIndex === -1) return -1;
       frac = f;
       return f;
     }, 0);
     return frac;
   }
+  function rayDown(wid, x, y) { return rayCast(wid, x, y, 0, -RAY); }
   // Gap from the drawn box to the platform slab or the ground top. Not limb-on-limb, not the infinite tilt line.
   function partClear(p, pq, pc, ps) {
     const q = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id)), c = Math.cos(a), s = Math.sin(a);
@@ -181,13 +255,15 @@ export function createSim(B, opts = {}) {
       m.clear[i] = partClear(p, pq, pc, ps);
       m.touch[i] = m.clear[i] < TOUCH;
       if (i === 0) { m.tx = q.x; m.tvx = v.x; m.tvy = v.y; qx[0] = q.x; qy[0] = q.y; }
-      if (i === 1) m.hvy = v.y;
+      if (i === 1) { m.hvx = v.x; m.hvy = v.y; m.hx = q.x; m.hyw = q.y; }
       if (i === 7) { m.fx0 = q.x; qx[1] = q.x; qy[1] = q.y; }
       if (i === 13) { m.fx1 = q.x; qx[2] = q.x; qy[2] = q.y; }
     }
     m.ty = ys[0]; m.hy = ys[1]; m.fy0 = ys[7]; m.fy1 = ys[13];
     m.cx = X / M; m.cy = Y / M; m.cvx = VX / M; m.cvy = VY / M;
     m.a = b2Rot_GetAngle(b2Body_GetRotation(P[0].id)); m.w = b2Body_GetAngularVelocity(P[0].id);
+    m.ha = b2Rot_GetAngle(b2Body_GetRotation(P[1].id));
+    m.legCos = [5, 6, 11, 12].reduce((s, i) => s + Math.cos(b2Rot_GetAngle(b2Body_GetRotation(P[i].id))), 0) / 4;
     m.cl = [];
     for (const i of FEET) {
       const q = b2Body_GetPosition(P[i].id), a = b2Rot_GetAngle(b2Body_GetRotation(P[i].id)), c = Math.cos(a), s = Math.sin(a), hx = P[i].hx, hy = P[i].hy;
@@ -205,23 +281,43 @@ export function createSim(B, opts = {}) {
     m.rayT = rayDown(R.wid, qx[0], qy[0]);
     m.rayF0 = rayDown(R.wid, qx[1], qy[1]);
     m.rayF1 = rayDown(R.wid, qx[2], qy[2]);
+    m.rayH = rayDown(R.wid, m.hx, m.hyw);
+    m.rayHv = rayCast(R.wid, m.hx, m.hyw, m.hvx * LOOK, m.hvy * LOOK);
     return m;
   }
 
   const ttf = (y, vy) => cl((vy + Math.sqrt(vy * vy + 19.62 * Math.max(y - 0.15, 0))) / 9.81, 0, 1.5) / 1.5;
+  // Cost falls to 0 at standing height / upright. Upside-down (cos<0) costs more than lying, and a hip raise does not pay until the torso turns upright.
+  function getupLadder(m) {
+    const face = Math.max(0, Math.cos(m.a));
+    const leg = (a, b) => 0.25 * (1 - cl(Math.min(m.clear[a], m.clear[b]) / 0.35, 0, 1));
+    const hand = i => 0.10 * (1 - cl(m.clear[i] / 0.15, 0, 1));
+    const slam = m.clear[1] < 0.15 ? 1.5 * cl(-(m.hvy || 0) / 4, 0, 1) : 0;
+    const pred = m.hvy < -0.4 && m.rayHv < 1 ? 1.2 * (1 - m.rayHv) * cl(-m.hvy / 3, 0, 1) : 0;
+    return 0.60 * (1 - cl(m.hy / 1.65, 0, 1))
+      + 0.40 * (1 - Math.cos(m.ha))
+      + 0.35 * (1 - face * cl(m.ty / 1.26, 0, 1))
+      + 0.25 * (1 - Math.cos(m.a))
+      + 1.5 * Math.max(0, -Math.cos(m.a))
+      + slam + pred
+      + leg(5, 6) + leg(11, 12)
+      + hand(4) + hand(10)
+      + (m.touch[7] ? 0 : 0.40) + (m.touch[13] ? 0 : 0.40);
+  }
 
   function forward(w, x, h) {
+    const hdn = h.length;
     let k = 0;
-    const nh = new Float32Array(H), y = new Float32Array(O);
-    for (let j = 0; j < H; j++) {
+    const nh = new Float32Array(hdn), y = new Float32Array(O);
+    for (let j = 0; j < hdn; j++) {
       let s = w[k++];
       for (let i = 0; i < NI; i++) s += w[k++] * x[i];
-      for (let i = 0; i < H; i++) s += w[k++] * h[i];
+      for (let i = 0; i < hdn; i++) s += w[k++] * h[i];
       nh[j] = LEAK * h[j] + (1 - LEAK) * Math.tanh(s);
     }
     for (let j = 0; j < O; j++) {
       let s = w[k++];
-      for (let i = 0; i < H; i++) s += w[k++] * nh[i];
+      for (let i = 0; i < hdn; i++) s += w[k++] * nh[i];
       y[j] = Math.tanh(s);
     }
     return [y, nh];
@@ -231,13 +327,13 @@ export function createSim(B, opts = {}) {
     constructor(R, w, tilt, drop, o = {}) {
       this.o = Object.assign({ push: 0, amp: 0, T: 8, ph: 0, proj: [], steps: 480, task: 'stand' }, o);
       this.free = false; this.fallen = false; this.objs = [];
-      this.R = R; this.w = w; this.t = 0; this.ret = 0; this.dead = false;
-      this.h = new Float32Array(H); this.a = new Float32Array(O);
+      this.R = R; this.w = w; this.cand = w; this.t = 0; this.ret = 0; this.dead = false;
+      this.h = new Float32Array(hiddenOf(w.length) || H); this.a = new Float32Array(O);
       this.upStreak = 0; this.recovered = false; this.stood = 0; this.nDec = 0; this.sumHy = 0;
       this.wasDown = false; this.quiet = false;
       this.prevA = new Float32Array(O);
       reset(R, tilt, drop, this.o);
-      const settle = this.o.settle != null ? this.o.settle : (this.o.task === 'getup' ? 50 : 0);
+      const settle = this.o.settle != null ? this.o.settle : ((this.o.task === 'getup' || this.o.chain) ? 50 : 0);
       if (settle > 0) {
         for (const j of R.J) b2RevoluteJoint_SetMotorSpeed(j.id, 0);
         for (let i = 0; i < settle; i++) b2World_Step(R.wid, DT, 4);
@@ -245,15 +341,17 @@ export function createSim(B, opts = {}) {
       this.pa = R.J.map(j => b2RevoluteJoint_GetAngle(j.id));
       this.m = sense(R);
       this.t = 0; this.ret = 0; this.upStreak = 0; this.stood = 0; this.nDec = 0; this.sumHy = 0;
-      this.sumAbsA = 0; this.sumHand = 0; this.prevPhi = null; this.holdPay = 0;
-      this.wasDown = this.o.task === 'getup'; this.recovered = false; this.fallen = this.o.task === 'getup';
+      this.sumAbsA = 0; this.sumHand = 0; this.prevPhi = 0; this.holdPay = 0; this.lastTick = 0; this.headImpact = 0;
+      this.wasDown = this.o.task === 'getup' || !!this.o.chain; this.recovered = false; this.fallen = this.wasDown;
       this.prevHy = undefined;
       this.policy = o.policy || null;
-      this.activeNet = (this.o.task === 'getup' || this.wasDown) ? 'getup' : 'stand';
+      this.downNet = this.o.pose === 'prone' ? 'prone' : 'supine';
+      this.activeNet = this.wasDown ? this.downNet : 'stand';
       if (this.policy) {
-        if (this.policy.mode === 'stand') this.activeNet = 'stand';
-        else if (this.policy.mode === 'getup') this.activeNet = 'getup';
-        this.w = this.activeNet === 'getup' ? this.policy.getup : this.policy.stand;
+        if (this.policy.mode === 'stand' && !this.wasDown) this.activeNet = 'stand';
+        else if (this.policy.mode === 'getup' || this.wasDown) this.activeNet = this.downNet;
+        const nw = netW(this.policy, this.activeNet);
+        if (nw) this.w = nw;
       }
     }
     cleanup() { for (const id of this.objs) b2DestroyBody(id); this.objs = []; }
@@ -261,62 +359,43 @@ export function createSim(B, opts = {}) {
       const R = this.R, m = this.m = sense(R), fmx = (m.fx0 + m.fx1) / 2;
       const gg = Math.sqrt(Math.max(m.cy, 0.3) / 9.81), cp = m.cx + m.cvx * gg, up = Math.max(0, Math.cos(m.a));
       let en = 0, mot = 0, jerk = 0;
+      const ang = new Array(O);
       for (let i = 0; i < O; i++) {
         const j = R.J[i], a = this.a[i], an = b2RevoluteJoint_GetAngle(j.id);
+        ang[i] = an;
         en += a * a;
         mot += Math.abs(a * (a >= 0 ? j.hi : -j.lo) - an) / j.n;
         jerk += Math.abs(a - this.prevA[i]);
       }
-      const hy = cl(m.hy / 1.65, 0, 1);
-      const isGet = getupTask(this.o.task);
       const upNow = isUp(m);
       this.fallen = m.bodyOn || up < 0.25;
       if (!this.quiet) {
-        if (this.fallen) this.wasDown = true;
-        if (upNow) {
-          this.upStreak++; this.stood++;
-          if (this.wasDown && this.upStreak >= 30 && (isGet || this.t > 90)) {
-            if (!this.recovered) this.ret += 28;
-            this.recovered = true;
-          }
-        } else this.upStreak = 0;
+        if (m.clear[1] < 0.03) this.headImpact = Math.max(this.headImpact || 0, -(m.hvy || 0));
+        if (upNow) { this.upStreak++; this.stood++; } else this.upStreak = 0;
         this.nDec++; this.sumHy += m.hy; this.sumAbsA += Math.abs(m.a); this.sumHand += m.handOn ? 1 : 0;
-        let pay = 0;
-        if (upNow) {
-          let fp = 0; for (let i = 0; i < 4; i++) fp += cl(m.cl[i] / 0.06, 0, 1);
-          pay = 1.1 + 0.55 * up + 0.7 * hy + 0.5 * Math.exp(-4 * Math.abs(cp - fmx))
-            + 0.7 * Math.exp(-14 * (m.stance - STANCE_PEAK) * (m.stance - STANCE_PEAK))
-            - 0.55 * fp - 0.04 * en / O - 0.22 * mot / O - 0.14 * jerk / O
-            - 0.12 * cl(Math.abs(m.w) / 6, 0, 1) - 0.08 * cl(Math.abs(m.cvx) / 2, 0, 1);
-          this.holdPay = pay;
+        let pose = 0;
+        for (let i = 0; i < O; i++) {
+          const excess = Math.max(0, Math.abs(ang[i]) / R.J[i].n - 0.15);
+          pose += excess * excess;
         }
-        if (isGet) {
-          // ponytail: non-up cap 0.4/step (head + torso). isUp stays ~3/step + Φ 3.5. No motor cost here.
-          const lift = cl((m.hy - 0.15) / 1.3, 0, 1);
-          const shape = 0.4 * (0.65 * lift + 0.35 * up);
-          const phi = upNow ? 3.5 : shape;
-          if (this.prevPhi == null) this.prevPhi = phi;
-          this.ret += (phi - this.prevPhi) + (upNow ? pay : shape);
-          this.prevPhi = phi;
-        } else if (upNow) this.ret += pay;
-        else {
-          const dhy = m.hy - (this.prevHy ?? m.hy);
-          const ty = cl(m.ty / 1.26, 0, 1);
-          this.ret += 0.02 + 0.3 * (m.handOn ? 1 : 0) + 0.7 * (m.handOn ? ty : 0)
-            + 0.25 * (m.footOn ? 1 : 0) + 0.55 * up + 0.35 * ty + 0.12 * hy
-            + 1.0 * cl(dhy, -0.04, 0.06) - 0.02 * en / O;
-        }
+        const flat = i => Math.max(0, Math.cos(b2Rot_GetAngle(b2Body_GetRotation(R.P[i].id)) - m.pa));
+        const sc = liveScore(m);
+        this.lastTick = sc.total + sc.onFeet * (0.15 * (flat(7) + flat(13)) / 2 - 0.4 * pose / O);
+        this.ret += this.lastTick;
         this.prevHy = m.hy;
       }
       if (this.policy) {
         let use = this.activeNet;
         const mode = this.policy.mode || 'auto';
-        if (mode === 'stand' || mode === 'getup') use = mode;
-        else if (!upNow) use = 'getup';
+        if (mode === 'stand') use = 'stand';
+        else if (mode === 'getup') use = this.downNet;
+        else if (!upNow) use = this.downNet;
         else if (this.upStreak >= 15) use = 'stand';
         if (use !== this.activeNet) this.h.fill(0);
         this.activeNet = use;
-        this.w = use === 'getup' ? this.policy.getup : this.policy.stand;
+        const nw = netW(this.policy, use);
+        if (nw) this.w = nw;
+        else if (use === 'stand') this.w = this.cand;
       }
       const x = new Float32Array(NI); let k = 0;
       for (let i = 0; i < O; i++) {
@@ -341,6 +420,11 @@ export function createSim(B, opts = {}) {
       x[k++] = nz(m.clear[4]); x[k++] = nz(m.clear[10]);
       x[k++] = nz(m.clear[6]); x[k++] = nz(m.clear[12]);
       x[k++] = nz(m.clear[1]);
+      x[k++] = m.rayH;
+      x[k++] = Math.sin(m.ha); x[k++] = Math.cos(m.ha);
+      x[k++] = nz(m.clear[5]); x[k++] = nz(m.clear[11]);
+      x[k++] = nz(m.clear[3]); x[k++] = nz(m.clear[9]);
+      this.x = x;
       const [y, nh] = forward(this.w, x, this.h);
       this.prevA.set(this.a);
       this.a = y; this.h = nh;
@@ -366,18 +450,19 @@ export function createSim(B, opts = {}) {
       b2World_Step(R.wid, DT, 4);
       this.t++;
       const lim = o.steps || 480;
-      if (getupTask(o.task) && this.upStreak >= 30 && !this.free) {
+      if (!o.full && getupTask(o.task) && this.upStreak >= 30 && !this.free) {
         this.ret += Math.max(0, (lim - this.t) / 2) * this.holdPay;
         this.recovered = true; this.endedUp = true; this.dead = false;
         return true;
       }
       // ponytail: stuck get-up cut only under 0.6 m. The 0.6–isUp band is the stand slope; cutting it flattens the reward.
-      if (o.cut && !this.free && this.t > 240) {
+      if (o.cut && !o.full && !this.free && this.t > 240) {
         const hy = this.m.hy;
         if (this.hyMax == null) { this.hyMax = hy; this.hyBase = hy; this.stall = 0; }
         else if (hy > this.hyMax) this.hyMax = hy;
         if (this.hyMax > this.hyBase + 0.02) { this.hyBase = this.hyMax; this.stall = 0; }
         else if (++this.stall >= 180 && hy < 0.6 && this.upStreak === 0) {
+          this.ret += Math.max(0, (lim - this.t) / 2) * this.lastTick;
           this.dead = true; this.endedUp = false;
           return true;
         }
@@ -395,7 +480,8 @@ export function createSim(B, opts = {}) {
         f: this.fit, d: this.dead, rec: this.recovered, up: !!this.endedUp,
         hy: this.nDec ? this.sumHy / this.nDec : 0, stood: this.stood / Math.max(1, this.nDec),
         ang: this.nDec ? this.sumAbsA / this.nDec * (180 / Math.PI) : 0,
-        hand: this.nDec ? this.sumHand / this.nDec : 0
+        hand: this.nDec ? this.sumHand / this.nDec : 0,
+        headImpact: this.headImpact || 0
       };
     }
   }
@@ -436,52 +522,33 @@ export function createSim(B, opts = {}) {
     }
   }
 
-  function genOpts(r, st) {
+  function genOpts(r) {
+    const base = { push: 0, amp: 0, T: 8, ph: 0, proj: [], steps: 960, full: true, cut: false, task: 'live' };
     const u = r();
-    if (u < 0.32) {
-      const o = {
-        tilt: (r() * 2 - 1) * st.A, drop: 0.12 + r() * 0.25,
-        push: (r() * 2 - 1) * st.Pm,
-        amp: st.Pa * MAXTILT * (0.5 + 0.5 * r()), T: 5 + 3 * r(), ph: 6.2832 * r(),
-        proj: [], task: 'stand', steps: 540
-      };
-      addProjs(r, o, st.Q);
-      return o;
+    if (u < 0.25) {
+      const p = supinePose(r);
+      return { ...base, tilt: p.tilt, drop: p.drop, settle: 50, pose: 'supine' };
     }
-    if (u < 0.88) {
-      const p = r() < 0.5 ? supinePose(r) : pronePose(r);
-      return {
-        tilt: p.tilt, drop: p.drop, push: 0,
-        amp: 0, T: 8, ph: 0, proj: [], task: 'getup', steps: 960, cut: true
-      };
+    if (u < 0.5) {
+      const p = fallenPose(r);
+      return { ...base, tilt: p.tilt, drop: p.drop, settle: 50, pose: 'fallen' };
     }
-    const sd = r() < 0.5 ? -1 : 1;
-    return {
-      tilt: (r() * 2 - 1) * 0.08, drop: 0.12 + r() * 0.08,
-      push: sd * (4.5 + r() * 2.2),
-      amp: 0, T: 8, ph: 0,
-      proj: [], task: 'recover', steps: 780
-    };
-  }
-
-  function ensureNets(st) {
-    if (!st.thetaStand) st.thetaStand = st.theta;
-    if (!st.thetaGetup) st.thetaGetup = Float32Array.from(st.theta);
-    st.theta = st.thetaStand;
+    if (u < 0.75) return { ...base, tilt: (r() * 2 - 1) * 0.08, drop: 0.12, settle: 0, pose: 'up' };
+    const p = pronePose(r);
+    return { ...base, tilt: p.tilt, drop: p.drop, settle: 50, pose: 'prone' };
   }
 
   function esAsk(st, np) {
-    ensureNets(st);
-    const o = genOpts(rng, st), eps = [], ws = [];
-    const parent = getupTask(o.task) ? st.thetaGetup : st.thetaStand;
-    const sig = getupTask(o.task) ? SIG_GETUP : (st.sig || SIG0);
+    const o = genOpts(rng), eps = [], ws = [];
+    const parent = st.theta, n = parent.length;
+    const sig = Math.max(0.18, 0.22 * Math.pow(0.5, (st.gen || 0) / 6000));
     for (let i = 0; i < np; i++) {
-      const e = new Float32Array(NW);
-      for (let k = 0; k < NW; k++) e[k] = randn();
+      const e = new Float32Array(n);
+      for (let k = 0; k < n; k++) e[k] = randn();
       eps.push(e);
       for (const sg of [1, -1]) {
-        const w = new Float32Array(NW);
-        for (let k = 0; k < NW; k++) w[k] = parent[k] + sg * sig * e[k];
+        const w = new Float32Array(n);
+        for (let k = 0; k < n; k++) w[k] = parent[k] + sg * sig * e[k];
         ws.push(w);
       }
     }
@@ -489,76 +556,58 @@ export function createSim(B, opts = {}) {
   }
 
   function esTell(st, pop, fits) {
-    ensureNets(st);
-    const np = pop.np, all = fits.map(f => f.f);
-    const isG = getupTask(pop.o.task);
-    if (isG) {
-      st.mGetup = st.mGetup || new Float32Array(NW);
-      st.vGetup = st.vGetup || new Float32Array(NW);
-      st.kGetup = st.kGetup || 0;
-    } else {
-      st.mStand = st.mStand || new Float32Array(NW);
-      st.vStand = st.vStand || new Float32Array(NW);
-      st.kStand = st.kStand || 0;
-    }
-    const theta = isG ? st.thetaGetup : st.thetaStand;
-    const m = isG ? st.mGetup : st.mStand;
-    const v = isG ? st.vGetup : st.vStand;
+    const np = pop.np, all = fits.map(f => f.f), n = st.theta.length;
+    st.m = st.m && st.m.length === n ? st.m : new Float32Array(n);
+    st.v = st.v && st.v.length === n ? st.v : new Float32Array(n);
+    st.k = st.k || 0;
     const ord = all.map((_, i) => i).sort((a, b) => all[a] - all[b]), rk = new Array(all.length);
     ord.forEach((i, rnk) => { rk[i] = rnk / (all.length - 1) - 0.5; });
-    const g = new Float32Array(NW), sig = pop.sig || st.sig || SIG0;
+    const g = new Float32Array(n), sig = pop.sig || 0.12;
     for (let i = 0; i < np; i++) {
       const d = rk[2 * i] - rk[2 * i + 1];
-      for (let k = 0; k < NW; k++) g[k] += d * pop.eps[i][k];
+      for (let k = 0; k < n; k++) g[k] += d * pop.eps[i][k];
     }
-    const kk = isG ? ++st.kGetup : ++st.kStand;
+    const kk = ++st.k;
     const b1 = 0.9, b2 = 0.999, c1 = 1 - Math.pow(b1, kk), c2 = 1 - Math.pow(b2, kk);
-    const lr = st.lr || 0.01;
-    for (let k = 0; k < NW; k++) {
+    const lr = Math.max(0.02, 0.05 * Math.pow(0.5, (st.gen || 0) / 8000));
+    for (let k = 0; k < n; k++) {
       const gk = g[k] / (np * sig);
-      m[k] = b1 * m[k] + (1 - b1) * gk;
-      v[k] = b2 * v[k] + (1 - b2) * gk * gk;
-      theta[k] += lr * (m[k] / c1) / (Math.sqrt(v[k] / c2) + 1e-8);
+      st.m[k] = b1 * st.m[k] + (1 - b1) * gk;
+      st.v[k] = b2 * st.v[k] + (1 - b2) * gk * gk;
+      st.theta[k] += lr * (st.m[k] / c1) / (Math.sqrt(st.v[k] / c2) + 1e-8);
     }
-    st.theta = st.thetaStand;
-    const rec = fits.filter(f => f.rec).length / fits.length;
-    const up = fits.filter(f => f.up).length / fits.length;
-    const stoodAvg = fits.reduce((a, b) => a + (b.stood || 0), 0) / fits.length;
-    const standTask = pop.o.task === 'stand';
-    const surv = standTask ? up : rec;
-    if (standTask) {
-      if (stoodAvg >= 0.4 || up >= 0.3) {
-        if (st.A < 0.4) st.A = Math.min(0.4, st.A + 0.02);
-        else {
-          st.Pa = Math.min(1, Math.max(st.Pa || 0, 0.75) + 0.01);
-          st.Q = Math.min(1, (st.Q || 0) + 0.012);
-          st.Pm = Math.min(1.2, (st.Pm || 0) + 0.015);
-        }
-      } else if (stoodAvg < 0.15) {
-        if (st.Q > 0.3) { st.Q = Math.max(0.3, st.Q - 0.02); st.Pm = Math.max(0.35, (st.Pm || 0) - 0.02); }
-      }
+    st.mut = '';
+    const bi = ord[ord.length - 1];
+    if (all[bi] > 3 && all[bi] > (st.eliteF ?? -1e9) && pop.ws[bi] && pop.ws[bi].length === n) {
+      st.theta.set(pop.ws[bi]);
+      st.eliteF = all[bi];
+      st.mut = `elite ${all[bi].toFixed(2)}`;
+      st.m = new Float32Array(n);
+      st.v = new Float32Array(n);
+      st.k = 0;
     }
+    st.H = hiddenOf(st.theta.length);
     st.gen++;
     const nF = fits.length;
+    const up = fits.filter(f => f.up && (f.headImpact || 0) < 1.5).length / fits.length;
     st.hist.push({
       m: all.reduce((a, b) => a + b, 0) / all.length,
-      b: Math.max(...all), s: surv, Q: st.Q, Pa: st.Pa, G: st.G || 0, task: pop.o.task,
+      b: Math.max(...all), s: up, task: pop.o.pose,
       hy: fits.reduce((a, b) => a + (b.hy || 0), 0) / nF,
       ang: fits.reduce((a, b) => a + (b.ang || 0), 0) / nF,
-      hand: fits.reduce((a, b) => a + (b.hand || 0), 0) / nF
+      hand: fits.reduce((a, b) => a + (b.hand || 0), 0) / nF,
+      head: fits.reduce((a, b) => a + (b.headImpact || 0), 0) / nF
     });
     if (st.hist.length > 400) st.hist = st.hist.slice(-400);
   }
 
   function freshState() {
-    const thetaStand = initTheta();
-    const thetaGetup = thetaStand.slice();
+    const theta = initTheta();
     return {
-      thetaStand, thetaGetup, theta: thetaStand,
-      gen: 0, hist: [], A: 0.12, Pm: 0, Q: 0, Pa: 0, G: 0, sig: SIG0, lr: 0.01
+      theta, H, gen: 0, hist: [], sig: 0.12, lr: 0.01, k: 0,
+      m: new Float32Array(theta.length), v: new Float32Array(theta.length)
     };
   }
-
   return {
     build, Ep, spawnObj, sense, reset, platAng, forward, initTheta, genOpts, esAsk, esTell,
     freshState, fallenPose, supinePose, pronePose, addProjs, randn, rngMk,
