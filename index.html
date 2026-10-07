@@ -57,27 +57,27 @@
     </div>
   </div>
   <div id="bar">
-    <button id="p">Reanudar entrenamiento</button>
-    <button id="r">Reiniciar desde cero</button>
-    <button id="l">Volver al entrenado</button>
-    <button id="b">Ir al mejor</button>
-    <label><input type="radio" name="fw" id="fwBest"> Seguir el mejor</label>
-    <label><input type="radio" name="fw" id="fwLive" checked> Seguir vivo</label>
-    <button id="cp">Copiar pesos</button>
-    <label>Cómputo de entrenamiento <input id="s" type="range" min="0" max="40" value="0"> <span id="sv">0 ms/frame</span></label>
-    <button id="q">Reponer</button>
-    <label><input id="m" type="checkbox" checked> Modo libre</label>
-    <label><input id="lie" type="checkbox" checked> Empezar acostado</label>
-    <label><input type="radio" name="liepose" id="lieSupine"> Boca arriba</label>
-    <label><input type="radio" name="liepose" id="lieProne" checked> Boca abajo</label>
-    <label>Objeto <select id="o">
+    <button id="p" title="Retoma el entrenamiento en esta pestaña. El muñeco no se reinicia.">Reanudar entrenamiento</button>
+    <button id="r" title="Borra el progreso de esta sesión y arranca una red al azar.">Reiniciar desde cero</button>
+    <button id="l" title="Descarta la sesión del navegador y carga los pesos de weights.json.">Volver al entrenado</button>
+    <button id="b" title="Pone en escena el mejor individuo de la sesión.">Ir al mejor</button>
+    <label title="Muestra el mejor guardado. Cambia solo si aparece uno mejor."><input type="radio" name="fw" id="fwBest"> Seguir el mejor</label>
+    <label title="Muestra los pesos que se están entrenando ahora."><input type="radio" name="fw" id="fwLive" checked> Seguir vivo</label>
+    <button id="cp" title="Copia los pesos vivos al portapapeles, en JSON.">Copiar pesos</button>
+    <label title="Cuánto tiempo de cada cuadro se usa para entrenar, si no hay workers.">Cómputo de entrenamiento <input id="s" type="range" min="0" max="40" value="0"> <span id="sv">0 ms/frame</span></label>
+    <button id="q" title="Vuelve a colocar el muñeco con la pose y el modo de ahora.">Reponer</button>
+    <label title="Sin el plan de entrenamiento. La plataforma usa el ángulo de abajo."><input id="m" type="checkbox" checked> Modo libre</label>
+    <label title="Al reponer, lo deja acostado para ver cómo se levanta."><input id="lie" type="checkbox" checked> Empezar acostado</label>
+    <label title="La pose inicial es boca arriba."><input type="radio" name="liepose" id="lieSupine"> Boca arriba</label>
+    <label title="La pose inicial es boca abajo."><input type="radio" name="liepose" id="lieProne" checked> Boca abajo</label>
+    <label title="Qué se lanza con Disparar, o al arrastrar en el vacío.">Objeto <select id="o">
         <option value="0">Pelota 4,5 kg</option>
         <option value="1">Caja 9 kg</option>
         <option value="2">Pesa 25 kg</option>
       </select></label>
-    <label>Plataforma ± <input id="pa" type="range" min="0" max="10" value="0"> <span id="pv">0°</span></label>
-    <button id="f">Disparar</button>
-    <label>Velocidad <input id="v" type="range" min="3" max="25" value="8"> <span id="vv">8 m/s</span></label>
+    <label title="Inclinación máxima de la plataforma en modo libre.">Plataforma ± <input id="pa" type="range" min="0" max="10" value="0"> <span id="pv">0°</span></label>
+    <button id="f" title="Lanza el objeto desde un costado, a la velocidad de al lado.">Disparar</button>
+    <label title="Rapidez del objeto al disparar.">Velocidad <input id="v" type="range" min="3" max="25" value="8"> <span id="vv">8 m/s</span></label>
   </div>
   <div id="hint">Una sola red. El premio de la derecha es el de esta decisión: verde suma, rojo resta. <b>De pie</b> solo entra si están los dos pies, nada más toca, el torso está erguido y la cabeza alta. Abajo, los caminos más fuertes. F5 recarga.</div>
   <div id="err"></div>
@@ -215,6 +215,37 @@
     }
     let rng = rngMk(7);
     const $ = id => document.getElementById(id);
+    const tip = Object.assign(document.createElement('div'), { id: 'tip', hidden: true });
+    document.body.appendChild(tip);
+    let tipEl = null;
+    const disarm = el => { if (el && el.dataset.tip) el.title = el.dataset.tip; };
+    const setTip = (el, text) => { el.dataset.tip = text; if (el.hasAttribute('title')) el.title = text; if (tipEl === el) tip.textContent = text; };
+    const showTip = el => {
+      const text = el.dataset.tip || el.getAttribute('title');
+      if (!text || (tipEl === el && !tip.hidden)) return;
+      if (tipEl && tipEl !== el) disarm(tipEl);
+      el.dataset.tip = text; el.removeAttribute('title');
+      tip.textContent = text; tip.hidden = false;
+      const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+      tip.style.left = Math.max(8, Math.min(r.left + (r.width - w) / 2, innerWidth - w - 8)) + 'px';
+      let y = r.top - h - 8; if (y < 8) y = Math.min(r.bottom + 8, innerHeight - h - 8);
+      tip.style.top = y + 'px'; tipEl = el;
+    };
+    const hideTip = () => { disarm(tipEl); tip.hidden = true; tipEl = null; };
+    const hostOf = e => e.target.closest && e.target.closest('#bar button, #bar label');
+    $('bar').addEventListener('pointerover', e => { if (e.pointerType === 'touch') return; const el = hostOf(e); if (el) showTip(el); });
+    $('bar').addEventListener('pointerout', e => {
+      if (!tipEl || tipEl.contains(e.relatedTarget)) return;
+      if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('#bar button, #bar label')) return;
+      hideTip();
+    });
+    $('bar').addEventListener('focusin', e => { const el = hostOf(e); if (el) showTip(el); });
+    $('bar').addEventListener('focusout', e => {
+      if (!tipEl || (e.relatedTarget && tipEl.contains(e.relatedTarget))) return;
+      if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('#bar button, #bar label')) return;
+      hideTip();
+    });
+    addEventListener('resize', hideTip);
 
     function* trainer(st) {
       const TR = S.build();
@@ -325,6 +356,7 @@
     $('p').onclick = e => {
       paused = !paused;
       e.target.textContent = paused ? 'Reanudar entrenamiento' : 'Pausar entrenamiento';
+      setTip(e.target, paused ? 'Retoma el entrenamiento en esta pestaña. El muñeco no se reinicia.' : 'Frena el entrenamiento. El muñeco sigue en pantalla.');
     };
     $('r').onclick = () => {
       rng = rngMk(Date.now() & 0xffff); S.setRng(Date.now() & 0xffff);
