@@ -29,28 +29,34 @@
     <button id="r">Reiniciar desde cero</button>
     <button id="l">Volver al entrenado</button>
     <button id="b">Ir al mejor</button>
-    <label><input type="radio" name="fw" id="fwBest" checked> Seguir el mejor</label>
-    <label><input type="radio" name="fw" id="fwLive"> Seguir vivo</label>
+    <label><input type="radio" name="fw" id="fwBest"> Seguir el mejor</label>
+    <label><input type="radio" name="fw" id="fwLive" checked> Seguir vivo</label>
+    <label><input type="radio" name="net" id="netAuto" checked> Auto</label>
+    <label><input type="radio" name="net" id="netStand"> Equilibrio</label>
+    <label><input type="radio" name="net" id="netGetup"> Levantar</label>
     <button id="cp">Copiar pesos</button>
     <label>Cómputo de entrenamiento <input id="s" type="range" min="0" max="40" value="0"> <span id="sv">0 ms/frame</span></label>
     <button id="q">Reponer</button>
     <label><input id="m" type="checkbox" checked> Modo libre</label>
+    <label><input id="lie" type="checkbox"> Empezar acostado</label>
+    <label><input type="radio" name="liepose" id="lieSupine" checked> Boca arriba</label>
+    <label><input type="radio" name="liepose" id="lieProne"> Boca abajo</label>
     <label>Objeto <select id="o">
         <option value="0">Pelota 4,5 kg</option>
         <option value="1">Caja 9 kg</option>
         <option value="2">Pesa 25 kg</option>
       </select></label>
-    <label>Plataforma ± <input id="pa" type="range" min="0" max="10" value="10"> <span id="pv">10°</span></label>
+    <label>Plataforma ± <input id="pa" type="range" min="0" max="10" value="0"> <span id="pv">0°</span></label>
     <button id="f">Disparar</button>
     <label>Velocidad <input id="v" type="range" min="3" max="25" value="8"> <span id="vv">8 m/s</span></label>
   </div>
-  <div id="hint">El canvas sigue la <b>mejor red</b> de Node (<code>bestTheta</code>). Cuando mejora el eval, se repone solo. “Seguir vivo” muestra la generación actual. Entrenamiento en el browser pausado por defecto.</div>
+  <div id="hint">Dos redes: <b>equilibrio</b> y <b>levantar</b>. <b>Auto</b> usa levantar mientras no está de pie y pasa a equilibrio tras ~0,5–1 s de pie. <b>Empezar acostado</b> arranca con levantar. F5 recarga.</div>
   <div id="err"></div>
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js"></script>
   <script type="module">
     import { CreateWorld, CreateBoxPolygon, CreateRevoluteJoint, b2Vec2, b2BodyType, b2World_Step, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Body_SetTransform, b2MakeRot, b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake, b2Body_GetLinearVelocity, b2Body_GetAngularVelocity, b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed, CreateCircle, CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2DestroyBody } from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
     import * as Box2D from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
-    import { createSim, NW, KINDS, PW, HH, rngMk, cl } from './src/core.js';
+    import { createSim, NW, NI, KINDS, PW, HH, rngMk, cl, netsFromCkpt, padWeights, isUp } from './src/core.js';
 
     const S = createSim(Box2D);
     const V = (x, y) => new b2Vec2(x, y);
@@ -69,28 +75,40 @@
       }
     }
 
-    const fromWeights = c => ({
-      theta: Float32Array.from(c.theta),
-      bestTheta: c.bestTheta && c.bestTheta.length === NW ? Float32Array.from(c.bestTheta) : null,
-      gen: c.gen || 0, bestGen: c.bestGen || 0, hist: c.hist || [],
-      A: 0.12, Pm: 0, Q: 0, Pa: 0, G: 0,
-      fromFile: true, lastEval: c.eval || null
-    });
+    const fromWeights = c => {
+      const n = netsFromCkpt(c);
+      return {
+        thetaStand: n.thetaStand, thetaGetup: n.thetaGetup, theta: n.thetaStand,
+        bestStand: n.bestStand, bestGetup: n.bestGetup, bestTheta: n.bestStand,
+        gen: c.gen || 0, bestGen: c.bestStandGen || c.bestGen || 0,
+        bestStandGen: c.bestStandGen ?? c.bestGen, bestGetupGen: c.bestGetupGen,
+        hist: c.hist || [],
+        A: 0.12, Pm: 0, Q: 0, Pa: 0, G: 0,
+        fromFile: true, lastEval: c.eval || null
+      };
+    };
     const loadFile = async () => {
       try {
         const c = await fetch('weights.json?t=' + Date.now()).then(r => { if (!r.ok) throw new Error('sin weights.json'); return r.json(); });
-        if (c && c.theta && c.theta.length === NW) return fromWeights(c);
+        if (c && (c.theta || c.thetaStand) && (padWeights(c.theta) || padWeights(c.thetaStand))) return fromWeights(c);
       } catch (e) { }
       return null;
     };
     const loadSaved = () => {
       try {
         const c = JSON.parse(localStorage.getItem('ragdoll6'));
-        if (c && c.theta && c.theta.length === NW) return { theta: Float32Array.from(c.theta), gen: c.gen, hist: [], A: c.A, Pm: c.Pm, Q: c.Q, Pa: c.Pa, G: c.G || 0, resumed: true };
+        if (c && (padWeights(c.theta) || padWeights(c.thetaStand))) {
+          const n = netsFromCkpt(c);
+          return {
+            thetaStand: n.thetaStand, thetaGetup: n.thetaGetup, theta: n.thetaStand,
+            bestStand: n.bestStand, bestGetup: n.bestGetup, bestTheta: n.bestStand,
+            gen: c.gen, hist: [], A: c.A, Pm: c.Pm, Q: c.Q, Pa: c.Pa, G: c.G || 0, resumed: true
+          };
+        }
       } catch (e) { }
       return null;
     };
-    const saveLocal = s => { try { localStorage.setItem('ragdoll6', JSON.stringify({ gen: s.gen, A: s.A, Pm: s.Pm, Q: s.Q, Pa: s.Pa, G: s.G || 0, theta: Array.from(s.theta, x => +x.toFixed(4)) })); } catch (e) { } };
+    const saveLocal = s => { try { localStorage.setItem('ragdoll6', JSON.stringify({ gen: s.gen, A: s.A, Pm: s.Pm, Q: s.Q, Pa: s.Pa, G: s.G || 0, theta: Array.from((s.thetaStand || s.theta), x => +x.toFixed(4)), thetaStand: Array.from((s.thetaStand || s.theta), x => +x.toFixed(4)), thetaGetup: Array.from((s.thetaGetup || s.theta), x => +x.toFixed(4)) })); } catch (e) { } };
 
     const pool = { ok: false, ws: [], np: 0, err: '' };
     const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -132,7 +150,12 @@
     let nodeGen = -1, nodeBestGen = -1, downN = 0;
     const followBest = () => $('fwBest').checked;
     const followOn = () => $('fwBest').checked || $('fwLive').checked;
-    const displayW = () => (followBest() && st.bestTheta && st.bestTheta.length === NW) ? st.bestTheta : st.theta;
+    const netMode = () => $('netGetup').checked ? 'getup' : $('netStand').checked ? 'stand' : 'auto';
+    const displayNets = () => {
+      const stand = (followBest() ? (st.bestStand || st.bestTheta) : (st.thetaStand || st.theta));
+      const getup = (followBest() ? (st.bestGetup || st.bestStand || st.bestTheta) : (st.thetaGetup || st.theta));
+      return { stand: stand.slice(), getup: getup.slice(), mode: netMode() };
+    };
     const status = () => {
       const ev = st.lastEval ? `  ·  eval stand ${Math.round((st.lastEval.stand?.stood || 0) * 100)}% getup ${Math.round((st.lastEval.getup?.rec || 0) * 100)}%` : '';
       const mode = followBest() ? 'mejor' : ($('fwLive').checked ? 'vivo' : 'manual');
@@ -164,6 +187,9 @@
     };
     $('fwBest').onchange = () => newEp();
     $('fwLive').onchange = () => newEp();
+    $('netAuto').onchange = () => newEp();
+    $('netStand').onchange = () => newEp();
+    $('netGetup').onchange = () => newEp();
 
     try {
       const host = $('c'), app = new PIXI.Application();
@@ -178,18 +204,35 @@
       let drag = null, aim = null;
       const clearObjs = () => { while (objs.length) b2DestroyBody(objs.pop().id); if (drag) { b2DestroyJoint(drag.jid); drag = null; } };
       newEp = () => {
-        clearObjs(); const fr = $('m').checked;
+        clearObjs();
+        const fr = $('m').checked, lie = $('lie').checked;
         if (ep) ep.cleanup();
-        const o = fr ? { amp: +$('pa').value * Math.PI / 180, T: 8, steps: 1e9 } : S.genOpts(Math.random, st);
-        ep = new S.Ep(D, displayW().slice(), fr ? (Math.random() * 2 - 1) * 0.1 : o.tilt, fr ? 0.12 : o.drop, o);
-        ep.free = fr; hold = 0;
+        let o, tilt, drop;
+        if (lie) {
+          const p = $('lieProne').checked ? S.pronePose(Math.random) : S.supinePose(Math.random);
+          o = { amp: 0, T: 8, ph: 0, proj: [], task: 'getup', steps: 1e9 };
+          tilt = p.tilt; drop = p.drop;
+        } else if (fr) {
+          o = { amp: +$('pa').value * Math.PI / 180, T: 8, steps: 1e9 };
+          tilt = (Math.random() * 2 - 1) * 0.1; drop = 0.12;
+        } else {
+          o = S.genOpts(Math.random, st);
+          tilt = o.tilt; drop = o.drop;
+        }
+        const nets = displayNets();
+        if (lie && nets.mode === 'stand') nets.mode = 'getup';
+        ep = new S.Ep(D, (lie || nets.mode === 'getup') ? nets.getup : nets.stand, tilt, drop, Object.assign(o, { policy: nets }));
+        ep.free = fr || lie; hold = 0;
       };
       newEp(); view.cx = ep.m.cx;
       $('q').onclick = () => newEp();
       $('b').onclick = () => { $('fwBest').checked = true; newEp(); };
-      $('cp').onclick = () => { try { navigator.clipboard.writeText(JSON.stringify({ gen: st.gen, H: 20, NI: 58, theta: Array.from(st.theta, x => +x.toFixed(4)) })).then(() => $('err').textContent = 'Pesos copiados', () => $('err').textContent = 'El navegador bloqueó el portapapeles'); } catch (e) { $('err').textContent = 'No se pudo copiar: ' + e.message; } };
+      $('cp').onclick = () => { try { navigator.clipboard.writeText(JSON.stringify({ gen: st.gen, H: 20, NI, theta: Array.from(st.theta, x => +x.toFixed(4)) })).then(() => $('err').textContent = 'Pesos copiados', () => $('err').textContent = 'El navegador bloqueó el portapapeles'); } catch (e) { $('err').textContent = 'No se pudo copiar: ' + e.message; } };
       $('pa').oninput = e => { $('pv').textContent = e.target.value + '°'; if (ep && ep.free) ep.o.amp = +e.target.value * Math.PI / 180; };
       $('m').onchange = () => newEp();
+      $('lie').onchange = () => newEp();
+      $('lieSupine').onchange = () => { if ($('lie').checked) newEp(); };
+      $('lieProne').onchange = () => { if ($('lie').checked) newEp(); };
       const cv = app.canvas; cv.style.touchAction = 'none';
       const toW = (sx, sy) => ({ x: (sx - view.W / 2) / view.S + view.cx, y: (view.gy - sy) / view.S });
       const scr = e => { const r = cv.getBoundingClientRect(); return { sx: e.clientX - r.left, sy: e.clientY - r.top }; };
@@ -230,7 +273,7 @@
         if (!pool.ok && !paused && budget > 0) while (performance.now() - t0 < budget) tr.next();
         acc += Math.min(tk.deltaMS, 50);
         while (acc >= 1000 / 60) { acc -= 1000 / 60; if (hold > 0) { hold--; if (!hold) newEp(); } else if (ep.step()) hold = 60; }
-        if (followOn() && paused && ep.fallen) { downN++; if (downN > 1200) { newEp(); downN = 0; } } else downN = 0;
+        if (followOn() && paused && ep.fallen && !$('lie').checked) { downN++; if (downN > 1200) { newEp(); downN = 0; } } else downN = 0;
         const W = app.screen.width, Hh = app.screen.height, Sc = Math.min(Hh / 2.8, 150), gy = Hh * 0.78;
         view.cx += (ep.m.cx - view.cx) * Math.min(1, tk.deltaMS / 250); const cx = view.cx; view.W = W; view.S = Sc; view.gy = gy;
         if (drag) { const w = toW(drag.sx, drag.sy); b2MouseJoint_SetTarget(drag.jid, V(w.x, w.y)); }
@@ -265,29 +308,34 @@
         }
         if (++fr % 8 === 0) {
           const last = st.hist[st.hist.length - 1], ev = st.lastEval, m = ep.m;
-          const pose = m.footOn && !m.bodyOn ? (m.stance < 0.42 ? 'de pie' : 'apertura ancha') : (m.bodyOn ? 'en el suelo' : '');
-          tx.text = `Node gen ${st.gen}${st.bestGen != null ? '  ·  best gen ' + st.bestGen : ''}  ·  ${followBest() ? 'mejor' : 'vivo'}${ev ? `  ·  eval stand ${Math.round((ev.stand?.stood || 0) * 100)}% getup ${Math.round((ev.getup?.rec || 0) * 100)}%` : ''}\nFitness medio ${last ? last.m.toFixed(2) : '–'}  ·  mejor ${last ? last.b.toFixed(2) : '–'}  ·  en pie ${last ? Math.round(last.s * 100) : '–'}%\nCabeza ${m.hy.toFixed(2)} m  ·  apertura ${(m.stance || 0).toFixed(2)} m  ·  t ${(ep.t / 60).toFixed(1)} s  ·  ${pose}${m.handOn ? ' · manos' : ''}\n${status()}`;
+          const upv = Math.max(0, Math.cos(m.a));
+          const pose = isUp(m) ? 'de pie' : ((m.handOn || m.shinOn) && !m.touch[0] ? 'apoyado en manos' : (upv < 0.35 && m.bodyOn ? 'acostado' : (m.bodyOn ? 'en el suelo' : '')));
+          const red = ep.activeNet === 'getup' ? 'levantar' : 'equilibrio';
+          tx.text = `Node gen ${st.gen}${st.bestStandGen != null || st.bestGen != null ? '  ·  best eq ' + (st.bestStandGen ?? st.bestGen) : ''}${st.bestGetupGen != null ? '  ·  best lev ' + st.bestGetupGen : ''}  ·  ${followBest() ? 'mejor' : 'vivo'}  ·  red ${red}${ev ? `  ·  eval stand ${Math.round((ev.stand?.stood || 0) * 100)}% getup ${Math.round((ev.getup?.rec || 0) * 100)}%` : ''}\nFitness medio ${last ? last.m.toFixed(2) : '–'}  ·  mejor ${last ? last.b.toFixed(2) : '–'}  ·  en pie ${last ? Math.round(last.s * 100) : '–'}%\nCabeza ${m.hy.toFixed(2)} m  ·  |α| ${(Math.abs(m.a) * 180 / Math.PI).toFixed(0)}°  ·  apertura ${(m.stance || 0).toFixed(2)} m  ·  t ${(ep.t / 60).toFixed(1)} s  ·  ${pose}${m.handOn ? ' · manos' : ''}\n${status()}`;
         }
       });
       async function pollWeights() {
         try {
           const c = await fetch('weights.json?t=' + Date.now()).then(r => r.ok ? r.json() : null);
-          if (!c || !c.theta || c.theta.length !== NW) return;
+          if (!c || !(c.theta || c.thetaStand) || !(padWeights(c.theta) || padWeights(c.thetaStand))) return;
           fileNet = fromWeights(c);
-          st.gen = c.gen; st.bestGen = c.bestGen; st.fromFile = true;
+          st.gen = c.gen; st.bestGen = c.bestStandGen ?? c.bestGen; st.fromFile = true;
+          st.bestStandGen = c.bestStandGen ?? c.bestGen; st.bestGetupGen = c.bestGetupGen;
           st.lastEval = c.eval || st.lastEval;
           if (c.hist) st.hist = c.hist;
-          st.theta = Float32Array.from(c.theta);
-          if (c.bestTheta && c.bestTheta.length === NW) st.bestTheta = Float32Array.from(c.bestTheta);
+          st.thetaStand = fileNet.thetaStand; st.thetaGetup = fileNet.thetaGetup; st.theta = fileNet.thetaStand;
+          st.bestStand = fileNet.bestStand; st.bestGetup = fileNet.bestGetup; st.bestTheta = fileNet.bestStand;
           if (!paused) return;
           if (followBest()) {
-            const b = c.bestGen ?? -1;
-            if (b !== nodeBestGen && st.bestTheta) { nodeBestGen = b; newEp(); }
+            const b = c.bestStandGen ?? c.bestGen ?? -1;
+            if (b !== nodeBestGen && st.bestStand) { nodeBestGen = b; newEp(); }
             else if (ep && ep.fallen && downN > 1200) { newEp(); downN = 0; }
           } else if ($('fwLive').checked && c.gen !== nodeGen) {
             nodeGen = c.gen;
-            if (ep) {
-              ep.w = st.theta;
+            if (ep && ep.policy) {
+              ep.policy.stand = st.thetaStand;
+              ep.policy.getup = st.thetaGetup;
+              ep.w = ep.activeNet === 'getup' ? st.thetaGetup : st.thetaStand;
               if (ep.fallen && downN > 1200) { newEp(); downN = 0; }
             }
           }

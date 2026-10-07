@@ -12,7 +12,7 @@ onmessage = e => {
     while (!ep.step());
     const s = ep.stats;
     ep.cleanup();
-    out.push({ i: t.i, f: s.f, d: s.d });
+      out.push({ i: t.i, ...s });
   }
   postMessage(out);
 };
