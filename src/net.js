@@ -93,20 +93,38 @@ export class ElmanNetwork {
 
 // Cuánto ruido le toca a cada peso. El cuerpo casi no se mueve; los miembros y el goal, sí.
 // El ruido grande del goal y de standing solo cae en los pesos que multiplican la entrada.
-function explorationOf(index, scale) {
+// `boost` agranda todo ese ruido cuando el puntaje lleva generaciones sin mejorar. Cuello y muñecas siguen en 0.
+function explorationOf(index, scale, boost) {
+  const extra = boost > 0 ? boost : 1;
   const layout = ElmanNetwork.layout;
   if (index < layout.outputBase) {
     const readsInput = !layout.feedforward || index < layout.feedforwardBlock;
     if (readsInput) {
       const stride = layout.feedforward ? layout.feedforwardStride : layout.recurrentStride;
       const local = index % stride;
-      if (local === net.goalInputIndex + 1 || local === net.goalInputIndex + 2 || local === net.standingInputIndex + 1) return scale;
-      if (local > net.sensedInputCount && local <= net.inputCount) return net.freshInputExplorationScale;
+      if (local === net.goalInputIndex + 1 || local === net.goalInputIndex + 2 || local === net.standingInputIndex + 1) return scale * extra;
+      if (local > net.sensedInputCount && local <= net.inputCount) return net.freshInputExplorationScale * extra;
     }
-    return search.bodyExplorationScale;
+    return search.bodyExplorationScale * extra;
   }
   const joint = Math.floor((index - layout.outputBase) / (layout.recurrent + 1));
-  return search.trainableJointIndexes.includes(joint) ? search.limbExplorationScale : 0;
+  return search.trainableJointIndexes.includes(joint) ? search.limbExplorationScale * extra : 0;
+}
+
+// x1 por debajo del umbral, luego stagnationBoost, y otra vez cada tantas generaciones, hasta el tope.
+function explorationBoost(flatGens) {
+  const every = search.stagnationGenerations;
+  if (!(every > 0) || !(flatGens >= every)) return 1;
+  const steps = Math.floor(flatGens / every);
+  return Math.min(search.stagnationBoostCap, Math.pow(search.stagnationBoost, steps));
+}
+
+// 0 por debajo del umbral. Después, una fracción fija de los pares. El resto se queda con el ruido chico.
+function mutationFraction(flatGens) {
+  const every = search.stagnationGenerations;
+  const cap = search.stagnationMutateCap;
+  if (!(every > 0) || !(cap > 0) || !(flatGens >= every)) return 0;
+  return Math.min(1, cap);
 }
 
 // Búsqueda de un padre. Cada generación son pares antitéticos: el mismo ruido, con signo más y con signo menos.
@@ -129,6 +147,15 @@ export class EvolutionSearch {
     this.bestEverTheta = parent.slice();
     this.bestEverScore = -1e9;
     this.eliteScore = -1e9;
+    this.flatGens = 0;
+    this.mutationBoost = 1;
+    this.mutationFraction = 0;
+  }
+
+  // El factor y la fracción que va a usar la próxima generación. Sirve al retomar una sesión ya estancada.
+  refreshMutationBoost() {
+    this.mutationBoost = explorationBoost(this.flatGens);
+    this.mutationFraction = mutationFraction(this.flatGens);
   }
 
   // Una situación para toda la generación. Cada individuo decide en un frame distinto.
@@ -136,21 +163,29 @@ export class EvolutionSearch {
     const parent = this.theta;
     const length = parent.length;
     const scale = Math.max(search.explorationScale, search.explorationFloor * Math.pow(0.5, (this.gen || 0) / search.explorationHalfLifeGenerations));
+    const boost = explorationBoost(this.flatGens);
+    const fraction = mutationFraction(this.flatGens);
+    this.mutationBoost = boost;
+    this.mutationFraction = fraction;
+    const hot = fraction > 0 ? Math.min(count, Math.max(1, Math.round(count * fraction))) : 0;
     const noise = [];
     const weights = [];
     const phases = [];
+    const pairBoosts = [];
     for (let individual = 0; individual < count; individual++) {
+      const pairBoost = individual < hot ? boost : 1;
+      pairBoosts.push(pairBoost);
       const direction = new Float32Array(length);
       for (let i = 0; i < length; i++) direction[i] = randomNormal();
       noise.push(direction);
       for (const sign of [1, -1]) {
         const child = new Float32Array(length);
-        for (let i = 0; i < length; i++) child[i] = parent[i] + sign * explorationOf(i, scale) * direction[i];
+        for (let i = 0; i < length; i++) child[i] = parent[i] + sign * explorationOf(i, scale, pairBoost) * direction[i];
         weights.push(child);
         phases.push(weights.length - 1);
       }
     }
-    return { situation, noise, weights, phases, count, scale };
+    return { situation, noise, weights, phases, count, scale, boost, fraction, pairBoosts };
   }
 
   tell(generation, scores) {
@@ -165,9 +200,16 @@ export class EvolutionSearch {
     order.forEach((index, place) => { rank[index] = place / (values.length - 1) - 0.5; });
     const gradient = new Float32Array(length);
     const scale = generation.scale || search.explorationScale;
+    const boost = generation.boost || 1;
+    const pairBoosts = generation.pairBoosts;
     for (let pair = 0; pair < count; pair++) {
+      const pairBoost = pairBoosts && pairBoosts[pair] > 0 ? pairBoosts[pair] : boost;
       const difference = rank[2 * pair] - rank[2 * pair + 1];
-      for (let i = 0; i < length; i++) if (explorationOf(i, scale)) gradient[i] += difference * generation.noise[pair][i];
+      for (let i = 0; i < length; i++) {
+        const sigma = explorationOf(i, scale, pairBoost);
+        if (!sigma) continue;
+        gradient[i] += difference * generation.noise[pair][i] / sigma;
+      }
     }
     const stepIndex = ++this.k;
     const firstMoment = search.adamBeta1;
@@ -176,9 +218,8 @@ export class EvolutionSearch {
     const secondFix = 1 - Math.pow(secondMoment, stepIndex);
     const stepSize = Math.max(search.learningRateFloor, search.learningRate * Math.pow(0.5, (this.gen || 0) / search.learningRateHalfLifeGenerations));
     for (let i = 0; i < length; i++) {
-      const coordinateScale = explorationOf(i, scale);
-      if (!coordinateScale) continue;
-      const estimate = gradient[i] / (count * coordinateScale);
+      if (!explorationOf(i, scale, 1)) continue;
+      const estimate = gradient[i] / count;
       this.m[i] = firstMoment * this.m[i] + (1 - firstMoment) * estimate;
       this.v[i] = secondMoment * this.v[i] + (1 - secondMoment) * estimate * estimate;
       this.theta[i] += (stepSize * (this.m[i] / firstFix)) / (Math.sqrt(this.v[i] / secondFix) + search.adamEpsilon);
@@ -190,7 +231,13 @@ export class EvolutionSearch {
     if (values[bestIndex] > (this.bestEverScore ?? -1e9)) {
       this.bestEverTheta = Float32Array.from(bestWeights);
       this.bestEverScore = values[bestIndex];
+      // Un récord baja un tramo. Una racha de récords apaga la exploración.
+      this.flatGens = Math.max(0, (this.flatGens || 0) - search.stagnationGenerations);
+    } else {
+      this.flatGens = (this.flatGens || 0) + 1;
     }
+    this.mutationBoost = explorationBoost(this.flatGens);
+    this.mutationFraction = mutationFraction(this.flatGens);
     // El padre solo se reemplaza si alguien llegó al marcador. Un puntaje alto por quedarse parado no alcanza.
     if (values[bestIndex] > (this.eliteScore ?? -1e9) && (scores[bestIndex].gap ?? search.eliteMissingGapMeters) < search.goalCloseEnoughMeters) {
       this.theta.set(bestWeights);
@@ -206,6 +253,8 @@ export class EvolutionSearch {
       best: Math.max(...values),
       stood,
       gap: scores.reduce((sum, score) => sum + (score.gap || 0), 0) / scores.length,
+      boost,
+      fraction: generation.fraction || 0,
     });
     if (this.hist.length > 400) this.hist = this.hist.slice(-400);
   }

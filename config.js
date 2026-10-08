@@ -5,9 +5,9 @@ const partCount = 14;
 const sensedInputCount = 82;
 const rewardRowCount = 26;
 const partSpeedInputCount = partCount * 3;
-const rewardTotalNow = true;
-const rewardTotalPrevious = true;
-const rewardTotalNext = true;
+const rewardTotalNow = false;
+const rewardTotalPrevious = false;
+const rewardTotalNext = false;
 const rewardTotalInputCount =
   Number(rewardTotalNow) +
   Number(rewardTotalPrevious) +
@@ -69,7 +69,7 @@ export const config = {
     torsoAngle: 1, // Weight of the torso cosine. +1 of this when upright, -1 when upside down.
     headAngle: 0.75, // Weight of the head cosine.
     upperArmAngle: 0.12, // Weight of each upper-arm cosine. +1 when that arm is vertical.
-    forearmAngle: 0.08, // Weight of each forearm cosine.
+    forearmAngle: 0.15, // Weight of each forearm cosine.
     thighAngle: 1.5, // Weight of each thigh cosine.
     shinAngle: 0.25, // Weight of each shin cosine.
     headHeight: 4, // Head-height weight. The floor value is -this; a full upright reach is +this.
@@ -156,6 +156,10 @@ export const config = {
     explorationScale: 0.18, // Noise never drops below this.
     explorationFloor: 0.22, // Starting amplitude of the decaying noise. The used scale is the max of this decay and explorationScale.
     explorationHalfLifeGenerations: 6000, // Generations for the decaying noise to halve.
+    stagnationGenerations: 100, // Plateau length before the large noise starts. One new best removes this many generations from the count.
+    stagnationBoost: 2, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
+    stagnationBoostCap: 8, // Large-noise ceiling. Limb noise at the cap is 0.4, still near the parent.
+    stagnationMutateCap: 0.25, // Share of pairs that receive the large noise once a plateau starts. The rest keep the normal noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
     bodyExplorationScale: 0.01, // Noise on hidden weights. Small, so balance can shift without a rewrite.
     learningRate: 0.025, // Adam step size at generation 0.

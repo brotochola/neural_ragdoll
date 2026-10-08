@@ -310,6 +310,7 @@ async function runMain() {
       drill: state.drill || 0,
       bestEverScore: state.bestEverScore,
       eliteScore: state.eliteScore,
+      flatGens: state.flatGens || 0,
       theta: pack(state.theta),
       bestEverTheta: pack(state.bestEverTheta),
       m: pack(state.m),
@@ -356,6 +357,8 @@ async function runMain() {
     state.drill = saved.drill || 0;
     state.bestEverScore = saved.bestEverScore ?? -1e9;
     state.eliteScore = saved.eliteScore ?? -1e9;
+    if (Number.isFinite(+saved.flatGens) && +saved.flatGens > 0) state.flatGens = Math.floor(+saved.flatGens);
+    state.refreshMutationBoost();
     if (Array.isArray(saved.curve)) curve.push(...saved.curve);
     if (Array.isArray(saved.evalLog)) evalLog.push(...saved.evalLog);
     if (Array.isArray(saved.bestFiles)) bestFiles.push(...saved.bestFiles);
@@ -433,6 +436,11 @@ async function runMain() {
       throw new Error('training returned an empty score');
     }
     state.tell(generation, scores);
+    if ((state.mutationBoost || 1) > (generation.boost || 1)) {
+      const pct = Math.round((state.mutationFraction || 0) * 100);
+      const share = pct > 0 ? ' ' + pct + '%' : '';
+      log('mutation x' + state.mutationBoost + share + ' after ' + state.flatGens + ' generations without a better score');
+    }
     const last = state.hist[state.hist.length - 1];
     const meanStance = scores.reduce((sum, row) => sum + (row.stance || 0), 0) / scores.length;
     if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, stood: last.stood, gap: last.gap, stance: meanStance });
@@ -531,7 +539,9 @@ async function runMain() {
         if (state.gen % 10 === 0) {
           const last = curve[curve.length - 1];
           const sec = ((Date.now() - tick) / 1000).toFixed(2);
-          log('gen ' + state.gen + ' drill ' + (state.drill || 0) + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' best ' + (last ? last.best.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + ' stance ' + (last && last.stance != null ? last.stance.toFixed(2) : '?') + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
+          const pct = Math.round((state.mutationFraction || 0) * 100);
+          const mut = (state.mutationBoost || 1) > 1 ? ' mut x' + state.mutationBoost + (pct > 0 ? ' ' + pct + '%' : '') : '';
+          log('gen ' + state.gen + ' drill ' + (state.drill || 0) + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' best ' + (last ? last.best.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + ' stance ' + (last && last.stance != null ? last.stance.toFixed(2) : '?') + ' ever ' + state.bestEverScore.toFixed(3) + mut + ' ' + sec + 's');
         }
         if (opts.quickEvery > 0 && state.gen % opts.quickEvery === 0) {
           const quickKinds = gateKeys(phase);

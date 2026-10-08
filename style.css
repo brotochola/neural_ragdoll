@@ -85,10 +85,41 @@ section h2 {
 
 #status {
   min-height: 0;
-  font-size: 12px;
-  line-height: 1.3;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+#status .stat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 1px 0;
+  cursor: help;
   color: var(--muted);
 }
+
+#status .stat b {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+#status .swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 2px;
+  vertical-align: 0;
+}
+
+#status .swatch.avg { background: #6f95ff; }
+#status .swatch.best { background: #43d9ad; }
 
 #watch {
   display: flex;

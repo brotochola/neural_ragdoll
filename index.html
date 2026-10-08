@@ -29,7 +29,7 @@
     <div class="bar-row">
       <span class="group">Training</span>
       <button id="pause"
-        title="Loading this page does not train until you press this. The doll on screen keeps moving.">Start training</button>
+        title="Starts the search. The doll on screen keeps moving. This choice is remembered when you reopen the page.">Start training</button>
       <button id="restart"
         title="Throws away this session, including saved networks, and starts from random weights.">Restart from
         scratch</button>
@@ -65,13 +65,13 @@
       <span class="group">Network</span>
       <div id="watch">
         <label
-          title="The weights being updated right now. They change a little every generation. The pose stays until you press Reset pose."><input
+          title="The doll uses the parent: the weights that get a small step every generation. Children are copies of this plus noise. This is not the child with the highest score. The pose stays until you press Reset pose."><input
             type="radio" name="watch" id="watchParent" checked> Parent</label>
         <label
-          title="The individual that scored highest in the last generation. The doll keeps playing it until you press Reset pose."><input
+          title="The doll uses the child that scored highest in the last generation. That score is the green line, Generation best. The next generation replaces it. This is not Best ever. The pose stays until you press Reset pose."><input
             type="radio" name="watch" id="watchGeneration"> Best this generation</label>
         <label
-          title="The highest score since this session started. The doll keeps playing it until you press Reset pose."><input
+          title="The doll uses the child with the highest score since this session started. The green line can sit below this, because it is only the last generation. The pose stays until you press Reset pose."><input
             type="radio" name="watch" id="watchEver"> Best ever</label>
       </div>
       <label class="ctrl"

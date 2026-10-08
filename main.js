@@ -32,6 +32,7 @@ export class NeuralRagDollWorld {
       this.$("objectKind").appendChild(option);
     }
     this.fillSavedList();
+    this.restoreUi();
 
     this.pool = { workers: [], ready: false };
     this.world = this.sim.build();
@@ -44,8 +45,10 @@ export class NeuralRagDollWorld {
     this.$("pause").onclick = () => {
       this.paused = !this.paused;
       this.paintPause();
+      this.saveUi();
       this.logEvent(this.paused ? "training paused" : "training started");
     };
+    window.addEventListener("pagehide", () => this.saveUi());
     this.paintPause();
     this.$("restart").onclick = () => {
       this.random = makeSeededRandom(Date.now() & 0xffff);
@@ -123,6 +126,7 @@ export class NeuralRagDollWorld {
       this.$("watchGeneration").checked = false;
       this.$("watchEver").checked = false;
       this.resetEpisode();
+      this.saveUi();
       this.logEvent("JSON load succeeded");
     };
     this.$("randomWeights").onclick = () => {
@@ -166,6 +170,8 @@ export class NeuralRagDollWorld {
       this.$("savedNet").value = "";
       this.choosingWatch = false;
       this.resetEpisode();
+      this.saveUi();
+      this.paintTraining();
     };
     this.$("watchParent").onchange = this.watchLive;
     this.$("watchGeneration").onchange = this.watchLive;
@@ -179,8 +185,16 @@ export class NeuralRagDollWorld {
       this.$("watchEver").checked = false;
       this.choosingWatch = false;
       this.resetEpisode();
+      this.saveUi();
+      this.paintTraining();
     };
-    this.$("speed").oninput = () => { this.$("speedValue").textContent = this.$("speed").value + " m/s"; };
+    this.$("speed").oninput = () => {
+      this.$("speedValue").textContent = this.$("speed").value + " m/s";
+      this.saveUi();
+    };
+    for (const id of ["trainPose", "snapshotEvery", "startPose", "viewRays", "objectKind"]) {
+      this.$(id).addEventListener("change", () => this.saveUi());
+    }
 
     this.app = new PIXI.Application();
     this.host = this.$("stage");
@@ -189,13 +203,17 @@ export class NeuralRagDollWorld {
     this.graphics = new PIXI.Graphics();
     this.throws = new PIXI.Graphics();
     this.chart = new PIXI.Graphics();
+    const chartStyle = (fill) => ({ fill, fontSize: 11, fontFamily: "system-ui,sans-serif" });
+    this.chartMean = new PIXI.Text({ text: "avg", style: chartStyle(0x6f95ff) });
+    this.chartBest = new PIXI.Text({ text: "gen best", style: chartStyle(0x43d9ad) });
+    this.chartScale = new PIXI.Text({ text: "", style: chartStyle(0xb7bdd4) });
     this.doll = new PIXI.Container();
     this.doll.sortableChildren = true;
     this.label = new PIXI.Text({ text: "", style: { fill: 0xdfe4ff, fontSize: 13, fontFamily: "system-ui,sans-serif", lineHeight: 18 } });
     this.label.position.set(12, 10);
-    this.app.stage.addChild(this.graphics, this.doll, this.throws, this.chart, this.label);
+    this.app.stage.addChild(this.graphics, this.doll, this.throws, this.chart, this.chartMean, this.chartBest, this.chartScale, this.label);
     this.resetEpisode();
-    this.$("trainPhase").onchange = () => this.applyTrainPhase();
+    this.$("trainPhase").onchange = () => { this.applyTrainPhase(); this.saveUi(); };
     this.applyTrainPhase();
     this.trainLoop();
 
@@ -408,11 +426,9 @@ export class NeuralRagDollWorld {
           this.drawNetworkGraph();
           this.paintNetList();
         }
-        const last = this.state.hist[this.state.hist.length - 1];
         const pose = isStanding(this.episode.measure) ? "standing" : (this.episode.measure.handOn ? "on hands" : (this.episode.measure.bodyOn ? "on the floor" : "in the air"));
         const goal = this.episode.options.goalX == null ? "" : " · goal " + Math.abs(this.episode.options.goalX - this.episode.measure.centerX).toFixed(1) + " m";
-        const fitness = last ? " · mean " + last.mean.toFixed(2) + " best " + last.best.toFixed(2) : "";
-        this.$("status").textContent = (this.paused ? "idle" : "running") + " · " + this.trainPhaseLabel() + " · watching " + this.watchModeLabel() + " · " + this.networkTitle() + " · gen " + this.state.gen + fitness;
+        this.paintTraining();
         this.label.text = "Head " + (this.episode.measure.headHeight || 0).toFixed(2) + " m · torso " + (Math.abs(this.episode.measure.torsoAngle) * 180 / Math.PI).toFixed(0) + "° · " + pose + goal;
       }
       this.drawChart();
@@ -473,7 +489,10 @@ export class NeuralRagDollWorld {
         this.saveSession();
         this.visit.trained = true;
         const finished = this.state.hist[this.state.hist.length - 1];
-        if (finished) this.logEvent("generation finished (gen " + this.state.gen + ", mean " + finished.mean.toFixed(2) + ", best " + finished.best.toFixed(2) + ")");
+        if (finished) {
+          const mut = this.mutationStatus(", ");
+          this.logEvent("generation finished (gen " + this.state.gen + ", avg " + finished.mean.toFixed(2) + ", gen best " + finished.best.toFixed(2) + mut + ")");
+        }
         this.advanceTrainPhase();
       } catch (error) {
         this.$("error").textContent = error.message;
@@ -496,16 +515,92 @@ export class NeuralRagDollWorld {
     return this.state.theta;
   }
 
-  watchModeLabel() {
-    if (this.savedSnapshot()) return "saved";
-    if (this.$("watchEver").checked) return "best ever";
-    if (this.$("watchGeneration").checked) return "best this generation";
-    return "parent";
+  phaseLesson(phase) {
+    if (phase.name === "Stand") return "Stand can be dropped, and a ball can be thrown.";
+    if (phase.name === "Get up") return "Get up starts on the floor.";
+    if (phase.name === "Walk") return "Walk starts standing, and the marker is the goal.";
+    const bits = [];
+    if (phase.start === "down") bits.push("starts on the floor");
+    else if (phase.start === "up") bits.push("starts standing");
+    else bits.push("starts standing or on the floor");
+    if (phase.falls) bits.push("can be dropped");
+    if (phase.balls) bits.push("a ball can be thrown");
+    if (phase.goal) bits.push("the marker is the goal");
+    return phase.name + " " + bits.join(", ") + ".";
   }
 
-  trainPhaseLabel() {
-    const name = activeTrainingPhase().name;
-    return config.curriculum.byPhases ? "By phases: " + name : name;
+  phaseStat() {
+    const phases = config.curriculum.phases;
+    const phase = activeTrainingPhase();
+    const index = Math.max(0, phases.findIndex((item) => item.id === phase.id));
+    const lesson = this.phaseLesson(phase);
+    if (!config.curriculum.byPhases) {
+      return {
+        value: phase.name,
+        tip: "This run stays on " + phase.name + " until you pick another task. It does not move on by itself. " + lesson,
+      };
+    }
+    const next = phases[index + 1];
+    const done = (this.state.gen || 0) - (this.phaseStartGen || 0);
+    const left = Math.max(0, phase.generations - done);
+    let when = "This is the last phase. It does not move on. ";
+    if (next && left === 0) when = next.name + " starts now. ";
+    else if (next && left === 1) when = next.name + " starts in 1 generation. ";
+    else if (next) when = phase.name + " lasts " + phase.generations + " generations. " + next.name + " starts in " + left + " generations. ";
+    return {
+      value: phase.name + " · " + (index + 1) + " of " + phases.length,
+      tip: "A phase is one practice task, with its own starting pose. This run walks " + phases.map((item) => item.name).join(", then ") + ". " + when + lesson,
+    };
+  }
+
+  watchingStat() {
+    const saved = this.savedSnapshot();
+    if (saved) {
+      return {
+        value: saved.name || ("gen " + saved.gen),
+        tip: "The doll is using a saved network from this session, not the parent being trained.",
+      };
+    }
+    if (this.$("watchEver").checked) {
+      return {
+        value: "Best ever",
+        tip: "The doll is using the child with the highest score since this session started.",
+      };
+    }
+    if (this.$("watchGeneration").checked) {
+      return {
+        value: "Best this generation",
+        tip: "The doll is using the child that scored highest in the last generation (the green line). The next generation replaces it.",
+      };
+    }
+    return {
+      value: "Parent",
+      tip: "The doll is using the parent: the weights that get a small step every generation. Children are copies of this plus noise. It is not the child with the highest score.",
+    };
+  }
+
+  paintTraining() {
+    const last = this.state.hist[this.state.hist.length - 1];
+    const phase = this.phaseStat();
+    const watching = this.watchingStat();
+    const ever = this.state.bestEverScore;
+    const everText = Number.isFinite(ever) && ever > -1e8 ? ever.toFixed(2) : "–";
+    const boost = this.state.mutationBoost || 1;
+    const pct = Math.round((this.state.mutationFraction || 0) * 100);
+    const rows = [
+      ["Phase", phase.value, phase.tip],
+      ["Generation", String(this.state.gen || 0), "How many generations have finished. Each generation is a batch of children of the parent, scored on one episode each."],
+      ["Generation average", last ? last.mean.toFixed(2) : "–", "Average score of every child in the last finished generation. The blue line. Not a network you can put on the doll.", "avg"],
+      ["Generation best", last ? last.best.toFixed(2) : "–", "Highest score among those children. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.", "best"],
+      ["Best ever", everText, "Highest score any child has reached in this session. Network → Best ever plays those weights. The green line can sit below this, because it is only the last generation."],
+      ["Watching", watching.value, watching.tip],
+      ["Plateau", (this.state.flatGens || 0) + " gens", "Generations without enough new records to relax the search. At 100, a quarter of each generation is pushed farther from the parent. One new Best ever removes 100 from this count."],
+      ["Mutation", "x" + boost + (pct > 0 ? " · " + pct + "%" : ""), "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting."],
+    ];
+    this.$("status").innerHTML = rows.map((row) => {
+      const mark = row[3] ? '<i class="swatch ' + row[3] + '"></i>' : "";
+      return '<div class="stat" title="' + this.escapeTip(row[2]) + '"><span>' + mark + row[0] + "</span><b>" + this.escapeTip(row[1]) + "</b></div>";
+    }).join("");
   }
 
   applyTrainPhase() {
@@ -520,6 +615,7 @@ export class NeuralRagDollWorld {
       setTrainingByPhases(false);
       setTrainingPhase(+value);
     }
+    this.paintTraining();
   }
 
   advanceTrainPhase() {
@@ -531,7 +627,9 @@ export class NeuralRagDollWorld {
     const next = config.curriculum.phases[index + 1];
     setTrainingPhase(next.id);
     this.phaseStartGen = this.state.gen || 0;
+    this.saveUi();
     this.logEvent("By phases: " + next.name + " (gen " + this.state.gen + ")");
+    this.paintTraining();
   }
 
   networkTitle() {
@@ -622,13 +720,13 @@ export class NeuralRagDollWorld {
     return observationLabels[index] || { name: "input " + index, tip: "Observation " + index + "." };
   }
 
-  escapeTip(text) { return String(text).replace(/"/g, "&quot;"); }
+  escapeTip(text) { return String(text).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
 
   paintPause() {
     this.$("pause").textContent = this.paused ? "Start training" : "Pause";
     this.$("pause").title = this.paused
-      ? "Loading this page does not train until you press this. The doll on screen keeps moving."
-      : "Stops the search. The doll on screen keeps moving.";
+      ? "Starts the search. The doll on screen keeps moving. This choice is remembered when you reopen the page."
+      : "Stops the search. The doll on screen keeps moving. This choice is remembered when you reopen the page.";
   }
 
   screenPoint(event) {
@@ -658,23 +756,53 @@ export class NeuralRagDollWorld {
     }
   }
 
+  mutationStatus(joiner) {
+    const boost = this.state.mutationBoost || 1;
+    if (!(boost > 1)) return "";
+    const pct = Math.round((this.state.mutationFraction || 0) * 100);
+    return (joiner || " · ") + "mut x" + boost + (pct > 0 ? " · " + pct + "%" : "");
+  }
+
   drawChart() {
     this.chart.clear();
     const width = Math.min(240, this.app.screen.width - 24);
-    const height = 70;
+    const plot = 70;
+    const height = plot + 22;
     const originX = this.app.screen.width - width - 12;
-    this.chart.roundRect(originX, 12, width, height, 6).fill({ color: 0x000000, alpha: 0.35 });
+    const originY = 12;
+    this.chart.roundRect(originX, originY, width, height, 6).fill({ color: 0x000000, alpha: 0.35 });
     const history = this.state.hist;
-    if (history.length < 2) return;
-    for (const [key, color] of [["mean", 0x6f95ff], ["best", 0x43d9ad]]) {
-      history.forEach((sample, index) => {
-        const x = originX + 4 + index / (history.length - 1) * (width - 8);
-        const y = 12 + height - 4 - clamp((sample[key] + 2) / 10, 0, 1) * (height - 8);
-        if (index) this.chart.lineTo(x, y);
-        else this.chart.moveTo(x, y);
-      });
-      this.chart.stroke({ width: 1.5, color });
+    let low = Infinity;
+    let high = -Infinity;
+    for (const sample of history) {
+      if (Number.isFinite(sample.mean)) { low = Math.min(low, sample.mean); high = Math.max(high, sample.mean); }
+      if (Number.isFinite(sample.best)) { low = Math.min(low, sample.best); high = Math.max(high, sample.best); }
     }
+    const flatLine = !(high > low);
+    const drawLow = flatLine ? (Number.isFinite(low) ? low : 0) - 1 : low;
+    const drawHigh = flatLine ? drawLow + 2 : high;
+    const span = drawHigh - drawLow;
+    if (history.length >= 2) {
+      for (const [key, color] of [["mean", 0x6f95ff], ["best", 0x43d9ad]]) {
+        history.forEach((sample, index) => {
+          const x = originX + 4 + index / (history.length - 1) * (width - 8);
+          const y = originY + plot - 4 - ((sample[key] - drawLow) / span) * (plot - 8);
+          if (index) this.chart.lineTo(x, y);
+          else this.chart.moveTo(x, y);
+        });
+        this.chart.stroke({ width: 1.5, color });
+      }
+    }
+    this.chartScale.text = history.length && Number.isFinite(low) ? (flatLine ? low.toFixed(2) : low.toFixed(2) + "–" + high.toFixed(2)) : "";
+    this.chartScale.position.set(originX + width - 72, originY + 2);
+    const last = history[history.length - 1];
+    const legendY = originY + plot + 4;
+    this.chart.rect(originX + 8, legendY + 2, 8, 8).fill(0x6f95ff);
+    this.chart.rect(originX + width / 2, legendY + 2, 8, 8).fill(0x43d9ad);
+    this.chartMean.position.set(originX + 20, legendY);
+    this.chartBest.position.set(originX + width / 2 + 12, legendY);
+    this.chartMean.text = "avg" + (last ? " " + last.mean.toFixed(2) : "");
+    this.chartBest.text = "gen best" + (last ? " " + last.best.toFixed(2) : "");
   }
 
 drawNetworkGraph() {
@@ -1003,12 +1131,77 @@ drawNetworkGraph() {
         bestEverGen: Number.isFinite(this.state.bestEverGen) ? this.state.bestEverGen : null,
         networkName: this.state.networkName || "",
         eliteScore: this.state.eliteScore,
+        flatGens: this.state.flatGens || 0,
         hist: this.state.hist.slice(-80),
         snapshots: (this.state.snapshots || []).slice(-40).map((item) => ({
           gen: item.gen, score: item.score, name: item.name || "", weights: pack(item.weights),
         })),
       }));
     } catch (error) { /* a full history can exceed the quota; the run still continues */ }
+    this.saveUi();
+  }
+
+  saveUi() {
+    try {
+      const watch = this.$("watchEver").checked ? "ever" : this.$("watchGeneration").checked ? "gen" : "parent";
+      localStorage.setItem("ragdoll-ui", JSON.stringify({
+        paused: this.paused,
+        trainPhase: this.$("trainPhase").value,
+        trainPose: this.$("trainPose").value,
+        snapshotEvery: this.$("snapshotEvery").value,
+        watch,
+        savedNet: this.$("savedNet").value,
+        startPose: this.$("startPose").value,
+        viewRays: this.$("viewRays").checked,
+        objectKind: this.$("objectKind").value,
+        speed: this.$("speed").value,
+        phaseStartGen: this.phaseStartGen,
+        curriculumPhase: config.curriculum.phase,
+      }));
+    } catch (error) { /* settings are small; a quota error still leaves the run going */ }
+  }
+
+  restoreUi() {
+    let saved;
+    try { saved = JSON.parse(localStorage.getItem("ragdoll-ui") || "null"); }
+    catch (error) { return; }
+    if (!saved) return;
+    const pick = (id, value) => {
+      if (value == null || value === "") return;
+      const el = this.$(id);
+      const text = String(value);
+      if (el.options && ![...el.options].some((option) => option.value === text)) return;
+      el.value = text;
+    };
+    pick("trainPhase", saved.trainPhase);
+    pick("trainPose", saved.trainPose);
+    pick("snapshotEvery", saved.snapshotEvery);
+    pick("startPose", saved.startPose);
+    pick("objectKind", saved.objectKind);
+    if (saved.speed != null) {
+      this.$("speed").value = saved.speed;
+      this.$("speedValue").textContent = this.$("speed").value + " m/s";
+    }
+    this.$("viewRays").checked = !!saved.viewRays;
+    this.$("watchParent").checked = saved.watch !== "gen" && saved.watch !== "ever";
+    this.$("watchGeneration").checked = saved.watch === "gen";
+    this.$("watchEver").checked = saved.watch === "ever";
+    if (saved.savedNet) {
+      const select = this.$("savedNet");
+      const text = String(saved.savedNet);
+      if ([...select.options].some((option) => option.value === text)) {
+        select.value = text;
+        this.$("watchParent").checked = false;
+        this.$("watchGeneration").checked = false;
+        this.$("watchEver").checked = false;
+      }
+    }
+    if (saved.trainPhase === "phases") {
+      setTrainingByPhases(true);
+      if (Number.isFinite(+saved.curriculumPhase)) setTrainingPhase(+saved.curriculumPhase);
+      if (Number.isFinite(+saved.phaseStartGen)) this.phaseStartGen = Math.floor(+saved.phaseStartGen);
+    }
+    if (saved.paused === false) this.paused = false;
   }
 
   networkFromJson(data) {
@@ -1061,6 +1254,8 @@ drawNetworkGraph() {
       if (saved.bestEverGen != null && Number.isFinite(+saved.bestEverGen)) revived.bestEverGen = Math.floor(+saved.bestEverGen);
       revived.networkName = typeof saved.networkName === "string" ? saved.networkName : "";
       revived.eliteScore = saved.eliteScore ?? -1e9;
+      if (Number.isFinite(+saved.flatGens) && +saved.flatGens > 0) revived.flatGens = Math.floor(+saved.flatGens);
+      revived.refreshMutationBoost();
       revived.hist = saved.hist || [];
       revived.snapshots = (saved.snapshots || []).slice(-40).map((item) => ({
         gen: item.gen,
