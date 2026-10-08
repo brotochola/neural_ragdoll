@@ -119,13 +119,18 @@ export function scoreDecision(measure) {
   });
 
   const headDown = Math.max(0, -(measure.headVelocityY || 0));
-  const headOnFloor = measure.touch?.[part.head] ? 1 : 0;
-  const headStrike = headOnFloor && headDown > 1 ? weight.headImpact * clamp(headDown / 3, 0, 2) : 0;
-  // Solo el golpe. Apoyar la cabeza no resta: eso valía más que pararse.
+  const headOn = measure.touch?.[part.head] ? 1 : 0;
+  const headStrike = headOn && headDown > 1 ? weight.headImpact * clamp(headDown / 3, 0, 2) : 0;
+  // El golpe es aparte. Apoyar resta siempre, y headPark se suma cuando el torso ya está erguido.
   rows.push({
     name: "Head impact",
-    tip: "Subtracts while the head is touching the floor and moving down faster than 1 m/s, up to twice the weight. Resting the head on the floor does not subtract.",
+    tip: "Subtracts while the head is touching something and moving down faster than 1 m/s, up to twice the weight. A corner counts. Resting is the Head contact row.",
     value: -headStrike,
+  });
+  rows.push({
+    name: "Head contact",
+    tip: "Subtracts while the head touches the floor, the platform, or a thrown object. A corner counts. Once the torso is upright the park weight is added.",
+    value: -(weight.headOnFloor + weight.headPark * park) * headOn,
   });
 
   const bothFeet = (measure.touch?.[part.footLeft] ? 1 : 0) + (measure.touch?.[part.footRight] ? 1 : 0);

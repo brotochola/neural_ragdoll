@@ -113,7 +113,7 @@ export class ElmanNetwork {
 }
 
 // Cuánto ruido le toca a cada peso. El cuerpo casi no se mueve; los miembros y el goal, sí.
-// El ruido grande del goal y de standing solo cae en los pesos que multiplican la entrada.
+// El ruido grande del goal, de standing y del contacto de la cabeza solo cae en los pesos que multiplican esa entrada.
 // `boost` agranda ese ruido cuando el puntaje no mejora. sigmaCap lo corta. Cuello y muñecas siguen en 0.
 function explorationOf(index, scale, boost) {
   const extra = boost > 0 ? boost : 1;
@@ -126,7 +126,7 @@ function explorationOf(index, scale, boost) {
       const stride = layout.feedforward ? layout.feedforwardStride : layout.recurrentStride;
       const origin = layout.feedforward ? 0 : layout.recurrentBase;
       const local = (index - origin) % stride;
-      if (local === net.goalInputIndex + 1 || local === net.goalInputIndex + 2 || local === net.standingInputIndex + 1) sigma = scale * extra;
+      if (local === net.goalInputIndex + 1 || local === net.goalInputIndex + 2 || local === net.standingInputIndex + 1 || local === net.headContactInputIndex + 1) sigma = scale * extra;
       else if (local > net.sensedInputCount && local <= net.inputCount) sigma = net.freshInputExplorationScale * extra;
     }
   } else {

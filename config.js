@@ -2,8 +2,8 @@
 
 const physicsHz = 60;
 const partCount = 14;
-const sensedInputCount = 79; // 26 joint, 4 sin/cos, 2 heights, 4 mass, 40 face rays, goal x/y, standing.
-const rewardRowCount = 26;
+const sensedInputCount = 80; // 26 joint, 4 sin/cos, 2 heights, 4 mass, 40 face rays, goal x/y, standing, head contact.
+const rewardRowCount = 27;
 const partSpeedInputCount = partCount * 3;
 const rewardTotalNow = false;
 const rewardTotalPrevious = false;
@@ -20,18 +20,19 @@ export const config = {
     solverSubsteps: 3, // Box2D solver iterations per step. 4 was stiffer; 2 is faster.
   },
   cadence: {
-    actionEveryNFrames: 5, // Frames an action is held before the net picks a new one. 5 = 12 decisions/s (was 10 = 6/s, slow for balance).
-    rewardEveryNFrames: 1, // Frames between score samples.
+    actionEveryNFrames: 4, // Frames an action is held before the net picks a new one. 5 = 12 decisions/s (was 10 = 6/s, slow for balance).
+    rewardEveryNFrames: 2, // Frames between score samples.
     rewardFrameOffset: 0, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
     hidden1Ratio: 50 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
-    hidden2Ratio: 15 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
+    hidden2Ratio: 50 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
     feedbackUnits: 8, // Nonlinear summary of the previous action. It enters the recurrent layer only.
     jointCount: 13, // Motor joints, and the width of the action vector.
-    sensedInputCount, // Observation length before part speeds. Goal x is 76, goal y is 77, standing is 78.
+    sensedInputCount, // Observation length before part speeds. Goal x is 76, goal y is 77, standing is 78, head contact is 79.
     goalInputIndex: 76, // Index of the goal-x observation. Goal y is the next index.
     standingInputIndex: 78, // Index of the binary standing observation.
+    headContactInputIndex: 79, // Index of the head-contact observation. 1 when Box2D says the head is touching.
     partCount, // Dynamic body parts, including the hip.
     partSpeedInputCount, // Three numbers per part: vx, vy, spin.
     rewardRowCount, // Score rows shown on screen. They are not copied into the observation.
@@ -79,7 +80,9 @@ export const config = {
     thighSpread: 2, // Penalty weight for a thigh angle outside the standing band, only while upright.
     footInAir: 1.5, // Penalty weight per foot off the floor, only while upright.
     balance: 1.6, // Weight of the center of mass against the midpoint of the feet.
-    headImpact: 16.8, // Penalty weight while the head touches the floor. A fast downward hit can add up to twice this again.
+    headImpact: 16.8, // Penalty weight while the head is touching and moving down. A fast hit can add up to twice this again. A corner counts.
+    headOnFloor: 5, // Penalty while the head touches anything.
+    headPark: 2, // Added on top of headOnFloor once the torso is upright. Same gate as the hands.
     standing: 5, // Standing bonus, split across flat soles, a clear body, an upright torso, and a high head.
     standingFlag: 3, // Extra bonus when isStanding is true: both feet, nothing else down, upright, high head, a real stance, and quiet.
     stanceComfort: 2, // Bonus for a stance near the comfortable width, scaled by how flat the soles are. A very wide stance subtracts.
@@ -154,11 +157,11 @@ export const config = {
     explorationFloor: 0.22, // Starting amplitude of the decaying noise. The used scale is the max of this decay and explorationScale.
     explorationHalfLifeGenerations: 6000, // Generations for the decaying noise to halve.
     stagnationGenerations: 100, // Plateau length before the large noise starts. One new best removes this many generations from the count.
-    stagnationBoost: 2, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
-    stagnationBoostCap: 8, // Large-noise ceiling. Limb noise at the cap is 0.4, still near the parent.
-    sigmaCap: 0.4, // One weight's noise never exceeds this. The plateau boost cannot blow up the goal and standing columns.
+    stagnationBoost: 3, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
+    stagnationBoostCap: 128, // Large-noise ceiling. Limb noise at the cap is 0.4, still near the parent.
+    sigmaCap: 2.4, // One weight's noise never exceeds this. The plateau boost cannot blow up the goal and standing columns.
     recordWindow: 20, // Generations in the ending average that sets a record.
-    recordMargin: 0.25, // That average must clear the previous record by this much.
+    recordMargin: 0.33, // That average must clear the previous record by this much.
     stagnationMutateCap: 0.25, // Share of pairs that receive the large noise once a plateau starts. The rest keep the normal noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
     bodyExplorationScale: 0.02, // Noise on hidden weights. Small, so balance can shift without a rewrite.
@@ -188,6 +191,10 @@ export const config = {
     motorSpeedLimit: 10, // Max joint motor speed, radians per second.
     goalNearMeters: 1.2, // Closest random marker distance.
     goalFarExtraMeters: 1, // Extra meters added at random past the closest marker.
+  },
+  hint: {
+    pairFraction: 0.25, // Share of antithetic pairs whose joint output is forced while a hint button is on. The last pairs, so they are not also the large-noise scouts.
+    matchWeight: 1, // Added to fitness when the network's own output already matches the forced sign. A perfect match adds this.
   },
   workers: {
     browserMin: 1, // Fewest browser workers.

@@ -32,6 +32,8 @@ export class NeuralRagDollWorld {
       this.$("objectKind").appendChild(option);
     }
     this.fillSavedList();
+    this.hint = null;
+    this.fillHintButtons();
     this.restoreUi();
 
     this.pool = { workers: [], ready: false };
@@ -315,7 +317,10 @@ export class NeuralRagDollWorld {
       while (this.accumulator >= 1000 / config.physics.hz) {
         this.accumulator -= 1000 / config.physics.hz;
         if (this.hold > 0) { this.hold--; if (!this.hold) this.resetEpisode(); }
-        else if (this.episode.step()) this.hold = 60;
+        else {
+          this.episode.options.hint = this.hint;
+          if (this.episode.step()) this.hold = 60;
+        }
       }
       const width = this.app.screen.width;
       const height = this.app.screen.height;
@@ -483,18 +488,24 @@ export class NeuralRagDollWorld {
       const generationState = this.state;
       try {
         const generation = generationState.ask(null, Math.max(config.workers.browserPairMin, this.pool.workers.length), this.randomNormal);
+        const hint = this.hint;
+        const hintedPairs = hint ? Math.round(generation.count * config.hint.pairFraction) : 0;
+        const hintFrom = generation.count - hintedPairs;
         const starts = [];
         const tasks = [];
         let taskIndex = 0;
         for (let child = 0; child < generation.weights.length; child++) {
           if (child % 2 === 0) starts.push(this.sim.trainingStarts(this.random));
-          const trio = starts[Math.floor(child / 2)];
+          const pair = Math.floor(child / 2);
+          const trio = starts[pair];
           for (let pose = 0; pose < trio.length; pose++) {
+            let options = trio[pose];
+            if (hint && pair >= hintFrom) options = Object.assign({}, options, { hint: { joint: hint.joint, sign: hint.sign } });
             tasks.push({
               index: taskIndex++,
               weights: generation.weights[child],
               phase: child % config.cadence.actionEveryNFrames,
-              options: trio[pose],
+              options,
             });
           }
         }
@@ -638,6 +649,7 @@ export class NeuralRagDollWorld {
       ["Watching", watching.value, watching.tip],
       ["Plateau", (this.state.flatGens || 0) + " gens", "Generations since the 20-generation average fitness last reached a new high. The fitness is the ending minus any drop from the start. At 100, a quarter of each generation is pushed farther from the parent. One new Best ever removes 100 from this count."],
       ["Mutation", "x" + boost + (pct > 0 ? " · " + pct + "%" : ""), "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting."],
+      ["Hint", this.hintLabel(), "The joint forced to its upper or lower stop. The doll on screen follows it and is not scored. The last " + Math.round(config.hint.pairFraction * 100) + "% of pairs in the next generation get the same force on both children and on all three poses. A child whose own output already pointed that way scores up to " + config.hint.matchWeight + " more. Neck and wrists can be forced, but their output weights are not searched."],
     ];
     this.$("status").innerHTML = rows.map((row) => {
       const mark = row[3] ? '<i class="swatch ' + row[3] + '"></i>' : "";
@@ -707,6 +719,41 @@ export class NeuralRagDollWorld {
     else dialog.show();
   }
 
+  fillHintButtons() {
+    const row = this.$("hintRow");
+    for (let joint = 0; joint < jointNames.length; joint++) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = jointNames[joint];
+      button.title = "Click for + (upper stop), again for − (lower stop), again to stop. Only one joint at a time.";
+      button.onclick = () => this.cycleHint(joint);
+      row.appendChild(button);
+    }
+  }
+
+  cycleHint(joint) {
+    if (!this.hint || this.hint.joint !== joint) this.hint = { joint, sign: 1 };
+    else if (this.hint.sign > 0) this.hint = { joint, sign: -1 };
+    else this.hint = null;
+    this.paintHints();
+    this.paintTraining();
+  }
+
+  paintHints() {
+    const buttons = this.$("hintRow").querySelectorAll("button");
+    for (let joint = 0; joint < buttons.length; joint++) {
+      const on = this.hint && this.hint.joint === joint;
+      buttons[joint].className = on ? (this.hint.sign > 0 ? "hint-pos" : "hint-neg") : "";
+      buttons[joint].textContent = jointNames[joint] + (on ? (this.hint.sign > 0 ? " +" : " −") : "");
+    }
+  }
+
+  hintLabel() {
+    if (!this.hint) return "Off";
+    const pct = Math.round(config.hint.pairFraction * 100);
+    return jointNames[this.hint.joint] + (this.hint.sign > 0 ? " +" : " −") + " · " + pct + "% of pairs";
+  }
+
   episodeOptions() {
     const pose = this.$("startPose").value;
     const side = Math.random() < 0.5 ? -1 : 1;
@@ -721,6 +768,7 @@ export class NeuralRagDollWorld {
     const options = this.episodeOptions();
     this.episode = new this.sim.Episode(this.world, this.watchedWeights(), options.tilt, options.drop, options);
     this.episode.free = true;
+    this.episode.options.hint = this.hint;
     this.hold = 0;
     if (this.$("graphDialog").open) {
       this.drawNetworkGraph();

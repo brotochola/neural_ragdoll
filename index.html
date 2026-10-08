@@ -91,6 +91,9 @@
         <input id="viewRays" type="checkbox"> View raycasts
       </label>
     </div>
+    <div class="bar-row" id="hintRow">
+      <span class="group" title="Forces one joint's output to its upper or lower stop. The doll on screen follows it. The last quarter of each generation's pairs do too, both children the same way, and a child that already wanted that direction scores a little higher.">Hint</span>
+    </div>
     <div class="bar-row">
       <span class="group">Throw</span>
       <label class="ctrl" title="What Fire throws, or what a drag on empty space throws.">Object
@@ -119,7 +122,8 @@
     <div id="netlist"></div>
   </dialog>
   <div id="hint">Green adds, red subtracts. Standing adds flat soles, a clear body, an upright torso, and a high head
-    as separate shares. A stance near 29 cm adds more while the soles are down. The marker is the goal.</div>
+    as separate shares. A stance near 29 cm adds more while the soles are down. A head touching something subtracts,
+    and more once the torso is upright. The marker is the goal.</div>
   <div id="error"></div>
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js"></script>
   <script type="module" src="main.js"></script>

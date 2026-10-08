@@ -236,6 +236,16 @@ select {
   cursor: pointer;
 }
 
+button.hint-pos {
+  background: var(--good);
+  color: #102018;
+}
+
+button.hint-neg {
+  background: var(--bad);
+  color: white;
+}
+
 select {
   background: var(--panel);
 }

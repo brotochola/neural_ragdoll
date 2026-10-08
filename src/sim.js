@@ -69,6 +69,7 @@ function buildObservationLabels() {
     { name: "goal x", tip: "Horizontal distance to the marker, relative to the body. 0 means arrived." },
     { name: "goal y", tip: "Height of the marker above the floor. 0 while the marker is on the floor." },
     { name: "standing", tip: "1 when the body is truly standing: both feet, nothing else down, upright, high head, a real stance, and quiet. Otherwise 0." },
+    { name: "head contact", tip: "1 when the head is touching the floor, the platform, or a thrown object. A corner counts. Otherwise 0." },
   );
   for (const [name, index] of Object.entries(config.partIndex)) {
     if (index >= config.net.partCount) continue;
@@ -96,6 +97,7 @@ export function createSim(box) {
     b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake, b2Body_GetLinearVelocity,
     b2Body_GetAngularVelocity, b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed,
     CreateCircle, b2DestroyBody, b2Shape_RayCast, b2Body_GetShapes,
+    b2Body_GetContactCapacity, b2Body_GetContactData,
   } = box;
   const dynamicBody = b2BodyType.b2_dynamicBody;
   const staticBody = b2BodyType.b2_staticBody;
@@ -209,6 +211,25 @@ export function createSim(box) {
     return fraction;
   }
 
+  // Face rays miss a corner. Box2D's manifold has that point. Speculative contacts reach 2 cm with no load, so those do not count.
+  const contactData = [];
+  function bodyTouching(bodyId) {
+    const capacity = b2Body_GetContactCapacity(bodyId);
+    if (!capacity) return false;
+    while (contactData.length < capacity) contactData.push({ manifold: null });
+    const count = b2Body_GetContactData(bodyId, contactData, capacity);
+    const gap = config.body.touchGapMeters;
+    for (let i = 0; i < count; i++) {
+      const manifold = contactData[i].manifold;
+      if (!manifold) continue;
+      for (let p = 0; p < manifold.pointCount; p++) {
+        const point = manifold.points[p];
+        if (point.separation <= gap || point.normalImpulse > 0) return true;
+      }
+    }
+    return false;
+  }
+
   function resetPose(world, tilt, drop, options) {
     const cosine = Math.cos(tilt);
     const sine = Math.sin(tilt);
@@ -294,6 +315,9 @@ export function createSim(box) {
     for (let i = 0; i < count; i++) measure.touch[i] = measure.clearance[i] < config.body.touchGapMeters;
     const torso = config.partIndex.torso;
     const head = config.partIndex.head;
+    const headTouch = bodyTouching(world.parts[head].id);
+    measure.touch[head] = headTouch;
+    measure.headContact = headTouch ? 1 : 0;
     const footLeft = config.partIndex.footLeft;
     const footRight = config.partIndex.footRight;
     measure.headX = partX[head];
@@ -399,6 +423,8 @@ export function createSim(box) {
       this.sensedFrames = 0;
       this.heightSum = 0;
       this.headImpact = 0;
+      this.hintMatchSum = 0;
+      this.hintMatchCount = 0;
       this.previousRewardTotal = 0;
       this.objects = [];
       this.measure = {
@@ -461,6 +487,7 @@ export function createSim(box) {
       input[cursor++] = measure.goalDx || 0;
       input[cursor++] = measure.goalDy || 0;
       input[cursor++] = isStanding(measure) ? 1 : 0;
+      input[cursor++] = measure.headContact || 0;
       if (cursor !== config.net.sensedInputCount) throw new Error("base observation " + cursor);
       for (let i = 0; i < config.net.partCount; i++) {
         input[cursor++] = clamp((measure.partVelocityX[i] || 0) / config.scale.partSpeed, -2, 2);
@@ -480,6 +507,17 @@ export function createSim(box) {
       }
       if (cursor !== config.net.inputCount) throw new Error("observation length " + cursor);
       this.network.forward(input);
+      this.applyHint();
+    }
+    // The forced sign is what the motor and the next decision's feedback see. The raw output is kept for the match bonus.
+    applyHint() {
+      const hint = this.options.hint;
+      if (!hint || (hint.sign !== 1 && hint.sign !== -1)) return;
+      const joint = hint.joint;
+      if (joint < 0 || joint >= config.net.jointCount) return;
+      this.hintMatchSum += this.action[joint] * hint.sign;
+      this.hintMatchCount++;
+      this.action[joint] = hint.sign;
     }
     evaluate() {
       const measure = this.measure;
@@ -512,7 +550,7 @@ export function createSim(box) {
       else this.upStreak = 0;
       this.sensedFrames++;
       this.heightSum += measure.headHeight;
-      if (measure.clearance[config.partIndex.head] < 0.03) {
+      if (measure.touch[config.partIndex.head]) {
         this.headImpact = Math.max(this.headImpact || 0, -(measure.headVelocityY || 0));
       }
     }
@@ -567,7 +605,9 @@ export function createSim(box) {
     get fitnessValue() {
       const end = this.windowMean(true);
       const start = this.windowMean(false);
-      return end - Math.max(0, start - end);
+      const pose = end - Math.max(0, start - end);
+      if (!this.hintMatchCount) return pose;
+      return pose + config.hint.matchWeight * (this.hintMatchSum / this.hintMatchCount);
     }
     get stats() {
       const end = this.windowMean(true);
