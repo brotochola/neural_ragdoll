@@ -5,9 +5,9 @@ const partCount = 14;
 const sensedInputCount = 82;
 const rewardRowCount = 26;
 const partSpeedInputCount = partCount * 3;
-const rewardTotalNow = false;
-const rewardTotalPrevious = false;
-const rewardTotalNext = false;
+const rewardTotalNow = true;
+const rewardTotalPrevious = true;
+const rewardTotalNext = true;
 const rewardTotalInputCount =
   Number(rewardTotalNow) +
   Number(rewardTotalPrevious) +
@@ -20,13 +20,13 @@ export const config = {
     solverSubsteps: 3, // Box2D solver iterations per step. 4 was stiffer; 2 is faster.
   },
   cadence: {
-    actionEveryNFrames: 10, // Frames an action is held before the net picks a new one.
-    rewardEveryNFrames: 10, // Frames between score samples.
-    rewardFrameOffset: 5, // Sample the score this many frames after a new action, not on the action frame.
+    actionEveryNFrames: 2, // Frames an action is held before the net picks a new one.
+    rewardEveryNFrames: 2, // Frames between score samples.
+    rewardFrameOffset: 1, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
-    hidden1Ratio: 4 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
-    hidden2Ratio: 16 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
+    hidden1Ratio: 7 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
+    hidden2Ratio: 5 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
     jointCount: 13, // Motor joints, and the width of the action vector.
     sensedInputCount, // Observation length before part speeds and reward rows. Goal x is 79, goal y is 80, standing is 81.
     goalInputIndex: 79, // Index of the goal-x observation. Goal y is the next index.
