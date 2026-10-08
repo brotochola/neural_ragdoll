@@ -47,10 +47,10 @@ function runEpisode(sim, world, job, isStanding) {
   const options = job.options || {};
   const weights = job.weights instanceof Float32Array ? job.weights : Float32Array.from(job.weights);
   const episode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
-  const startGap = options.goalX == null ? null : Math.abs(options.goalX - (episode.m.centerX || 0));
+  const startGap = options.goalX == null ? null : Math.abs(options.goalX - (episode.measure.centerX || 0));
   while (!episode.step());
   const stats = episode.stats;
-  const measure = episode.m;
+  const measure = episode.measure;
   const standing = isStanding(measure);
   const headHeight = measure.headHeight || 0;
   episode.cleanup();
@@ -254,13 +254,15 @@ async function runMain() {
   const logPath = path.join(backupDir, 'train-log.txt');
   const statePath = path.join(backupDir, 'train-state.json');
   const statusPath = path.join(backupDir, 'status.json');
-  const { askGeneration, tellGeneration, freshState, makeRandom, padWeights, weightCount } = await import('./src/net.js');
+  const { ElmanNetwork, EvolutionSearch } = await import('./src/net.js');
+  const { makeSeededRandom, randomNormalSample } = await import('./src/utils.js');
   const boxUrl = pathToFileURL(path.join(root, 'node_modules/phaser-box2d/dist/PhaserBox2D.min.js')).href;
   const Box2D = await import(boxUrl);
   const { createSim } = await import('./src/sim.js');
   const sim = createSim(Box2D);
-  const random = makeRandom(7);
-  const randomNormal = () => Math.sqrt(-2 * Math.log(random() + 1e-12)) * Math.cos(6.2831853 * random());
+  const random = makeSeededRandom(7);
+  const randomNormal = () => randomNormalSample(random);
+  const weightCount = ElmanNetwork.weightCount;
   const dropMeters = (config.start.fallDropMinMeters + config.start.fallDropMaxMeters) / 2;
   const pool = makePool(opts.workers);
   const evalLog = [];
@@ -322,9 +324,9 @@ async function runMain() {
     const file = fs.existsSync(path.join(root, 'checkpoint.json')) ? 'checkpoint.json' : 'weights.json';
     const data = JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
     const raw = data.bestTheta || data.theta;
-    const theta = padWeights(raw);
-    if (!theta || theta.length !== weightCount) throw new Error('could not pad ' + file + ' length ' + (raw && raw.length));
-    const state = freshState(randomNormal);
+    const theta = ElmanNetwork.copy(raw);
+    if (!theta) throw new Error('weights length ' + (raw && raw.length) + ' in ' + file);
+    const state = new EvolutionSearch(randomNormal);
     state.theta = theta;
     state.bestEverTheta = theta.slice();
     state.bestGenTheta = theta.slice();
@@ -340,7 +342,7 @@ async function runMain() {
     if (!fs.existsSync(statePath)) return null;
     const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
     if (!saved || !saved.theta || saved.theta.length !== weightCount) return null;
-    const state = freshState(randomNormal);
+    const state = new EvolutionSearch(randomNormal);
     state.theta = Float32Array.from(saved.theta);
     state.bestEverTheta = Float32Array.from(saved.bestEverTheta || saved.theta);
     state.bestGenTheta = state.theta.slice();
@@ -365,7 +367,7 @@ async function runMain() {
     let index = 0;
     for (const kind of kinds) {
       for (let i = 0; i < n; i++) {
-        const rand = makeRandom(config.eval.seed + kind.length * 1000 + i * 17);
+        const rand = makeSeededRandom(config.eval.seed + kind.length * 1000 + i * 17);
         const jitter = () => rand() * 2 - 1;
         const side = i % 2 === 0 ? 1 : -1;
         const options = {
@@ -415,7 +417,7 @@ async function runMain() {
 
   async function oneGeneration(state) {
     const before = state.bestEverScore;
-    const generation = askGeneration(state, trainingSituation(), opts.pairs, randomNormal);
+    const generation = state.ask(trainingSituation(), opts.pairs, randomNormal);
     const starts = [];
     for (let pair = 0; pair < generation.count; pair++) starts.push(sim.varyStart(generation.situation, random));
     const jobs = generation.weights.map((weights, index) => ({
@@ -430,7 +432,7 @@ async function runMain() {
     if (scores.length !== jobs.length || scores.some((score) => !score || !Number.isFinite(score.fitness))) {
       throw new Error('training returned an empty score');
     }
-    tellGeneration(state, generation, scores);
+    state.tell(generation, scores);
     const last = state.hist[state.hist.length - 1];
     const meanStance = scores.reduce((sum, row) => sum + (row.stance || 0), 0) / scores.length;
     if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, stood: last.stood, gap: last.gap, stance: meanStance });

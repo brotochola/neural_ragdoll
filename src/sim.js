@@ -1,7 +1,8 @@
 // Ragdoll body, sensing, and one episode. The network and the reward live in their own files.
 import { config, activeTrainingPhase } from "../config.js";
 import { scoreDecision, isStanding } from "./reward.js";
-import { forwardInto, hiddenCountOf } from "./net.js";
+import { ElmanNetwork } from "./net.js";
+import { clamp, makeSeededRandom, randomNormalSample } from "./utils.js";
 
 export const jointNames = [
   "Neck", "Shoulder L", "Elbow L", "Wrist L", "Hip L", "Knee L", "Ankle L",
@@ -68,6 +69,9 @@ function buildObservationLabels() {
     if (term.scoreOnly) continue;
     labels.push({ name: "reward " + term.n, tip: term.tip });
   }
+  if (config.net.rewardTotalNow) labels.push({ name: "reward total", tip: "Sum of the reward rows at this decision, scaled like the other reward inputs." });
+  if (config.net.rewardTotalPrevious) labels.push({ name: "reward total previous", tip: "Reward total from the previous decision, one action interval ago. Zero before the first decision." });
+  if (config.net.rewardTotalNext) labels.push({ name: "reward total next", tip: "Reward total if every part kept its current speed for one physics frame. No collision or motor." });
   return labels;
 }
 
@@ -90,18 +94,9 @@ export function createSim(box) {
   const kinematicBody = b2BodyType.b2_kinematicBody;
   const vector = (x, y) => new b2Vec2(x, y);
   const queryFilter = b2DefaultQueryFilter();
-  let random = makeLocalRandom(7);
-  const randomNormal = () => Math.sqrt(-2 * Math.log(random() + 1e-12)) * Math.cos(6.2831853 * random());
-
-  function makeLocalRandom(seed) {
-    return () => {
-      seed |= 0;
-      seed = (seed + 0x6d2b79f5) | 0;
-      let mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-      mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
-      return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
-    };
-  }
+  let random = makeSeededRandom(7);
+  // Lee `random` en cada llamada, así setRandom cambia la secuencia.
+  const randomNormal = () => randomNormalSample(random);
 
   function platformAngle(options, time) {
     return options.amp * Math.sin((6.2831853 / options.period) * time + options.phaseShift);
@@ -315,38 +310,78 @@ export function createSim(box) {
     measure.rayFootRight = rayFraction(world.worldId, rightFootPosition.x, rightFootPosition.y, 0, -2);
     measure.rayHead = rayFraction(world.worldId, headPosition.x, headPosition.y, 0, -2);
     measure.rayHeadAhead = rayFraction(world.worldId, headPosition.x, headPosition.y, headVelocity.x * 0.2, headVelocity.y * 0.2);
-    // Aliases the reward and the old drawing code still read.
-    measure.a = measure.torsoAngle;
-    measure.w = measure.torsoSpin;
-    measure.ha = measure.headAngle;
-    measure.hy = measure.headHeight;
-    measure.ty = measure.torsoHeight;
-    measure.cx = measure.centerX;
-    measure.cy = measure.centerY;
-    measure.cvx = measure.centerVelocityX;
-    measure.cvy = measure.centerVelocityY;
-    measure.hvy = measure.headVelocityY;
-    measure.hx = measure.headX;
-    measure.hyw = measure.headWorldY;
-    measure.hvx = measure.headVelocityX;
-    measure.fx0 = measure.footXLeft;
-    measure.fx1 = measure.footXRight;
-    measure.tx = measure.torsoX;
-    measure.tvx = measure.torsoVelocityX;
-    measure.tvy = measure.torsoVelocityY;
-    measure.pa = measure.platformAngle;
-    measure.pw = measure.platformSpin;
-    measure.stance = measure.stanceWidth;
-    measure.clear = measure.clearance;
     return measure;
+  }
+
+  // Pose one physics frame ahead if every part keeps its current speed. No collision, motor, or joint.
+  function predictMeasure(world, measure, dt) {
+    const slope = Math.tan(measure.platformAngle || 0);
+    const count = world.parts.length;
+    const predicted = {
+      partAngle: new Float32Array(count),
+      partHeight: new Float32Array(count),
+      partVelocityX: measure.partVelocityX,
+      partVelocityY: measure.partVelocityY,
+      partSpin: measure.partSpin,
+      clearance: new Array(count),
+      touch: new Array(count),
+      sole: new Float32Array(4),
+      torsoSpin: measure.torsoSpin,
+      headVelocityY: measure.headVelocityY,
+      centerVelocityX: measure.centerVelocityX,
+      centerVelocityY: measure.centerVelocityY,
+      platformAngle: measure.platformAngle,
+    };
+    let mass = 0;
+    let momentX = 0;
+    let momentY = 0;
+    const aheadX = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const part = world.parts[i];
+      const position = b2Body_GetPosition(part.id);
+      const x = position.x + (measure.partVelocityX[i] || 0) * dt;
+      const y = position.y + (measure.partVelocityY[i] || 0) * dt;
+      aheadX[i] = x;
+      predicted.partAngle[i] = (measure.partAngle[i] || 0) + (measure.partSpin[i] || 0) * dt;
+      predicted.partHeight[i] = y - x * slope;
+      predicted.clearance[i] = (measure.clearance[i] || 0) + (measure.partVelocityY[i] || 0) * dt;
+      predicted.touch[i] = predicted.clearance[i] < config.body.touchGapMeters;
+      mass += part.m;
+      momentX += part.m * x;
+      momentY += part.m * predicted.partHeight[i];
+    }
+    const footLeft = config.partIndex.footLeft;
+    const footRight = config.partIndex.footRight;
+    predicted.footXLeft = aheadX[footLeft];
+    predicted.footXRight = aheadX[footRight];
+    predicted.torsoHeight = predicted.partHeight[config.partIndex.torso];
+    predicted.headHeight = predicted.partHeight[config.partIndex.head];
+    predicted.centerX = mass ? momentX / mass : 0;
+    predicted.centerY = mass ? momentY / mass : 0;
+    predicted.torsoAngle = predicted.partAngle[config.partIndex.torso];
+    predicted.headAngle = predicted.partAngle[config.partIndex.head];
+    predicted.stanceWidth = Math.abs(predicted.footXLeft - predicted.footXRight);
+    let soleCursor = 0;
+    for (const index of [footLeft, footRight]) {
+      const foot = world.parts[index];
+      const position = b2Body_GetPosition(foot.id);
+      const x = position.x + (measure.partVelocityX[index] || 0) * dt;
+      const y = position.y + (measure.partVelocityY[index] || 0) * dt;
+      const angle = predicted.partAngle[index];
+      const cosine = Math.cos(angle);
+      const sine = Math.sin(angle);
+      predicted.sole[soleCursor++] = Math.max(0, y - sine * foot.hx - cosine * foot.hy - (x - cosine * foot.hx + sine * foot.hy) * slope);
+      predicted.sole[soleCursor++] = Math.max(0, y + sine * foot.hx - cosine * foot.hy - (x + cosine * foot.hx + sine * foot.hy) * slope);
+    }
+    if (measure.goalDistanceMeters != null) {
+      predicted.goalDistanceMeters = measure.goalDistanceMeters - (predicted.centerX - measure.centerX);
+    }
+    return predicted;
   }
 
   function timeToFloor(height, velocityY) {
     const speed = velocityY + Math.sqrt(velocityY * velocityY + 19.62 * Math.max(height - 0.15, 0));
-    return clamp01(speed / 9.81, 0, 1.5) / 1.5;
-  }
-  function clamp01(value, low, high) {
-    return Math.max(low, Math.min(high, value));
+    return clamp(speed / 9.81, 0, 1.5) / 1.5;
   }
 
   class Episode {
@@ -357,13 +392,10 @@ export function createSim(box) {
       }, options);
       this.free = false;
       this.world = world;
-      this.weights = weights;
+      this.network = new ElmanNetwork(weights);
       this.frame = 0;
       this.returnSum = 0;
       this.scoreCount = 0;
-      this.hidden = new Float32Array(hiddenCountOf(weights.length) || config.net.hiddenUnitCount);
-      this.nextHidden = new Float32Array(this.hidden.length);
-      this.action = new Float32Array(config.net.jointCount);
       this.previousAction = new Float32Array(config.net.jointCount);
       this.input = new Float32Array(config.net.inputCount);
       this.previousJointAngle = new Float32Array(config.net.jointCount);
@@ -373,6 +405,7 @@ export function createSim(box) {
       this.sensedFrames = 0;
       this.heightSum = 0;
       this.headImpact = 0;
+      this.previousRewardTotal = 0;
       this.objects = [];
       this.measure = {
         partHeight: new Float32Array(world.parts.length),
@@ -402,8 +435,8 @@ export function createSim(box) {
       const footMid = (measure.footXLeft + measure.footXRight) / 2;
       if (this.options.goalX != null) {
         measure.goalDistanceMeters = this.options.goalX - measure.centerX;
-        measure.goalDx = clamp01(measure.goalDistanceMeters / 4, -1, 1);
-        measure.goalDy = clamp01((this.options.goalY || 0) / 2, -1, 1);
+        measure.goalDx = clamp(measure.goalDistanceMeters / 4, -1, 1);
+        measure.goalDy = clamp((this.options.goalY || 0) / 2, -1, 1);
       }
       const fallTime = Math.sqrt(Math.max(measure.centerY, 0.3) / 9.81);
       const captureX = measure.centerX + measure.centerVelocityX * fallTime;
@@ -413,7 +446,7 @@ export function createSim(box) {
         const joint = world.joints[i];
         const angle = b2RevoluteJoint_GetAngle(joint.id);
         input[cursor + i] = angle / joint.n;
-        input[cursor + config.net.jointCount + i] = clamp01((angle - this.previousJointAngle[i]) / (config.cadence.actionEveryNFrames * config.physics.timeStep) / 6, -1, 1);
+        input[cursor + config.net.jointCount + i] = clamp((angle - this.previousJointAngle[i]) / (config.cadence.actionEveryNFrames * config.physics.timeStep) / 6, -1, 1);
         this.previousJointAngle[i] = angle;
       }
       cursor += 2 * config.net.jointCount;
@@ -422,17 +455,17 @@ export function createSim(box) {
       input[cursor++] = measure.torsoSpin / 5;
       input[cursor++] = measure.torsoVelocityX / 3;
       input[cursor++] = measure.torsoVelocityY / 3;
-      input[cursor++] = clamp01((measure.centerX - footMid) / 0.3, -2, 2);
+      input[cursor++] = clamp((measure.centerX - footMid) / 0.3, -2, 2);
       input[cursor++] = measure.centerY - 0.85;
       input[cursor++] = measure.centerVelocityX / 2;
       input[cursor++] = measure.centerVelocityY / 2;
-      input[cursor++] = clamp01((captureX - footMid) / 0.3, -2, 2);
+      input[cursor++] = clamp((captureX - footMid) / 0.3, -2, 2);
       input[cursor++] = timeToFloor(measure.headHeight, measure.headVelocityY);
       input[cursor++] = timeToFloor(measure.torsoHeight, measure.torsoVelocityY);
       input[cursor++] = measure.headHeight / config.body.headHeightMeters;
-      for (let i = 0; i < 4; i++) input[cursor++] = clamp01(1 - measure.sole[i] / 0.06, 0, 1);
+      for (let i = 0; i < 4; i++) input[cursor++] = clamp(1 - measure.sole[i] / 0.06, 0, 1);
       input[cursor++] = measure.platformAngle / 0.2;
-      input[cursor++] = clamp01(measure.platformSpin / 0.15, -2, 2);
+      input[cursor++] = clamp(measure.platformSpin / 0.15, -2, 2);
       for (let i = 0; i < config.net.jointCount; i++) input[cursor++] = this.action[i];
       input[cursor++] = measure.touch[config.partIndex.torso] ? 1 : 0;
       input[cursor++] = measure.touch[config.partIndex.head] ? 1 : 0;
@@ -443,7 +476,7 @@ export function createSim(box) {
       input[cursor++] = measure.rayTorso;
       input[cursor++] = measure.rayFootLeft;
       input[cursor++] = measure.rayFootRight;
-      const gap01 = (index) => clamp01((measure.clearance[index] || 0) / 0.6, 0, 1);
+      const gap01 = (index) => clamp((measure.clearance[index] || 0) / 0.6, 0, 1);
       input[cursor++] = gap01(config.partIndex.handLeft);
       input[cursor++] = gap01(config.partIndex.handRight);
       input[cursor++] = gap01(config.partIndex.shinLeft);
@@ -461,20 +494,26 @@ export function createSim(box) {
       input[cursor++] = isStanding(measure) ? 1 : 0;
       if (cursor !== config.net.sensedInputCount) throw new Error("base observation " + cursor);
       for (let i = 0; i < config.net.partCount; i++) {
-        input[cursor++] = clamp01((measure.partVelocityX[i] || 0) / config.scale.partSpeed, -2, 2);
-        input[cursor++] = clamp01((measure.partVelocityY[i] || 0) / config.scale.partSpeed, -2, 2);
-        input[cursor++] = clamp01((measure.partSpin[i] || 0) / config.scale.partSpin, -2, 2);
+        input[cursor++] = clamp((measure.partVelocityX[i] || 0) / config.scale.partSpeed, -2, 2);
+        input[cursor++] = clamp((measure.partVelocityY[i] || 0) / config.scale.partSpeed, -2, 2);
+        input[cursor++] = clamp((measure.partSpin[i] || 0) / config.scale.partSpin, -2, 2);
       }
-      for (const term of scoreDecision(measure).terms) {
+      const scored = scoreDecision(measure);
+      for (const term of scored.terms) {
         if (term.scoreOnly) continue;
-        input[cursor++] = clamp01(term.v / config.scale.rewardInput, -2, 2);
+        input[cursor++] = clamp(term.v / config.scale.rewardInput, -2, 2);
       }
+      const rewardColumn = (total) => clamp(total / config.scale.rewardInput, -2, 2);
+      if (config.net.rewardTotalNow) input[cursor++] = rewardColumn(scored.total);
+      if (config.net.rewardTotalPrevious) input[cursor++] = rewardColumn(this.previousRewardTotal);
+      if (config.net.rewardTotalNext) {
+        const predicted = predictMeasure(world, measure, config.physics.timeStep);
+        input[cursor++] = rewardColumn(scoreDecision(predicted).total);
+      }
+      this.previousRewardTotal = scored.total;
       if (cursor !== config.net.inputCount) throw new Error("observation length " + cursor);
-      forwardInto(this.weights, input, this.hidden, this.nextHidden, this.action);
+      this.network.forward(input);
       this.previousAction.set(this.action);
-      const swap = this.hidden;
-      this.hidden = this.nextHidden;
-      this.nextHidden = swap;
     }
     evaluate() {
       const measure = this.measure;
@@ -501,8 +540,8 @@ export function createSim(box) {
       fillMeasure(this.world, this.measure);
       if (this.options.goalX != null) {
         this.measure.goalDistanceMeters = this.options.goalX - this.measure.centerX;
-        this.measure.goalDx = clamp01(this.measure.goalDistanceMeters / 4, -1, 1);
-        this.measure.goalDy = clamp01((this.options.goalY || 0) / 2, -1, 1);
+        this.measure.goalDx = clamp(this.measure.goalDistanceMeters / 4, -1, 1);
+        this.measure.goalDy = clamp((this.options.goalY || 0) / 2, -1, 1);
       }
       this.notePose();
       if (this.options.ballFrame != null && this.frame === this.options.ballFrame && !this.ballThrown) {
@@ -531,7 +570,7 @@ export function createSim(box) {
         const joint = this.world.joints[i];
         const command = this.action[i];
         const target = command * (command >= 0 ? joint.hi : -joint.lo);
-        const speed = clamp01(config.episode.motorGain * (target - b2RevoluteJoint_GetAngle(joint.id)), -config.episode.motorSpeedLimit, config.episode.motorSpeedLimit);
+        const speed = clamp(config.episode.motorGain * (target - b2RevoluteJoint_GetAngle(joint.id)), -config.episode.motorSpeedLimit, config.episode.motorSpeedLimit);
         b2RevoluteJoint_SetMotorSpeed(joint.id, speed);
       }
     }
@@ -558,15 +597,10 @@ export function createSim(box) {
         gap: this.options.goalX == null ? 0 : Math.abs(this.options.goalX - (this.measure.centerX || 0)),
       };
     }
-    // Names the page already draws with.
-    get m() { return this.measure; }
-    get o() { return this.options; }
-    get w() { return this.weights; }
-    set w(weights) { this.weights = weights; }
-    get h() { return this.hidden; }
-    get a() { return this.action; }
-    get x() { return this.input; }
-    get t() { return this.frame; }
+    get weights() { return this.network.weights; }
+    set weights(value) { this.network.weights = value; }
+    get hidden() { return this.network.hidden; }
+    get action() { return this.network.action; }
   }
 
   function physicsHz() { return 1 / config.physics.timeStep; }
@@ -622,7 +656,7 @@ export function createSim(box) {
     build, Episode, situation, varyStart, spawnThrown, resetPose,
     platformHalfWidth: config.body.platformHalfWidth,
     platformHalfThickness: config.body.platformHalfThickness,
-    setRandom(seed) { random = makeLocalRandom(seed); },
+    setRandom(seed) { random = makeSeededRandom(seed); },
     randomNormal,
   };
 }

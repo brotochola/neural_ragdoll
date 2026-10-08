@@ -5,6 +5,13 @@ const partCount = 14;
 const sensedInputCount = 82;
 const rewardRowCount = 25;
 const partSpeedInputCount = partCount * 3;
+const rewardTotalNow = true;
+const rewardTotalPrevious = true;
+const rewardTotalNext = true;
+const rewardTotalInputCount =
+  Number(rewardTotalNow) +
+  Number(rewardTotalPrevious) +
+  Number(rewardTotalNext);
 
 export const config = {
   physics: {
@@ -18,16 +25,23 @@ export const config = {
     rewardFrameOffset: 5, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
-    hiddenUnitCount: 20, // Hidden units in the Elman layer.
+    hidden1Ratio: 4 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
+    hidden2Ratio: 4 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
     jointCount: 13, // Motor joints, and the width of the action vector.
-    legacyInputCount: 79, // Input width of older saved weights, so they can be padded.
     sensedInputCount, // Observation length before part speeds and reward rows. Goal x is 79, goal y is 80, standing is 81.
     goalInputIndex: 79, // Index of the goal-x observation. Goal y is the next index.
     standingInputIndex: 81, // Index of the binary standing observation.
     partCount, // Dynamic body parts, including the hip.
     partSpeedInputCount, // Three numbers per part: vx, vy, spin.
     rewardRowCount, // Reward rows copied into the observation. Score-only rows are not included.
-    inputCount: sensedInputCount + partSpeedInputCount + rewardRowCount, // Full observation length.
+    rewardTotalNow, // Append the reward total from this decision.
+    rewardTotalPrevious, // Append the reward total from the previous decision, one action interval ago.
+    rewardTotalNext, // Append the reward total estimated one physics frame ahead.
+    inputCount:
+      sensedInputCount +
+      partSpeedInputCount +
+      rewardRowCount +
+      rewardTotalInputCount, // Full observation length.
     freshInputExplorationScale: 0.04, // Noise on the newer speed and reward columns. Less than the goal columns.
     hiddenLeak: 0.25, // Fraction of the previous hidden state kept each step.
   },
@@ -56,7 +70,7 @@ export const config = {
     headAngle: 0.75, // Weight of the head cosine.
     upperArmAngle: 0.12, // Weight of each upper-arm cosine. +1 when that arm is vertical.
     forearmAngle: 0.08, // Weight of each forearm cosine.
-    thighAngle: 0.5, // Weight of each thigh cosine.
+    thighAngle: 1.5, // Weight of each thigh cosine.
     shinAngle: 0.25, // Weight of each shin cosine.
     headHeight: 4, // Head-height weight. The floor value is -this; a full upright reach is +this.
     torsoHeight: 1.8, // Torso-height weight. Same shape as the head height.
@@ -66,7 +80,7 @@ export const config = {
     thighSpread: 2, // Penalty weight for a thigh angle outside the standing band, only while upright.
     footInAir: 1.5, // Penalty weight per foot off the floor, only while upright.
     balance: 1.6, // Weight of the center of mass against the midpoint of the feet.
-    headImpact: 6.8, // Penalty weight while the head touches the floor. A fast downward hit can add up to twice this again.
+    headImpact: 16.8, // Penalty weight while the head touches the floor. A fast downward hit can add up to twice this again.
     standing: 5, // Standing bonus, split across flat soles, a clear body, an upright torso, and a high head.
     standingFlag: 3, // Extra bonus when isStanding is true: both feet, nothing else down, upright, high head, a real stance, and quiet.
     stanceComfort: 2, // Bonus for a stance near the comfortable width, scaled by how flat the soles are. A very wide stance subtracts.
@@ -80,9 +94,33 @@ export const config = {
     // Rows the Train menu and the headless run walk through. Each row lasts `generations`.
     // start "mixed" uses the upright start chance; "down" is face-up or face-down; "up" is standing.
     phases: [
-      { id: 1, name: "Stand", generations: 2000, start: "mixed", falls: true, balls: true, goal: false },
-      { id: 2, name: "Get up", generations: 4000, start: "down", falls: false, balls: false, goal: false },
-      { id: 3, name: "Walk", generations: 4000, start: "up", falls: false, balls: false, goal: true },
+      {
+        id: 1,
+        name: "Stand",
+        generations: 2000,
+        start: "mixed",
+        falls: true,
+        balls: true,
+        goal: false,
+      },
+      {
+        id: 2,
+        name: "Get up",
+        generations: 4000,
+        start: "down",
+        falls: false,
+        balls: false,
+        goal: false,
+      },
+      {
+        id: 3,
+        name: "Walk",
+        generations: 4000,
+        start: "up",
+        falls: false,
+        balls: false,
+        goal: true,
+      },
     ],
     phase: 1, // Active phase id. setTrainingPhase writes this.
     byPhases: false, // When true, a run stays on each phase for its generation budget, then advances.
@@ -163,7 +201,14 @@ export const config = {
     seedBestCount: 8, // Episodes averaged to seed bestEverScore when a phase starts.
     officialMinN: 20, // Pass/fail is official only when the eval count is at least this.
     nearPassSlack: 0.15, // A rate this close to the pass rate still triggers a full eval.
-    passRate: { stand: 0.8, ball: 0.7, drop: 0.65, supine: 0.6, prone: 0.6, walk: 0.6 }, // Fraction of held-out episodes that must pass each kind.
+    passRate: {
+      stand: 0.8,
+      ball: 0.7,
+      drop: 0.65,
+      supine: 0.6,
+      prone: 0.6,
+      walk: 0.6,
+    }, // Fraction of held-out episodes that must pass each kind.
     walkGoalMeters: 2, // Marker distance used by the walk eval.
     walkClosingMeters: 0.5, // A walk passes when the gap to the marker shrinks by at least this.
     seed: 424242, // Seed of the held-out eval situations.
@@ -190,7 +235,9 @@ export const config = {
 
 export function setTrainingPhase(phase) {
   const id = phase | 0;
-  config.curriculum.phase = config.curriculum.phases.some((item) => item.id === id)
+  config.curriculum.phase = config.curriculum.phases.some(
+    (item) => item.id === id,
+  )
     ? id
     : config.curriculum.phases[0].id;
 }
@@ -201,7 +248,8 @@ export function setTrainingByPhases(on) {
 
 export function activeTrainingPhase() {
   return (
-    config.curriculum.phases.find((item) => item.id === config.curriculum.phase) ||
-    config.curriculum.phases[0]
+    config.curriculum.phases.find(
+      (item) => item.id === config.curriculum.phase,
+    ) || config.curriculum.phases[0]
   );
 }

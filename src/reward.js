@@ -1,12 +1,12 @@
-// One row per thing the body can do. Weights live on config.reward.
+// Una fila por cada cosa que el cuerpo puede hacer. Los pesos viven en config.reward.
+// Puntuar un frame no guarda estado: las mismas medidas dan el mismo número.
 import { config, activeTrainingPhase } from "../config.js";
+import { clamp } from "./utils.js";
 
 const part = config.partIndex;
 const weight = config.reward;
 
-export const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
-
-// True only when both feet are down, nothing else touches, and the body is upright and quiet.
+// Parado de verdad: los dos pies abajo, nada más tocando, torso erguido, cabeza alta, base real y quieto.
 export function isStanding(measure) {
   if (!measure || !measure.touch || !measure.touch[part.footLeft] || !measure.touch[part.footRight]) return false;
   for (let i = 0; i < measure.touch.length; i++) {
@@ -26,12 +26,12 @@ function uprightRow(name, tip, angle, rowWeight) {
 
 function heightRow(name, tip, height, fullHeight, rise, rowWeight) {
   const height01 = clamp((height || 0) / fullHeight, 0, 1);
-  // Floor value is -weight. Full height with the torso turning up reaches +weight.
+  // En el piso vale -peso. A altura completa, con el torso girando hacia arriba, llega a +peso.
   const value = -rowWeight + rise * 2 * rowWeight * height01;
   return { name, tip, value };
 }
 
-// Score one sampled frame. `measure` is filled by the sim.
+// Puntúa un frame ya medido. El total es la suma de las filas; las marcadas scoreOnly solo se muestran.
 export function scoreDecision(measure) {
   const torsoFace = Math.cos(measure.torsoAngle || 0);
   const rise = clamp((torsoFace + 0.2) / 1.2, 0, 1);
@@ -42,8 +42,11 @@ export function scoreDecision(measure) {
   const angle = measure.partAngle || [];
 
   const rows = [
+    // Coseno del ángulo: +1 parado, 0 de costado, -1 cabeza abajo.
     uprightRow("Torso angle", "Cosine of the torso. +1 is upright, 0 is lying on the side, -1 is upside down.", measure.torsoAngle, weight.torsoAngle),
+    // La cabeza también quiere quedar vertical, con menos peso que el torso.
     uprightRow("Head angle", "Cosine of the head. +1 is upright.", measure.headAngle, weight.headAngle),
+    // Cada brazo, antebrazo, muslo y pantorrilla suma su propio coseno. No es una pose de referencia.
     uprightRow("Left upper arm", "Cosine of the left upper arm. +1 is vertical.", angle[part.upperArmLeft], weight.upperArmAngle),
     uprightRow("Right upper arm", "Cosine of the right upper arm. +1 is vertical.", angle[part.upperArmRight], weight.upperArmAngle),
     uprightRow("Left forearm", "Cosine of the left forearm. +1 is vertical.", angle[part.forearmLeft], weight.forearmAngle),
@@ -52,10 +55,13 @@ export function scoreDecision(measure) {
     uprightRow("Right thigh", "Cosine of the right thigh. +1 is vertical, like standing.", angle[part.thighRight], weight.thighAngle),
     uprightRow("Left shin", "Cosine of the left shin. +1 is vertical. A shin near the floor can still be vertical.", angle[part.shinLeft], weight.shinAngle),
     uprightRow("Right shin", "Cosine of the right shin. +1 is vertical.", angle[part.shinRight], weight.shinAngle),
+    // La altura sube con el torso, también si una mano empuja el piso. La mano se cobra en su propia fila.
     heightRow("Head height", "Head height against a standing reach. Stays at the floor value until the torso turns up. A hand on the floor is scored on its own row.", measure.headHeight, config.body.headHeightMeters, rise, weight.headHeight),
+    // Misma compuerta que la cabeza: sin crédito hasta que el torso gira hacia arriba.
     heightRow("Torso height", "Torso height. Same gate as the head: no credit until the torso turns up.", measure.torsoHeight, config.body.torsoHeightMeters, rise, weight.torsoHeight),
   ];
 
+  // Mano cerca del piso resta poco. Si el torso ya está erguido y la mano sigue abajo, resta mucho más.
   const handTip = "Near the floor this subtracts a little. If the torso is already upright and the hand is still down, it subtracts much more.";
   rows.push({
     name: "Left hand",
@@ -68,6 +74,7 @@ export function scoreDecision(measure) {
     value: -(weight.handOnFloor + weight.handPark * park) * handRight,
   });
 
+  // El muslo cerca del piso resta. La pantorrilla no entra en esta fila.
   const thighTip = "Subtracts while the thigh is within 35 cm of the floor. The shin is not in this row.";
   const thighClear = (index) => 1 - clamp((measure.clearance?.[index] ?? 1) / config.body.thighClearMeters, 0, 1);
   rows.push({ name: "Left thigh clearance", tip: thighTip, value: -weight.thighOnFloor * thighClear(part.thighLeft) });
@@ -79,18 +86,21 @@ export function scoreDecision(measure) {
     : spread > config.body.thighSpreadMaxRadians
       ? (spread - config.body.thighSpreadMaxRadians) / (Math.PI - config.body.thighSpreadMaxRadians)
       : 0;
+  // La apertura solo resta con el torso erguido. En el piso las piernas pueden moverse para levantarse.
   rows.push({
     name: "Thigh spread",
     tip: "Angle between the thighs. Subtracts below 10° and above 40° only while the torso is upright. On the floor the legs can move. A step in between adds nothing.",
     value: -weight.thighSpread * upright * clamp(spreadPenalty, 0, 1),
   });
 
+  // Pie en el aire solo resta si el torso ya está erguido. Apoyado, esta fila vale cero.
   const footTip = "Subtracts while that foot is off the floor and the torso is upright. On the floor a lifted foot adds nothing. A planted foot adds nothing.";
   rows.push({ name: "Left foot", tip: footTip, value: upright * (measure.touch?.[part.footLeft] ? 0 : -weight.footInAir) });
   rows.push({ name: "Right foot", tip: footTip, value: upright * (measure.touch?.[part.footRight] ? 0 : -weight.footInAir) });
 
   const footMid = ((measure.footXLeft || 0) + (measure.footXRight || 0)) / 2;
   const lean = clamp(Math.abs((measure.centerX || 0) - footMid) / config.body.balanceSpanMeters, 0, 1);
+  // El centro de masa sobre el punto medio de los pies suma. Colgado hacia un costado resta.
   rows.push({
     name: "Balance",
     tip: "Center of mass against the midpoint of the feet. Above the feet it adds. Hanging off to one side it subtracts.",
@@ -101,6 +111,7 @@ export function scoreDecision(measure) {
   const headOnFloor = measure.touch?.[part.head] ? 1 : 0;
   const headResting = headOnFloor * weight.headImpact;
   const headStrike = headOnFloor && headDown > 1 ? weight.headImpact * clamp(headDown / 3, 0, 2) : 0;
+  // La cabeza en el piso resta el peso entero. Si además baja a más de 1 m/s, resta todavía más.
   rows.push({
     name: "Head impact",
     tip: "Subtracts while the head is touching the floor. If it is also moving down faster than 1 m/s, it subtracts more, up to twice the weight again.",
@@ -124,6 +135,8 @@ export function scoreDecision(measure) {
   // ponytail: linear falloff, not a narrow gaussian. The gaussian was ~0 past 0.5 m, so a 1.3 m stance had no rank signal. Upgrade path: a shaped kernel if 29 cm needs a flat top.
   const stanceOff = Math.abs((measure.stanceWidth || 0) - config.body.comfortableStanceMeters);
   const stanceComfort = 1 - clamp(stanceOff / 1.1, 0, 2);
+  // Standing no es un producto. Los +5 se reparten: 40% plantas, 20% cuerpo libre, 20% torso, 20% cabeza.
+  // El comfort de la base solo cuenta si las plantas están abajo. El flag de parado quieto se suma aparte.
   const soleShare = 0.4 * weight.standing * feetFlat;
   const clearShare = 0.2 * weight.standing * bodyClear;
   const uprightShare = 0.2 * weight.standing * upright;
@@ -169,11 +182,13 @@ export function scoreDecision(measure) {
   const distanceDown = goalOn ? config.curriculum.phase3GoalDistanceDown : weight.goalDistanceDown;
   const speedUp = goalOn ? config.curriculum.phase3GoalSpeedUp : weight.goalSpeedUp;
   const speedDown = goalOn ? config.curriculum.phase3GoalSpeedDown : weight.goalSpeedDown;
+  // Cerca del marcador suma más, y más todavía si ya está sobre los pies, para que no convenga tirarse.
   rows.push({
     name: "Goal distance",
     tip: "Closer to the marker adds more. Worth more while standing than while on the floor, so diving at it does not pay.",
     value: hasGoal ? (onFeet ? distanceUp : distanceDown) * closeness : 0,
   });
+  // Velocidad hacia el marcador. También vale más parado que en el piso.
   rows.push({
     name: "Goal speed",
     tip: "Adds while the center of mass moves toward the marker. Worth more while standing.",
@@ -183,6 +198,7 @@ export function scoreDecision(measure) {
   for (let i = 0; i < config.net.partCount; i++) {
     motion += Math.abs(measure.partVelocityX?.[i] || 0) + Math.abs(measure.partVelocityY?.[i] || 0) + Math.abs(measure.partSpin?.[i] || 0);
   }
+  // En el piso moverse es gratis. Erguido, una sacudida fuerte resta el peso entero.
   rows.push({
     name: "Motion",
     tip: "Subtracts while the torso is upright and any part is moving or spinning. On the floor, moving to get up is free. A quiet stand stays near zero. A violent shake pays the whole weight.",
