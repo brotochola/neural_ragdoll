@@ -1,18 +1,23 @@
-import * as B from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
-import { createSim } from './core.js';
+import * as Box2D from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
+import { createSim } from "./sim.js";
+import { actionEveryNFrames } from "../config.js";
 
-const S = createSim(B);
-const R = S.build();
-postMessage('ready');
-onmessage = e => {
-  const out = [];
-  for (const t of e.data.tasks) {
-    const w = t.w instanceof Float32Array ? t.w : Float32Array.from(t.w);
-    const ep = new S.Ep(R, w, t.o.tilt, t.o.drop, t.o);
-    while (!ep.step());
-    const s = ep.stats;
-    ep.cleanup();
-      out.push({ i: t.i, ...s });
+const sim = createSim(Box2D);
+const world = sim.build();
+
+postMessage("ready");
+onmessage = (event) => {
+  const results = [];
+  const tasks = event.data.tasks || [];
+  for (let index = 0; index < tasks.length; index++) {
+    const task = tasks[index];
+    const weights = task.weights instanceof Float32Array ? task.weights : Float32Array.from(task.weights);
+    const options = Object.assign({}, task.options, { phase: (task.phase != null ? task.phase : index) % actionEveryNFrames });
+    const episode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
+    while (!episode.step());
+    const stats = episode.stats;
+    episode.cleanup();
+    results.push({ index: task.index, ...stats });
   }
-  postMessage(out);
+  postMessage(results);
 };

@@ -1,553 +1,671 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Ragdoll: equilibrio, impactos y levantarse</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Neural ragdoll</title>
   <style>
-    :root { --bg:#f3f4f8; --fg:#1b1f33; --ac:#3b6cf5; box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px) }
-    @media (prefers-color-scheme:dark) { :root:not([data-theme="light"]) { --bg:#0f1220; --fg:#e7e9f5; --ac:#6f95ff } }
-    :root[data-theme="dark"] { --bg:#0f1220; --fg:#e7e9f5; --ac:#6f95ff }
-    html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",sans-serif }
-    body { display:flex; flex-direction:column }
-    header { padding:10px 14px; font-weight:600 }
-    header small { font-weight:400; opacity:.7; margin-left:8px }
-    #stage { flex:1; min-height:320px; margin:0 10px; display:flex; gap:8px }
-    #c { flex:1.4; min-width:280px; min-height:280px; border-radius:12px; overflow:hidden; background:#12162a }
-    #side { width:min(420px, 38vw); min-width:280px; display:flex; flex-direction:column; gap:8px; min-height:0 }
-    #reward, #netbox { background:#12162a; color:#e7e9f5; border-radius:12px; padding:10px 12px }
-    #reward { flex:none }
-    #reward h2, #netbox h2 { margin:0 0 6px; font-size:13px; font-weight:600; letter-spacing:.02em }
-    #ptotal { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums }
-    #ptotal small { font-size:12px; font-weight:500; opacity:.7; margin-left:8px }
-    .row { display:grid; grid-template-columns:88px 1fr 64px; gap:8px; align-items:center; font-size:12px; padding:3px 0; cursor:help }
-    .bar { height:8px; border-radius:4px; background:#1c2238; position:relative; overflow:hidden }
-    .bar i { position:absolute; top:0; bottom:0; width:0 }
-    .pos { color:#3ecf8e } .neg { color:#ff4d5a }
-    #netbox { flex:1; min-height:0; display:flex; flex-direction:column }
-    #netlist { overflow:auto; flex:1; min-height:80px }
-    #netlist h3 { margin:8px 0 4px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; opacity:.6 }
-    #nvwrap { height:200px; position:relative; flex:none; border-top:1px solid #2a3148; margin:8px -12px -10px }
-    #nv { position:absolute; inset:0; width:100%; height:100% }
-    @media (max-width:900px) { #stage { flex-direction:column } #side { width:auto; height:520px } }
-    #bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:10px 14px; position:relative; z-index:1 }
-    button { background:var(--ac); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer }
-    label { font-size:13px; display:flex; gap:6px; align-items:center }
-    #hint { padding:0 14px 10px; font-size:12px; opacity:.75 }
-    select { font-size:13px }
-    #err { color:#e5484d; padding:0 14px; font-size:13px }
-    #tip { position:fixed; z-index:40; max-width:min(280px, calc(100vw - 16px)); padding:6px 9px; border-radius:8px; background:var(--fg); color:var(--bg); font-size:12px; font-weight:500; line-height:1.35; pointer-events:none; box-shadow:0 6px 18px rgba(0,0,0,.28) }
+    :root { color-scheme: dark; --bg:#0e1220; --panel:#171c2e; --line:#2a3148; --text:#e7e9f5; --muted:#9aa3c7; --good:#3ecf8e; --bad:#ff4d5a; --accent:#6f95ff; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, "Segoe UI", sans-serif; }
+    body { display: flex; flex-direction: column; min-height: 100%; }
+    header { padding: 12px 16px 4px; }
+    header h1 { margin: 0; font-size: 18px; }
+    header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    #layout { flex: 1; display: flex; gap: 10px; padding: 10px; min-height: 0; }
+    #stage { flex: 1.4; min-width: 280px; min-height: 320px; border-radius: 12px; overflow: hidden; background: #12162a; }
+    #readout { width: min(440px, 40vw); min-width: 300px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+    section { background: var(--panel); border-radius: 12px; padding: 12px; }
+    section h2 { margin: 0 0 8px; font-size: 13px; letter-spacing: .02em; }
+    #status { font-size: 13px; line-height: 1.45; color: var(--muted); }
+    #watch { display: flex; gap: 8px; flex-wrap: wrap; }
+    #watch label { font-size: 13px; display: flex; gap: 6px; align-items: center; cursor: help; }
+    #total { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    #total small { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 8px; }
+    .good { color: var(--good); } .bad { color: var(--bad); }
+    #terms { max-height: 280px; overflow: auto; }
+    .row { display: grid; grid-template-columns: minmax(128px, 1.1fr) 1fr 64px; gap: 8px; align-items: center; font-size: 12px; padding: 3px 0; cursor: help; }
+    .bar { height: 8px; border-radius: 4px; background: #1c2238; position: relative; }
+    .bar i { position: absolute; top: 0; bottom: 0; }
+    #net { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #netlist { overflow: auto; flex: 1; min-height: 80px; }
+    #netlist h3 { margin: 8px 0 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    #diagramWrap { height: 180px; border-top: 1px solid var(--line); margin: 8px -12px -12px; position: relative; }
+    #diagram { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #bars { display: flex; flex-direction: column; }
+    .bar-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; }
+    .bar-row .group { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); min-width: 88px; }
+    button, select { background: var(--accent); color: white; border: 0; border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer; }
+    select { background: var(--panel); }
+    label.ctrl { font-size: 13px; display: flex; gap: 6px; align-items: center; cursor: help; }
+    #hint { padding: 0 16px 12px; color: var(--muted); font-size: 12px; }
+    #error { color: var(--bad); padding: 0 16px 8px; font-size: 13px; }
+    @media (max-width: 900px) {
+      #layout { flex-direction: column; }
+      #readout { width: auto; }
+    }
   </style>
 </head>
 <body>
-  <header>Ragdoll neuronal<small>Phaser Box2D + PixiJS · Elman + acciones · entrenado en Node</small></header>
-  <div id="stage">
-    <div id="c"></div>
-    <div id="side">
-      <section id="reward">
-        <h2 title="Suma de esta decisión. El máximo es estar erguido, solo con los dos pies, cadera y cabeza altas.">Premio de esta decisión</h2>
-        <div id="ptotal">–</div>
-        <div id="pfactors"></div>
+  <header>
+    <h1>Neural ragdoll</h1>
+    <p>One Elman network, trained in this tab. Hover any row or control for what it means.</p>
+  </header>
+  <div id="layout">
+    <div id="stage"></div>
+    <div id="readout">
+      <section>
+        <h2 title="Where training is, and which weights the doll is using.">Training</h2>
+        <div id="status">Starting…</div>
       </section>
-      <section id="netbox">
-        <h2 title="La misma pasada que mueve el cuerpo. Verde suma, rojo resta. Pasá el mouse para la explicación.">Red completa</h2>
+      <section>
+        <h2 title="The sum of every row below, for the pose on screen right now.">Reward this decision</h2>
+        <div id="total">–</div>
+        <div id="terms"></div>
+      </section>
+      <section id="net">
+        <h2 title="What the network sees, remembers, and sends to the joints on this decision.">Network</h2>
         <div id="netlist"></div>
-        <div id="nvwrap" title="Solo los caminos más fuertes hacia las ocultas más activas. Verde excita, rojo inhibe."><canvas id="nv"></canvas></div>
+        <div id="diagramWrap" title="Only the strongest paths into the most active hidden units. Green excites, red inhibits. This is not the whole network."><canvas id="diagram"></canvas></div>
       </section>
     </div>
   </div>
-  <div id="bar">
-    <button id="p" title="Retoma el entrenamiento en esta pestaña. El muñeco no se reinicia.">Reanudar entrenamiento</button>
-    <button id="r" title="Borra el progreso de esta sesión y arranca una red al azar.">Reiniciar desde cero</button>
-    <button id="l" title="Descarta la sesión del navegador y carga los pesos de weights.json.">Volver al entrenado</button>
-    <button id="b" title="Pone en escena el mejor individuo de la sesión.">Ir al mejor</button>
-    <label title="Muestra el mejor guardado. Cambia solo si aparece uno mejor."><input type="radio" name="fw" id="fwBest"> Seguir el mejor</label>
-    <label title="Muestra los pesos que se están entrenando ahora."><input type="radio" name="fw" id="fwLive" checked> Seguir vivo</label>
-    <button id="cp" title="Copia los pesos vivos al portapapeles, en JSON.">Copiar pesos</button>
-    <label title="Cuánto tiempo de cada cuadro se usa para entrenar, si no hay workers.">Cómputo de entrenamiento <input id="s" type="range" min="0" max="40" value="0"> <span id="sv">0 ms/frame</span></label>
-    <button id="q" title="Vuelve a colocar el muñeco con la pose y el modo de ahora.">Reponer</button>
-    <label title="Sin el plan de entrenamiento. La plataforma usa el ángulo de abajo."><input id="m" type="checkbox" checked> Modo libre</label>
-    <label title="Al reponer, lo deja acostado para ver cómo se levanta."><input id="lie" type="checkbox" checked> Empezar acostado</label>
-    <label title="La pose inicial es boca arriba."><input type="radio" name="liepose" id="lieSupine"> Boca arriba</label>
-    <label title="La pose inicial es boca abajo."><input type="radio" name="liepose" id="lieProne" checked> Boca abajo</label>
-    <label title="Qué se lanza con Disparar, o al arrastrar en el vacío.">Objeto <select id="o">
-        <option value="0">Pelota 4,5 kg</option>
-        <option value="1">Caja 9 kg</option>
-        <option value="2">Pesa 25 kg</option>
-      </select></label>
-    <label title="Inclinación máxima de la plataforma en modo libre.">Plataforma ± <input id="pa" type="range" min="0" max="10" value="0"> <span id="pv">0°</span></label>
-    <button id="f" title="Lanza el objeto desde un costado, a la velocidad de al lado.">Disparar</button>
-    <label title="Rapidez del objeto al disparar.">Velocidad <input id="v" type="range" min="3" max="25" value="8"> <span id="vv">8 m/s</span></label>
+  <div id="bars">
+    <div class="bar-row">
+      <span class="group">Training</span>
+      <button id="pause" title="Stops the search. The doll on screen keeps moving.">Pause</button>
+      <button id="restart" title="Throws away this session, including saved networks, and starts from random weights.">Restart from scratch</button>
+      <label class="ctrl" title="Pose the workers use at the start of each episode. Mix keeps the usual split, mostly standing. This does not move the doll on screen.">Train from
+        <select id="trainPose">
+          <option value="mix">Mix</option>
+          <option value="up">Standing</option>
+          <option value="supine">On its back</option>
+          <option value="prone">Face down</option>
+        </select>
+      </label>
+      <label class="ctrl" title="How often the best network of the session is kept, when its score beats the previous save.">Save best every
+        <select id="snapshotEvery">
+          <option value="100" selected>100 generations</option>
+          <option value="10">10 generations</option>
+        </select>
+      </label>
+    </div>
+    <div class="bar-row">
+      <span class="group">Play</span>
+      <div id="watch">
+        <label title="The weights being updated right now. They change a little every generation. The pose stays until you press Reset pose."><input type="radio" name="watch" id="watchParent" checked> Parent</label>
+        <label title="The individual that scored highest in the last generation. The doll keeps playing it until you press Reset pose."><input type="radio" name="watch" id="watchGeneration"> Best this generation</label>
+        <label title="The highest score since this session started. The doll keeps playing it until you press Reset pose."><input type="radio" name="watch" id="watchEver"> Best ever</label>
+      </div>
+      <label class="ctrl" title="A saved best from this session. Picking one shows that network until you pick another or press Reset pose.">Saved
+        <select id="savedNet"></select>
+      </label>
+      <button id="reset" title="Puts the doll back at the start of a new episode, with the weights you are watching.">Reset pose</button>
+      <label class="ctrl" title="How the next reset pose begins. Workers ignore this.">Start
+        <select id="startPose">
+          <option value="up">Standing</option>
+          <option value="supine">On its back</option>
+          <option value="prone">Face down</option>
+        </select>
+      </label>
+      <label class="ctrl" title="What Fire throws, or what a drag on empty space throws.">Object
+        <select id="objectKind"></select>
+      </label>
+      <button id="fire" title="Throws the chosen object in from the side.">Fire</button>
+      <label class="ctrl" title="Speed of a thrown object.">Speed <input id="speed" type="range" min="3" max="25" value="8"> <span id="speedValue">8 m/s</span></label>
+    </div>
   </div>
-  <div id="hint">Una sola red. El premio de la derecha es el de esta decisión: verde suma, rojo resta. <b>De pie</b> solo entra si están los dos pies, nada más toca, el torso está erguido y la cabeza alta. Abajo, los caminos más fuertes. F5 recarga.</div>
-  <div id="err"></div>
+  <div id="hint">Green adds, red subtracts. Standing is the large bonus: both feet, nothing else on the floor, torso upright, head high. The marker is the goal.</div>
+  <div id="error"></div>
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js"></script>
   <script type="module">
-    import { CreateWorld, CreateBoxPolygon, CreateRevoluteJoint, b2Vec2, b2BodyType, b2World_Step, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Body_SetTransform, b2MakeRot, b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake, b2Body_GetLinearVelocity, b2Body_GetAngularVelocity, b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed, CreateCircle, CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2DestroyBody } from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
-    import * as Box2D from 'https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.js';
-    import { createSim, NW, NI, H, O, KINDS, PW, HH, rngMk, cl, netsFromCkpt, padWeights, isUp, prizeBreakdown } from './src/core.js';
+    import { CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2DestroyBody, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Vec2 } from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
+    import * as Box2D from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
+    import { actionEveryNFrames, physicsHz, inputCount, platformHalfWidth, platformHalfThickness } from "./config.js";
+    import { scoreDecision, isStanding, clamp } from "./src/reward.js";
+    import { askGeneration, tellGeneration, freshState, makeRandom, padWeights } from "./src/net.js";
+    import { createSim, observationLabels, jointNames, thrownKinds } from "./src/sim.js";
 
-    const S = createSim(Box2D);
-    const V = (x, y) => new b2Vec2(x, y);
-    const JN = ['cuello', 'hombro I', 'codo I', 'muñeca I', 'cadera I', 'rodilla I', 'tobillo I', 'hombro D', 'codo D', 'muñeca D', 'cadera D', 'rodilla D', 'tobillo D'];
-    const inName = i => {
-      if (i < 13) return '∠ ' + JN[i];
-      if (i < 26) return 'ω ' + JN[i - 13];
-      if (i < 39) return ['seno', 'cos', 'ω torso', 'vx torso', 'vy torso', 'com x', 'com y', 'vx', 'vy', 'apoyo', 'cae cabeza', 'cae torso', 'altura'][i - 26];
-      if (i < 43) return 'planta ' + (i - 38);
-      if (i === 43) return 'plat ∠';
-      if (i === 44) return 'plat ω';
-      if (i < 58) return 'prev ' + JN[i - 45];
-      if (i < 64) return ['toca torso', 'toca cabeza', 'toca mano I', 'toca mano D', 'toca pie I', 'toca pie D'][i - 58];
-      if (i < 67) return ['rayo torso', 'rayo pie I', 'rayo pie D'][i - 64];
-      if (i < 72) return ['libre mano I', 'libre mano D', 'libre espin I', 'libre espin D', 'libre cabeza'][i - 67];
-      if (i === 72) return 'rayo cabeza';
-      if (i < 75) return i === 73 ? 'sen cabeza' : 'cos cabeza';
-      return ['libre muslo I', 'libre muslo D', 'libre codo I', 'libre codo D'][i - 75];
-    };
-    const inTip = i => {
-      if (i < 13) return 'Ángulo de la articulación ' + JN[i] + ', normalizado por su rango.';
-      if (i < 26) return 'Velocidad angular de ' + JN[i - 13] + '.';
-      if (i < 58 && i >= 45) return 'Acción anterior de ' + JN[i - 45] + '.';
-      return ({
-        26: 'Seno del ángulo del torso. Junto con el coseno dice si está erguido o acostado.',
-        27: 'Coseno del torso. 1 es vertical, 0 es acostado, negativo es dado vuelta.',
-        28: 'Qué tan rápido gira el torso.',
-        72: 'Rayo hacia abajo desde la cabeza. 1 es lejos, 0 es que chocó.',
-        73: 'Seno del ángulo de la cabeza.',
-        74: 'Coseno de la cabeza. 1 es erguida.'
-      })[i] || inName(i);
-    };
-    function paintPanels(ep, pz) {
-      const tot = $('ptotal');
-      tot.className = pz.total >= 0 ? 'pos' : 'neg';
-      tot.innerHTML = pz.total.toFixed(2) + '<small title="Techo si está erguido, solo con los pies, cabeza y cadera altas.">máx ' + pz.max.toFixed(2) + '</small>';
-      $('pfactors').innerHTML = pz.terms.map(t => {
-        const w = Math.min(48, Math.abs(t.v) / 1.2 * 48);
-        const left = t.v >= 0 ? 50 : 50 - w;
-        return '<div class="row" title="' + t.tip + '"><span>' + t.n + '</span><span class="bar"><i style="left:' + left + '%;width:' + w + '%;background:' + (t.v >= 0 ? '#3ecf8e' : '#ff4d5a') + '"></i></span><span class="' + (t.v >= 0 ? 'pos' : 'neg') + '">' + (t.v >= 0 ? '+' : '') + t.v.toFixed(2) + '</span></div>';
-      }).join('');
-      const x = ep && ep.x, h = ep && ep.h, y = ep && ep.a;
-      if (!x || !h || !y) return;
-      const line = (name, v, tip) => '<div class="row" title="' + tip + '"><span>' + name + '</span><span class="bar"><i style="width:' + Math.min(100, Math.abs(v) * 100) + '%;background:' + (v >= 0 ? '#3ecf8e' : '#ff4d5a') + '"></i></span><span>' + (v >= 0 ? '+' : '') + v.toFixed(2) + '</span></div>';
-      let html = '<h3>Entradas (' + x.length + ')</h3>';
-      for (let i = 0; i < x.length; i++) html += line(inName(i), x[i], inTip(i));
-      html += '<h3>Ocultas (' + h.length + ')</h3>';
-      for (let j = 0; j < h.length; j++) html += line(String(j), h[j], 'Estado de la neurona oculta ' + j + '. Se acuerda un poco del paso anterior.');
-      html += '<h3>Salidas</h3>';
-      for (let o = 0; o < y.length; o++) html += line(JN[o], y[o], 'Torque pedido en ' + JN[o] + '. Positivo y negativo doblan para lados distintos.');
-      $('netlist').innerHTML = html;
+    const $ = (id) => document.getElementById(id);
+    const sim = createSim(Box2D);
+    sim.setRandom((Date.now() & 0xffff) || 1);
+    let random = makeRandom(7);
+    const randomNormal = () => Math.sqrt(-2 * Math.log(random() + 1e-12)) * Math.cos(6.2831853 * random());
+    let state = loadSession() || freshState(randomNormal);
+    let paused = false;
+    const vector = (x, y) => new b2Vec2(x, y);
+
+    for (let i = 0; i < thrownKinds.length; i++) {
+      const option = document.createElement("option");
+      option.value = String(i);
+      option.textContent = thrownKinds[i].name;
+      $("objectKind").appendChild(option);
     }
-    function drawNet(ep) {
-      const cv = $('nv'), dpr = Math.min(2, window.devicePixelRatio || 1);
-      const W = cv.clientWidth, Ht = cv.clientHeight;
-      if (W < 20 || Ht < 20) return;
-      const pw = Math.floor(W * dpr), ph = Math.floor(Ht * dpr);
-      if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
-      const g = cv.getContext('2d');
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      g.clearRect(0, 0, W, Ht);
-      const getup = ep && ep.activeNet !== 'stand';
-      g.font = '12px system-ui,sans-serif';
-      g.fillStyle = getup ? '#ff4455' : '#8eb4ff';
-      g.fillText('Una red · caminos fuertes', 10, 16);
-      const x = ep && ep.x, h = ep && ep.h, y = ep && ep.a, w = ep && ep.w;
-      if (!x || !h || !y || !w) return;
-      const hdn = h.length;
-      const STR = 1 + NI + hdn, top = 48, bot = Ht - 8, xH = Math.max(168, W * 0.46), xO = W - 112;
-      const yAt = (i, n) => top + (i + 0.5) * (bot - top) / n;
-      const hotIdx = [...Array(hdn).keys()].sort((a, b) => Math.abs(h[b]) - Math.abs(h[a])).slice(0, 5);
-      const hot = new Set(hotIdx), ins = [], outs = [];
-      for (const j of hotIdx) {
-        const base = j * STR + 1;
-        for (let i = 0; i < NI; i++) { const c = w[base + i] * x[i]; ins.push({ i, j, s: Math.abs(c), p: c }); }
-        for (let o = 0; o < O; o++) { const c = w[hdn * STR + o * (hdn + 1) + 1 + j] * h[j]; outs.push({ o, j, s: Math.abs(c), p: c }); }
-      }
-      ins.sort((a, b) => b.s - a.s); outs.sort((a, b) => b.s - a.s);
-      const inE = ins.slice(0, 8), outE = outs.slice(0, 8);
-      const show = [], seen = new Set();
-      for (const e of inE) if (!seen.has(e.i)) { seen.add(e.i); show.push(e.i); }
-      for (const i of [...Array(NI).keys()].sort((a, b) => Math.abs(x[b]) - Math.abs(x[a]))) {
-        if (show.length >= 8) break;
-        if (!seen.has(i)) { seen.add(i); show.push(i); }
-      }
-      show.sort((a, b) => Math.abs(x[b]) - Math.abs(x[a]));
-      const rowOf = new Map(show.map((i, k) => [i, k]));
-      const maxIn = inE[0] ? inE[0].s : 1, maxOut = outE[0] ? outE[0].s : 1;
-      const link = (e, x0, y0, x1, y1, maxS) => {
-        const t = e.s / (maxS || 1);
-        g.strokeStyle = e.p >= 0 ? `rgba(62,207,142,${0.2 + 0.75 * t})` : `rgba(255,77,90,${0.2 + 0.75 * t})`;
-        g.lineWidth = 1 + 2.2 * t;
-        g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      };
-      for (const e of inE) if (rowOf.has(e.i)) link(e, 150, yAt(rowOf.get(e.i), show.length), xH - 12, yAt(e.j, hdn), maxIn);
-      for (const e of outE) link(e, xH + 12, yAt(e.j, hdn), xO - 6, yAt(e.o, O), maxOut);
-      g.font = '11px system-ui,sans-serif';
-      g.fillStyle = '#9aa3c7';
-      g.fillText('Entradas', 10, 34); g.fillText('Ocultas', xH - 22, 34); g.fillText('Salidas', xO, 34);
-      show.forEach((i, k) => {
-        const yy = yAt(k, show.length), v = x[i], bw = Math.min(78, Math.abs(v) * 40);
-        g.fillStyle = v >= 0 ? 'rgba(62,207,142,0.85)' : 'rgba(255,77,90,0.85)';
-        g.fillRect(8, yy - 5, Math.max(2, bw), 10);
-        g.fillStyle = '#e7e9f5';
-        g.fillText(inName(i), 12, yy + 3);
+    fillSavedList();
+
+    const pool = { workers: [], ready: false };
+    function bootWorkers() {
+      const count = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
+      return Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
+        const worker = new Worker("./src/browser-worker.js", { type: "module" });
+        const timer = setTimeout(() => reject(new Error("A worker did not answer in 15 s")), 15000);
+        worker.onmessage = (event) => { if (event.data === "ready") { clearTimeout(timer); resolve(); } };
+        worker.onerror = () => { clearTimeout(timer); reject(new Error("Could not start a worker")); };
+        pool.workers.push(worker);
+      }))).then(() => { pool.ready = true; });
+    }
+    function evaluatePopulation(items) {
+      const buckets = pool.workers.map(() => []);
+      items.forEach((item, index) => buckets[index % pool.workers.length].push(item));
+      return Promise.all(buckets.map((bucket, workerIndex) => {
+        if (!bucket.length) return [];
+        return new Promise((resolve, reject) => {
+          const worker = pool.workers[workerIndex];
+          worker.onmessage = (event) => resolve(event.data);
+          worker.onerror = () => reject(new Error("Worker failed"));
+          worker.postMessage({ tasks: bucket });
+        });
+      })).then((groups) => {
+        const flat = groups.flat();
+        const ordered = new Array(items.length);
+        for (const row of flat) ordered[row.index] = row;
+        return ordered;
       });
-      for (let j = 0; j < hdn; j++) {
-        const yy = yAt(j, hdn), mag = Math.min(1, Math.abs(h[j]));
-        g.beginPath();
-        g.fillStyle = h[j] >= 0 ? `rgba(255,214,120,${0.12 + 0.88 * mag})` : `rgba(130,170,255,${0.12 + 0.88 * mag})`;
-        g.arc(xH, yy, 4 + 5 * mag, 0, 6.3); g.fill();
-        g.font = '10px system-ui,sans-serif';
-        g.fillStyle = hot.has(j) ? '#fff' : 'rgba(255,255,255,0.35)';
-        g.fillText(String(j), xH + 14, yy + 3);
-      }
-      g.font = '11px system-ui,sans-serif';
-      const hitO = new Set(outE.map(e => e.o));
-      for (let o = 0; o < O; o++) {
-        const yy = yAt(o, O), v = y[o], bw = Math.min(46, Math.abs(v) * 46);
-        g.globalAlpha = hitO.has(o) ? 1 : 0.4;
-        g.fillStyle = v >= 0 ? '#3ecf8e' : '#ff4d5a';
-        g.fillRect(v >= 0 ? xO : xO - bw, yy - 4, Math.max(2, bw), 8);
-        g.fillStyle = '#e7e9f5';
-        g.fillText(JN[o], xO + 6, yy + 3);
-      }
-      g.globalAlpha = 1;
     }
-    let rng = rngMk(7);
-    const $ = id => document.getElementById(id);
-    const tip = Object.assign(document.createElement('div'), { id: 'tip', hidden: true });
-    document.body.appendChild(tip);
-    let tipEl = null;
-    const disarm = el => { if (el && el.dataset.tip) el.title = el.dataset.tip; };
-    const setTip = (el, text) => { el.dataset.tip = text; if (el.hasAttribute('title')) el.title = text; if (tipEl === el) tip.textContent = text; };
-    const showTip = el => {
-      const text = el.dataset.tip || el.getAttribute('title');
-      if (!text || (tipEl === el && !tip.hidden)) return;
-      if (tipEl && tipEl !== el) disarm(tipEl);
-      el.dataset.tip = text; el.removeAttribute('title');
-      tip.textContent = text; tip.hidden = false;
-      const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
-      tip.style.left = Math.max(8, Math.min(r.left + (r.width - w) / 2, innerWidth - w - 8)) + 'px';
-      let y = r.top - h - 8; if (y < 8) y = Math.min(r.bottom + 8, innerHeight - h - 8);
-      tip.style.top = y + 'px'; tipEl = el;
-    };
-    const hideTip = () => { disarm(tipEl); tip.hidden = true; tipEl = null; };
-    const hostOf = e => e.target.closest && e.target.closest('#bar button, #bar label');
-    $('bar').addEventListener('pointerover', e => { if (e.pointerType === 'touch') return; const el = hostOf(e); if (el) showTip(el); });
-    $('bar').addEventListener('pointerout', e => {
-      if (!tipEl || tipEl.contains(e.relatedTarget)) return;
-      if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('#bar button, #bar label')) return;
-      hideTip();
-    });
-    $('bar').addEventListener('focusin', e => { const el = hostOf(e); if (el) showTip(el); });
-    $('bar').addEventListener('focusout', e => {
-      if (!tipEl || (e.relatedTarget && tipEl.contains(e.relatedTarget))) return;
-      if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('#bar button, #bar label')) return;
-      hideTip();
-    });
-    addEventListener('resize', hideTip);
-
-    function* trainer(st) {
-      const TR = S.build();
-      while (true) {
-        const pop = S.esAsk(st, 10), fits = [];
-        for (const w of pop.ws) {
-          const ep = new S.Ep(TR, w, pop.o.tilt, pop.o.drop, pop.o);
-          while (!ep.step()); ep.cleanup(); fits.push(ep.stats); yield;
-        }
-        S.esTell(st, pop, fits); yield;
-      }
-    }
-
-    const fromWeights = c => {
-      const n = netsFromCkpt(c);
-      return {
-        theta: n.thetaStand, bestTheta: n.bestStand, thetaStand: n.thetaStand, thetaGetup: n.thetaStand,
-        bestStand: n.bestStand, bestGetup: n.bestStand,
-        gen: c.gen || 0, bestGen: c.bestGen || 0,
-        bestStandGen: c.bestStandGen ?? c.bestGen, bestSupineGen: c.bestSupineGen ?? c.bestGetupGen, bestProneGen: c.bestProneGen,
-        hist: c.hist || [],
-        A: 0.12, Pm: 0, Q: 0, Pa: 0, G: 0,
-        fromFile: true, lastEval: c.eval || null
-      };
-    };
-    const loadFile = async () => {
-      try {
-        const c = await fetch('weights.json?t=' + Date.now()).then(r => { if (!r.ok) throw new Error('sin weights.json'); return r.json(); });
-        if (c && (c.theta || c.thetaStand) && (padWeights(c.theta) || padWeights(c.thetaStand))) return fromWeights(c);
-      } catch (e) { }
-      return null;
-    };
-    const loadSaved = () => {
-      try {
-        const c = JSON.parse(localStorage.getItem('ragdoll6'));
-        if (c && (padWeights(c.theta) || padWeights(c.thetaStand))) {
-          const n = netsFromCkpt(c);
-          return {
-            thetaStand: n.thetaStand, thetaSupine: n.thetaSupine, thetaProne: n.thetaProne, thetaGetup: n.thetaSupine, theta: n.thetaStand,
-            bestStand: n.bestStand, bestSupine: n.bestSupine, bestProne: n.bestProne, bestGetup: n.bestSupine, bestTheta: n.bestStand,
-            gen: c.gen, hist: [], A: c.A, Pm: c.Pm, Q: c.Q, Pa: c.Pa, G: c.G || 0, resumed: true
-          };
-        }
-      } catch (e) { }
-      return null;
-    };
-    const saveLocal = s => { try { localStorage.setItem('ragdoll6', JSON.stringify({ gen: s.gen, A: s.A, Pm: s.Pm, Q: s.Q, Pa: s.Pa, G: s.G || 0, theta: Array.from((s.thetaStand || s.theta), x => +x.toFixed(4)), thetaStand: Array.from((s.thetaStand || s.theta), x => +x.toFixed(4)), thetaGetup: Array.from((s.thetaGetup || s.theta), x => +x.toFixed(4)) })); } catch (e) { } };
-
-    const pool = { ok: false, ws: [], np: 0, err: '' };
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-    let fileNet = null, paused = true, st, tr, newEp = () => { };
-
-    async function initPool() {
-      const ws = [];
-      try {
-        const K = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
-        await Promise.all(Array.from({ length: K }, () => new Promise((res, rej) => {
-          const w = new Worker('./src/browser-worker.js', { type: 'module' }), to = setTimeout(() => rej(new Error('sin respuesta en 15 s')), 15000);
-          w.onmessage = e => { if (e.data === 'ready') { clearTimeout(to); res(); } };
-          w.onerror = e => { clearTimeout(to); rej(new Error(e.message || 'error al crear el worker')); };
-          ws.push(w);
-        })));
-        pool.ws = ws; pool.ok = true; return K;
-      } catch (e) { pool.err = e.message; for (const w of ws) try { w.terminate(); } catch (_) { } pool.ws = []; pool.ok = false; return 0; }
-    }
-    function evalPop(items) {
-      const K = pool.ws.length, bk = Array.from({ length: K }, () => []);
-      items.forEach((it, i) => bk[i % K].push({ i, w: it.w, o: it.o }));
-      return Promise.all(bk.map((b, k) => b.length ? new Promise((res, rej) => {
-        const w = pool.ws[k]; w.onmessage = e => res(e.data); w.onerror = e => rej(new Error(e.message || 'error de worker')); w.postMessage({ tasks: b });
-      }) : [])).then(rs => { const out = new Array(items.length); for (const r of rs.flat()) out[r.i] = r; return out; });
-    }
-    async function poolLoop() {
-      while (pool.ok) {
-        if (paused) { await sleep(150); continue; }
-        const s = st;
+    async function trainLoop() {
+      try { await bootWorkers(); }
+      catch (error) { $("error").textContent = error.message; return; }
+      while (pool.ready) {
+        if (paused) { await new Promise((resolve) => setTimeout(resolve, 150)); continue; }
+        const generationState = state;
         try {
-          const pop = S.esAsk(s, Math.max(10, pool.ws.length * 2)); pool.np = pop.np;
-          const fits = await evalPop(pop.ws.map(w => ({ w, o: pop.o })));
-          if (st !== s) continue;
-          S.esTell(s, pop, fits);
-          if (s.gen % 20 === 0) saveLocal(s);
-        } catch (e) { $('err').textContent = 'Workers: ' + e.message; pool.ok = false; }
+          const generation = askGeneration(generationState, sim.situation(random, $("trainPose").value), Math.max(4, pool.workers.length), randomNormal);
+          const tasks = generation.weights.map((weights, index) => ({
+            index,
+            weights,
+            phase: index % actionEveryNFrames,
+            options: generation.situation,
+          }));
+          const scores = await evaluatePopulation(tasks);
+          if (state !== generationState) continue;
+          if (scores.some((score) => !score || !Number.isFinite(score.fitness))) throw new Error("A worker returned an empty score");
+          tellGeneration(state, generation, scores);
+          rememberBest();
+          saveSession();
+        } catch (error) {
+          $("error").textContent = error.message;
+          pool.ready = false;
+        }
       }
     }
-    let nodeGen = -1, nodeBestGen = -1, downN = 0;
-    const followBest = () => $('fwBest').checked;
-    const followOn = () => $('fwBest').checked || $('fwLive').checked;
-    const netMode = () => $('netGetup').checked ? 'getup' : $('netStand').checked ? 'stand' : 'auto';
-    const displayNets = () => {
-      const one = (followBest() ? (st.bestTheta || st.theta) : (st.theta || st.thetaStand));
-      const w = one.slice();
-      return { stand: w, supine: w.slice(), prone: w.slice(), getup: w.slice(), mode: 'auto' };
-    };
-    const status = () => {
-      const ev = st.lastEval ? `  ·  eval stand ${Math.round((st.lastEval.stand?.stood || 0) * 100)}% getup ${Math.round((st.lastEval.getup?.rec || 0) * 100)}%` : '';
-      const mode = followBest() ? 'mejor' : ($('fwLive').checked ? 'vivo' : 'manual');
-      return (pool.ok ? `${pool.ws.length} workers · población ${pool.np * 2}${paused ? ' · en pausa' : ''}` : (paused || +$('s').value === 0 ? 'sin entrenar en vivo' : 'un solo hilo')) + `  ·  ${mode}` + (st.fromFile ? '  ·  pesos de Node' : '') + (st.resumed ? '  ·  sesión local' : '') + ev;
-    };
 
-    fileNet = await loadFile();
-    st = fileNet || loadSaved() || S.freshState();
-    if (fileNet) { nodeGen = st.gen; nodeBestGen = st.bestGen ?? -1; }
-    tr = trainer(st);
+    function savedSnapshot() {
+      const generation = $("savedNet").value;
+      if (!generation) return null;
+      return (state.snapshots || []).find((item) => String(item.gen) === generation) || null;
+    }
+    function watchedWeights() {
+      const saved = savedSnapshot();
+      if (saved) return saved.weights;
+      if ($("watchEver").checked) return state.bestEverTheta || state.theta;
+      if ($("watchGeneration").checked) return state.bestGenTheta || state.theta;
+      return state.theta;
+    }
+    function watchName() {
+      const saved = savedSnapshot();
+      if (saved) return "gen " + saved.gen;
+      if ($("watchEver").checked) return "best ever";
+      if ($("watchGeneration").checked) return "best this generation";
+      return "parent";
+    }
 
-    $('v').oninput = e => $('vv').textContent = e.target.value + ' m/s';
-    $('s').oninput = e => $('sv').textContent = e.target.value + ' ms/frame';
-    $('p').onclick = e => {
+    const world = sim.build();
+    let episode;
+    let hold = 0;
+    const objects = [];
+    let drag = null;
+    let aim = null;
+    const view = { cx: 0 };
+
+    function episodeOptions() {
+      const pose = $("startPose").value;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const goalX = side * (1.2 + Math.random());
+      if (pose === "up") return { tilt: (Math.random() * 2 - 1) * 0.1, drop: 0.12, settle: 0, frames: 1e9, goalX, goalY: 0, amp: 0, period: 8, phaseShift: 0 };
+      const sign = pose === "prone" ? -1 : 1;
+      return { tilt: sign * (1.4 + Math.random() * 0.2), drop: 0.04, settle: 40, frames: 1e9, goalX, goalY: 0, amp: 0, period: 8, phaseShift: 0 };
+    }
+    function resetEpisode() {
+      if (episode) episode.cleanup();
+      const options = episodeOptions();
+      episode = new sim.Episode(world, watchedWeights(), options.tilt, options.drop, options);
+      episode.free = true;
+      hold = 0;
+    }
+
+    function paintScore(scored) {
+      const total = $("total");
+      total.className = scored.total >= 0 ? "good" : "bad";
+      total.innerHTML = scored.total.toFixed(2) + '<small title="The ceiling if every row is at its best.">max ' + scored.max.toFixed(2) + "</small>";
+      $("terms").innerHTML = scored.terms.map((term) => {
+        const width = Math.min(48, (Math.abs(term.v) / 1.2) * 48);
+        const left = term.v >= 0 ? 50 : 50 - width;
+        const color = term.v >= 0 ? "#3ecf8e" : "#ff4d5a";
+        return '<div class="row" title="' + escapeTip(term.tip) + '"><span>' + term.n + '</span><span class="bar"><i style="left:' + left + '%;width:' + width + '%;background:' + color + '"></i></span><span class="' + (term.v >= 0 ? "good" : "bad") + '">' + (term.v >= 0 ? "+" : "") + term.v.toFixed(2) + "</span></div>";
+      }).join("");
+      const input = episode && episode.x;
+      const hidden = episode && episode.h;
+      const action = episode && episode.a;
+      if (!input || !hidden || !action) return;
+      const line = (name, value, tip) => '<div class="row" title="' + escapeTip(tip) + '"><span>' + name + '</span><span class="bar"><i style="width:' + Math.min(100, Math.abs(value) * 100) + '%;background:' + (value >= 0 ? "#3ecf8e" : "#ff4d5a") + '"></i></span><span>' + (value >= 0 ? "+" : "") + value.toFixed(2) + "</span></div>";
+      let html = "<h3>Inputs (" + input.length + ")</h3>";
+      for (let i = 0; i < input.length; i++) {
+        const label = observationLabel(i);
+        html += line(label.name, input[i], label.tip);
+      }
+      html += "<h3>Hidden (" + hidden.length + ")</h3>";
+      for (let unit = 0; unit < hidden.length; unit++) html += line(String(unit), hidden[unit], "Hidden unit " + unit + ". It keeps a fraction of its previous value.");
+      html += "<h3>Outputs</h3>";
+      for (let joint = 0; joint < action.length; joint++) html += line(jointNames[joint], action[joint], "Command to " + jointNames[joint] + ". Positive and negative bend opposite ways.");
+      $("netlist").innerHTML = html;
+    }
+    function observationLabel(index) {
+      return observationLabels[index] || { name: "input " + index, tip: "Observation " + index + "." };
+    }
+    function escapeTip(text) { return String(text).replace(/"/g, "&quot;"); }
+
+    $("pause").onclick = () => {
       paused = !paused;
-      e.target.textContent = paused ? 'Reanudar entrenamiento' : 'Pausar entrenamiento';
-      setTip(e.target, paused ? 'Retoma el entrenamiento en esta pestaña. El muñeco no se reinicia.' : 'Frena el entrenamiento. El muñeco sigue en pantalla.');
+      $("pause").textContent = paused ? "Resume" : "Pause";
     };
-    $('r').onclick = () => {
-      rng = rngMk(Date.now() & 0xffff); S.setRng(Date.now() & 0xffff);
-      st = S.freshState(); tr = trainer(st); st.t0 = performance.now(); newEp();
+    $("restart").onclick = () => {
+      random = makeRandom(Date.now() & 0xffff);
+      sim.setRandom(Date.now() & 0xffff);
+      state = freshState(randomNormal);
+      state.snapshots = [];
+      fillSavedList();
+      saveSession();
+      resetEpisode();
     };
-    $('l').onclick = async () => {
-      try { localStorage.removeItem('ragdoll6'); } catch (e) { }
-      $('fwBest').checked = true;
-      fileNet = await loadFile();
-      st = fileNet || S.freshState(); tr = trainer(st); st.t0 = performance.now();
-      if (fileNet) { nodeGen = st.gen; nodeBestGen = st.bestGen ?? -1; }
-      newEp();
+    $("reset").onclick = () => resetEpisode();
+    let choosingWatch = false;
+    const watchLive = (event) => {
+      if (choosingWatch || !event.target.checked) return;
+      choosingWatch = true;
+      $("savedNet").value = "";
+      choosingWatch = false;
+      resetEpisode();
     };
-    $('fwBest').onchange = () => newEp();
-    $('fwLive').onchange = () => newEp();
+    $("watchParent").onchange = watchLive;
+    $("watchGeneration").onchange = watchLive;
+    $("watchEver").onchange = watchLive;
+    $("savedNet").onchange = () => {
+      if (choosingWatch) return;
+      choosingWatch = true;
+      const saved = $("savedNet").value;
+      $("watchParent").checked = !saved;
+      $("watchGeneration").checked = false;
+      $("watchEver").checked = false;
+      choosingWatch = false;
+      resetEpisode();
+    };
+    $("speed").oninput = () => { $("speedValue").textContent = $("speed").value + " m/s"; };
 
-    try {
-      const host = $('c'), app = new PIXI.Application();
-      await app.init({ resizeTo: host, background: 0x12162a, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
-      host.appendChild(app.canvas);
-      initPool().then(k => { if (k) $('s').parentElement.style.display = 'none'; poolLoop(); });
-      const D = S.build(), g = new PIXI.Graphics(), ch = new PIXI.Graphics();
-      const tx = new PIXI.Text({ text: '', style: { fill: 0xdfe4ff, fontSize: 13, fontFamily: 'system-ui,sans-serif', lineHeight: 18 } });
-      tx.position.set(12, 10); app.stage.addChild(g, ch, tx);
-      let ep, hold = 0;
-      const view = { W: 300, S: 100, gy: 300, cx: 0 }, objs = [];
-      let drag = null, aim = null;
-      const clearObjs = () => { while (objs.length) b2DestroyBody(objs.pop().id); if (drag) { b2DestroyJoint(drag.jid); drag = null; } };
-      newEp = () => {
-        clearObjs();
-        const fr = $('m').checked, lie = $('lie').checked;
-        if (ep) ep.cleanup();
-        let o, tilt, drop;
-        if (lie) {
-          const pose = $('lieProne').checked ? 'prone' : 'supine';
-          const p = pose === 'prone' ? S.pronePose(Math.random) : S.supinePose(Math.random);
-          o = { amp: 0, T: 8, ph: 0, proj: [], task: 'getup', steps: 1e9, pose };
-          tilt = p.tilt; drop = p.drop;
-        } else if (fr) {
-          o = { amp: +$('pa').value * Math.PI / 180, T: 8, steps: 1e9 };
-          tilt = (Math.random() * 2 - 1) * 0.1; drop = 0.12;
-        } else {
-          o = S.genOpts(Math.random, st);
-          tilt = o.tilt; drop = o.drop;
+    const app = new PIXI.Application();
+    const host = $("stage");
+    await app.init({ resizeTo: host, background: 0x12162a, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+    host.appendChild(app.canvas);
+    const graphics = new PIXI.Graphics();
+    const chart = new PIXI.Graphics();
+    const label = new PIXI.Text({ text: "", style: { fill: 0xdfe4ff, fontSize: 13, fontFamily: "system-ui,sans-serif", lineHeight: 18 } });
+    label.position.set(12, 10);
+    app.stage.addChild(graphics, chart, label);
+    resetEpisode();
+    trainLoop();
+
+    const canvas = app.canvas;
+    canvas.style.touchAction = "none";
+    const colors = [0x4f8cff, 0xffd166, 0x7aa2ff, 0x7aa2ff, 0xffd166, 0x43d9ad, 0x43d9ad, 0xf78c6c];
+    const limbColor = (index) => colors[2 + (index - 2) % 6];
+    const pantsColor = limbColor(5);
+    const leftArmJoints = world.joints.slice(1, 4);
+    const rightArmJoints = world.joints.slice(7, 10);
+    const armHalfWidth = world.parts[2].hx;
+    const leftKnees = [];
+    const rightKnees = [];
+    const hipMarks = [];
+    for (const joint of world.joints) {
+      if (joint.mark === "knee") (joint.a < 8 ? leftKnees : rightKnees).push(joint);
+      else if (joint.mark === "hip") hipMarks.push(joint);
+    }
+    let accumulator = 0;
+    let frameSkip = 0;
+
+    function screenPoint(event) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    }
+    function worldPoint(screenX, screenY, scale, groundY) {
+      return { x: (screenX - app.screen.width / 2) / scale + view.cx, y: (groundY - screenY) / scale };
+    }
+    canvas.addEventListener("pointerdown", (event) => {
+      const screen = screenPoint(event);
+      const scale = view.scale || 100;
+      const groundY = view.groundY || app.screen.height * 0.78;
+      const point = worldPoint(screen.x, screen.y, scale, groundY);
+      canvas.setPointerCapture(event.pointerId);
+      let picked = null;
+      let best = 1e9;
+      for (const part of world.parts) {
+        const position = b2Body_GetPosition(part.id);
+        const distance = (position.x - point.x) ** 2 + (position.y - point.y) ** 2;
+        if (distance < best && distance < (part.hx + 0.2) ** 2) { best = distance; picked = part; }
+      }
+      if (picked) {
+        const joint = CreateMouseJoint({ worldId: world.worldId, bodyIdA: world.groundId, bodyIdB: picked.id, target: vector(point.x, point.y), hertz: 5, dampingRatio: 0.7, maxForce: 1500 });
+        drag = { id: joint.jointId, x: screen.x, y: screen.y, part: picked };
+      } else aim = { x0: screen.x, y0: screen.y, x: screen.x, y: screen.y };
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      const screen = screenPoint(event);
+      if (drag) { drag.x = screen.x; drag.y = screen.y; }
+      if (aim) { aim.x = screen.x; aim.y = screen.y; }
+    });
+    function release() {
+      if (drag) { b2DestroyJoint(drag.id); drag = null; }
+      if (aim) {
+        const scale = view.scale || 100;
+        const groundY = view.groundY || app.screen.height * 0.78;
+        const start = worldPoint(aim.x0, aim.y0, scale, groundY);
+        let vx = (aim.x - aim.x0) / scale * 5;
+        let vy = -(aim.y - aim.y0) / scale * 5;
+        const speed = Math.hypot(vx, vy);
+        if (speed > 25) { vx *= 25 / speed; vy *= 25 / speed; }
+        const kind = thrownKinds[+$("objectKind").value];
+        const id = sim.spawnThrown(world, kind, start.x, Math.max(start.y, 0.2), vx, vy);
+        objects.push({ id, kind });
+        if (objects.length > 15) b2DestroyBody(objects.shift().id);
+        aim = null;
+      }
+    }
+    canvas.addEventListener("pointerup", release);
+    canvas.addEventListener("pointercancel", release);
+    $("fire").onclick = () => {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const speed = +$("speed").value;
+      const kind = thrownKinds[+$("objectKind").value];
+      const id = sim.spawnThrown(world, kind, episode.m.centerX + side * 3.5, 1.2, -side * speed, 1.5);
+      objects.push({ id, kind });
+    };
+
+    app.ticker.add((ticker) => {
+      accumulator += Math.min(ticker.deltaMS, 50);
+      while (accumulator >= 1000 / physicsHz) {
+        accumulator -= 1000 / physicsHz;
+        if (hold > 0) { hold--; if (!hold) resetEpisode(); }
+        else if (episode.step()) hold = 60;
+      }
+      const width = app.screen.width;
+      const height = app.screen.height;
+      const scale = Math.min(height / 2.8, 150);
+      const groundY = height * 0.78;
+      view.scale = scale;
+      view.groundY = groundY;
+      view.cx += ((episode.m.centerX || 0) - view.cx) * Math.min(1, ticker.deltaMS / 250);
+      if (drag) {
+        const point = worldPoint(drag.x, drag.y, scale, groundY);
+        b2MouseJoint_SetTarget(drag.id, vector(point.x, point.y));
+      }
+      const toX = (x) => (x - view.cx) * scale + width / 2;
+      const toY = (y) => groundY - y * scale;
+      graphics.clear().rect(0, toY(-0.5), width, height).fill(0x232a47);
+      for (let mark = Math.floor(view.cx - width / scale / 2) - 1; mark <= view.cx + width / scale / 2 + 1; mark++) {
+        graphics.rect(toX(mark) - 1, toY(-0.5), 2, 8).fill(0x3a4570);
+      }
+      const platform = b2Body_GetPosition(world.platformId);
+      const platformAngle = b2Rot_GetAngle(b2Body_GetRotation(world.platformId));
+      const platformCos = Math.cos(platformAngle);
+      const platformSin = Math.sin(platformAngle);
+      const corners = [];
+      for (const [signX, signY] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        const localX = signX * platformHalfWidth;
+        const localY = signY * platformHalfThickness;
+        corners.push(toX(platform.x + platformCos * localX - platformSin * localY), toY(platform.y + platformSin * localX + platformCos * localY));
+      }
+      graphics.poly(corners).fill(0x5a6aa0);
+      if (episode.options.goalX != null) {
+        graphics.circle(toX(episode.options.goalX), toY(0.08), 9).fill(0x43d9ad);
+        graphics.moveTo(toX(episode.options.goalX), toY(0)).lineTo(toX(episode.options.goalX), toY(1.2)).stroke({ width: 3, color: 0x43d9ad });
+        graphics.circle(toX(episode.options.goalX), toY(1.2), 7).fill(0x43d9ad);
+      }
+      const drawPart = (index) => {
+        const part = world.parts[index];
+        const position = b2Body_GetPosition(part.id);
+        const angle = b2Rot_GetAngle(b2Body_GetRotation(part.id));
+        const cosine = Math.cos(angle);
+        const sine = Math.sin(angle);
+        if (part.circle) { graphics.circle(toX(position.x), toY(position.y), part.r * scale).fill(pantsColor); return; }
+        const points = [];
+        for (const [signX, signY] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+          points.push(toX(position.x + cosine * signX * part.hx - sine * signY * part.hy), toY(position.y + sine * signX * part.hx + cosine * signY * part.hy));
         }
-        const nets = displayNets();
-        ep = new S.Ep(D, (st.theta || nets.getup).slice(), tilt, drop, o);
-        ep.free = fr || lie; hold = 0;
+        const behind = index >= 2 && index < 8;
+        graphics.poly(points).fill({ color: index < 2 ? colors[index] : limbColor(index), alpha: behind ? 0.6 : 1 });
       };
-      newEp(); view.cx = ep.m.cx;
-      $('q').onclick = () => newEp();
-      $('b').onclick = () => { $('fwBest').checked = true; newEp(); };
-      $('cp').onclick = () => { try { navigator.clipboard.writeText(JSON.stringify({ gen: st.gen, H: 20, NI, theta: Array.from(st.theta, x => +x.toFixed(4)) })).then(() => $('err').textContent = 'Pesos copiados', () => $('err').textContent = 'El navegador bloqueó el portapapeles'); } catch (e) { $('err').textContent = 'No se pudo copiar: ' + e.message; } };
-      $('pa').oninput = e => { $('pv').textContent = e.target.value + '°'; if (ep && ep.free) ep.o.amp = +e.target.value * Math.PI / 180; };
-      $('m').onchange = () => newEp();
-      $('lie').onchange = () => newEp();
-      $('lieSupine').onchange = () => { if ($('lie').checked) newEp(); };
-      $('lieProne').onchange = () => { if ($('lie').checked) newEp(); };
-      const cv = app.canvas; cv.style.touchAction = 'none';
-      const toW = (sx, sy) => ({ x: (sx - view.W / 2) / view.S + view.cx, y: (view.gy - sy) / view.S });
-      const scr = e => { const r = cv.getBoundingClientRect(); return { sx: e.clientX - r.left, sy: e.clientY - r.top }; };
-      function pick(x, y) {
-        let best = null, bd = 1e9;
-        for (const p of D.P) {
-          const q = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id)), dx = x - q.x, dy = y - q.y, c = Math.cos(a), s = Math.sin(a), lx = c * dx + s * dy, ly = -s * dx + c * dy;
-          if (Math.abs(lx) <= p.hx + 0.05 && Math.abs(ly) <= p.hy + 0.05) { const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = p; } }
-        }
-        return best;
-      }
-      function spawn(x, y, vx, vy, ki) {
-        const k = KINDS[ki], pos = V(x, y);
-        const r = k.box ? CreateBoxPolygon({ worldId: D.wid, type: b2BodyType.b2_dynamicBody, position: pos, size: V(k.hx, k.hx), density: k.d, friction: 0.6, restitution: 0.2 }) : CreateCircle({ worldId: D.wid, type: b2BodyType.b2_dynamicBody, position: pos, radius: k.r, density: k.d, friction: 0.6, restitution: 0.3 });
-        b2Body_SetLinearVelocity(r.bodyId, V(vx, vy)); objs.push({ id: r.bodyId, k }); if (objs.length > 15) b2DestroyBody(objs.shift().id);
-      }
-      cv.addEventListener('pointerdown', e => {
-        const { sx, sy } = scr(e), w = toW(sx, sy), p = pick(w.x, w.y); cv.setPointerCapture(e.pointerId);
-        if (p) { const j = CreateMouseJoint({ worldId: D.wid, bodyIdA: D.ground, bodyIdB: p.id, target: V(w.x, w.y), hertz: 5, dampingRatio: 0.7, maxForce: 1500 }); drag = { jid: j.jointId, sx, sy, p }; }
-        else aim = { sx0: sx, sy0: sy, sx, sy };
-      });
-      cv.addEventListener('pointermove', e => { const { sx, sy } = scr(e); if (drag) { drag.sx = sx; drag.sy = sy; } if (aim) { aim.sx = sx; aim.sy = sy; } });
-      const up = () => {
-        if (drag) { b2DestroyJoint(drag.jid); drag = null; }
-        if (aim) {
-          const w = toW(aim.sx0, aim.sy0); let vx = (aim.sx - aim.sx0) / view.S * 5, vy = -(aim.sy - aim.sy0) / view.S * 5; const n = Math.hypot(vx, vy); if (n > 25) { vx *= 25 / n; vy *= 25 / n; }
-          spawn(w.x, Math.max(w.y, 0.2), vx, vy, +$('o').value); aim = null;
-        }
+      const anchorOf = (partIndex, localX, localY) => {
+        const part = world.parts[partIndex];
+        const position = b2Body_GetPosition(part.id);
+        const x = position.x;
+        const y = position.y;
+        const angle = b2Rot_GetAngle(b2Body_GetRotation(part.id));
+        const cosine = Math.cos(angle);
+        const sine = Math.sin(angle);
+        return { x: x + cosine * localX - sine * localY, y: y + sine * localX + cosine * localY };
       };
-      cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
-      $('f').onclick = () => { const sd = Math.random() < 0.5 ? -1 : 1, v = +$('v').value; spawn(ep.m.cx + sd * 3.5, 1 + Math.random() * 0.6, -sd * v, 1.5, +$('o').value); };
-      const COL = [0x4f8cff, 0xffd166, 0x7aa2ff, 0x7aa2ff, 0xffd166, 0x43d9ad, 0x43d9ad, 0xf78c6c];
-      const order = [8, 9, 10, 11, 12, 13, 0, 1, 2, 3, 4, 5, 6, 7, 14];
-      let acc = 0, fr = 0;
-      st.t0 = performance.now();
-      app.ticker.add(tk => {
-        const budget = +$('s').value, t0 = performance.now();
-        if (!pool.ok && !paused && budget > 0) while (performance.now() - t0 < budget) tr.next();
-        acc += Math.min(tk.deltaMS, 50);
-        while (acc >= 1000 / 60) { acc -= 1000 / 60; if (hold > 0) { hold--; if (!hold) newEp(); } else if (ep.step()) hold = 60; }
-        if (followOn() && paused && ep.fallen && !$('lie').checked) { downN++; if (downN > 1200) { newEp(); downN = 0; } } else downN = 0;
-        const W = app.screen.width, Hh = app.screen.height, Sc = Math.min(Hh / 2.8, 150), gy = Hh * 0.78;
-        view.cx += (ep.m.cx - view.cx) * Math.min(1, tk.deltaMS / 250); const cx = view.cx; view.W = W; view.S = Sc; view.gy = gy;
-        if (drag) { const w = toW(drag.sx, drag.sy); b2MouseJoint_SetTarget(drag.jid, V(w.x, w.y)); }
-        const px = x => (x - cx) * Sc + W / 2, py = y => gy - y * Sc;
-        g.clear().rect(0, py(-0.5), W, Hh).fill(0x232a47);
-        for (let k = Math.floor(cx - W / Sc / 2) - 1; k <= cx + W / Sc / 2 + 1; k++) g.rect(px(k) - 1, py(-0.5), 2, 8).fill(0x3a4570);
-        {
-          const pq = b2Body_GetPosition(D.plat), pa = b2Rot_GetAngle(b2Body_GetRotation(D.plat)), pc = Math.cos(pa), ps = Math.sin(pa), pp = [];
-          for (const [lx, ly] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const x = lx * PW, y = ly * HH; pp.push(px(pq.x + pc * x - ps * y), py(pq.y + ps * x + pc * y)); }
-          g.poly([px(-0.15), py(-HH), px(0.15), py(-HH), px(0.25), py(-0.5), px(-0.25), py(-0.5)]).fill(0x3a4570); g.poly(pp).fill(0x5a6aa0);
+      const drawJoint = (joint, radius, color, alpha) => {
+        const point = anchorOf(joint.a, joint.ax, joint.ay);
+        graphics.circle(toX(point.x), toY(point.y), radius * scale).fill({ color, alpha });
+      };
+      const drawArm = (joints, color, alpha) => {
+        const shoulder = anchorOf(joints[0].a, joints[0].ax, joints[0].ay);
+        const elbowA = anchorOf(joints[1].a, joints[1].ax, joints[1].ay);
+        const elbowB = anchorOf(joints[1].b, joints[1].bx, joints[1].by);
+        const wrist = anchorOf(joints[2].a, joints[2].ax, joints[2].ay);
+        const elbow = { x: (elbowA.x + elbowB.x) / 2, y: (elbowA.y + elbowB.y) / 2 };
+        graphics.moveTo(toX(shoulder.x), toY(shoulder.y))
+          .lineTo(toX(elbow.x), toY(elbow.y))
+          .lineTo(toX(wrist.x), toY(wrist.y))
+          .stroke({ width: armHalfWidth * 2 * scale, color, alpha, cap: "round", join: "round" });
+      };
+      for (const index of [5, 6, 7]) drawPart(index);
+      for (const joint of leftKnees) drawJoint(joint, 0.055, limbColor(5), 0.6);
+      for (const index of [2, 3, 4]) drawPart(index);
+      drawArm(leftArmJoints, limbColor(2), 0.6);
+      for (const index of [0, 1]) drawPart(index);
+      if (hipMarks.length === 2) {
+        let hipX = 0;
+        let hipY = 0;
+        for (const joint of hipMarks) {
+          const part = world.parts[joint.a];
+          const position = b2Body_GetPosition(part.id);
+          const angle = b2Rot_GetAngle(b2Body_GetRotation(part.id));
+          const cosine = Math.cos(angle);
+          const sine = Math.sin(angle);
+          hipX += position.x + cosine * joint.ax - sine * joint.ay;
+          hipY += position.y + sine * joint.ax + cosine * joint.ay;
         }
-        for (const i of order) {
-          const p = D.P[i], pos = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id)), c = Math.cos(a), s = Math.sin(a), pts = [];
-          for (const [lx, ly] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const x = lx * p.hx, y = ly * p.hy; pts.push(px(pos.x + c * x - s * y), py(pos.y + s * x + c * y)); }
-          if (p.circle) { g.circle(px(pos.x), py(pos.y), p.r * Sc).fill(0xe8b86a); continue; }
-          g.poly(pts).fill({ color: i < 2 ? COL[i] : COL[2 + (i - 2) % 6], alpha: i >= 8 ? 0.6 : 1 });
-        }
-        {
-          const hips = [];
-          for (const j of D.J) {
-            if (!j.mark) continue;
-            const p = D.P[j.a], pos = b2Body_GetPosition(p.id), a = b2Rot_GetAngle(b2Body_GetRotation(p.id));
-            const c = Math.cos(a), s = Math.sin(a);
-            const x = pos.x + c * j.ax - s * j.ay, y = pos.y + s * j.ax + c * j.ay;
-            if (j.mark === 'hip') hips.push([x, y]);
-            else g.circle(px(x), py(y), (j.mark === 'knee' ? 0.055 : 0.045) * Sc).fill(0xf2d48a);
-          }
-          if (hips.length === 2) g.circle(px((hips[0][0] + hips[1][0]) / 2), py((hips[0][1] + hips[1][1]) / 2), D.P[0].hx * 1.1 * Sc).fill(0xe8b86a);
-        }
-        for (const o of objs) {
-          const q = b2Body_GetPosition(o.id), a = b2Rot_GetAngle(b2Body_GetRotation(o.id));
-          if (o.k.box) { const c = Math.cos(a), s = Math.sin(a), pts = []; for (const [lx, ly] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const x = lx * o.k.hx, y = ly * o.k.hx; pts.push(px(q.x + c * x - s * y), py(q.y + s * x + c * y)); } g.poly(pts).fill(o.k.c); }
-          else { const X = px(q.x), Y = py(q.y); g.circle(X, Y, o.k.r * Sc).fill(o.k.c); g.moveTo(X, Y).lineTo(X + Math.cos(-a) * o.k.r * Sc, Y + Math.sin(-a) * o.k.r * Sc).stroke({ width: 2, color: 0x12162a }); }
-        }
-        if (drag) { const q = b2Body_GetPosition(drag.p.id); g.moveTo(px(q.x), py(q.y)).lineTo(drag.sx, drag.sy).stroke({ width: 2, color: 0xffffff, alpha: 0.8 }); g.circle(drag.sx, drag.sy, 5).fill(0xffffff); }
-        if (aim) { g.moveTo(aim.sx0, aim.sy0).lineTo(aim.sx, aim.sy).stroke({ width: 2, color: 0xffffff, alpha: 0.8 }); g.circle(aim.sx0, aim.sy0, KINDS[+$('o').value].r * Sc || 8).fill({ color: KINDS[+$('o').value].c, alpha: 0.7 }); }
-        ch.clear(); const cw = Math.min(240, W - 24), chh = 70, x0 = W - cw - 12, y0 = 12, h = st.hist;
-        ch.roundRect(x0, y0, cw, chh, 6).fill({ color: 0x000000, alpha: 0.35 });
-        if (h.length > 1) {
-          const n = h.length, mx = 2.5, mn = 0;
-          for (const [key, c, sc] of [['m', 0x6f95ff, 1], ['b', 0x43d9ad, 1], ['s', 0xffb454, 2.5]]) {
-            h.forEach((q, i) => { const X = x0 + 4 + i / (n - 1) * (cw - 8), Y = y0 + chh - 4 - cl((q[key] * sc - mn) / (mx - mn), 0, 1) * (chh - 8); i ? ch.lineTo(X, Y) : ch.moveTo(X, Y); });
-            ch.stroke({ width: 1.5, color: c });
-          }
-        }
-        if (++fr % 8 === 0) {
-          const last = st.hist[st.hist.length - 1], ev = st.lastEval, m = ep.m;
-          const upv = Math.max(0, Math.cos(m.a));
-          const pose = isUp(m) ? 'de pie' : ((m.handOn || m.shinOn) && !m.touch[0] ? 'apoyado en manos' : (upv < 0.35 && m.bodyOn ? 'acostado' : (m.bodyOn ? 'en el suelo' : '')));
-          tx.style.fill = 0xff4455;
-          const evTxt = !ev ? '' : `  ·  eval arriba ${Math.round((ev.supine?.up || 0) * 100)}% abajo ${Math.round((ev.prone?.up || 0) * 100)}% parado ${Math.round((ev.up?.up || 0) * 100)}%`;
-          const pz = prizeBreakdown(m);
-          paintPanels(ep, pz);
-          tx.text = `gen ${st.gen}  ·  ${followBest() ? 'mejor' : 'vivo'}${evTxt}\nCabeza ${m.hy.toFixed(2)} m  ·  |α| ${(Math.abs(m.a) * 180 / Math.PI).toFixed(0)}°  ·  apertura ${(m.stance || 0).toFixed(2)} m  ·  ${pose}\n${status()}`;
-        }
-        drawNet(ep);
-      });
-      async function pollWeights() {
-        try {
-          const c = await fetch('weights.json?t=' + Date.now()).then(r => r.ok ? r.json() : null);
-          if (!c || !(c.theta || c.thetaStand) || !(padWeights(c.theta) || padWeights(c.thetaStand))) return;
-          fileNet = fromWeights(c);
-          st.gen = c.gen; st.bestGen = c.bestStandGen ?? c.bestGen; st.fromFile = true;
-          st.bestStandGen = c.bestStandGen ?? c.bestGen; st.bestGetupGen = c.bestGetupGen;
-          st.lastEval = c.eval || st.lastEval;
-          if (c.hist) st.hist = c.hist;
-          st.thetaStand = fileNet.thetaStand; st.thetaSupine = fileNet.thetaSupine; st.thetaProne = fileNet.thetaProne;
-          st.thetaGetup = fileNet.thetaSupine; st.theta = fileNet.thetaStand;
-          st.bestStand = fileNet.bestStand; st.bestSupine = fileNet.bestSupine; st.bestProne = fileNet.bestProne;
-          st.bestGetup = fileNet.bestSupine; st.bestTheta = fileNet.bestStand;
-          if (!paused) return;
-          if (followBest()) {
-            const b = c.bestStandGen ?? c.bestGen ?? -1;
-            if (b !== nodeBestGen && st.bestStand) { nodeBestGen = b; newEp(); }
-            else if (ep && ep.fallen && downN > 1200) { newEp(); downN = 0; }
-          } else if ($('fwLive').checked && c.gen !== nodeGen) {
-            nodeGen = c.gen;
-            if (ep && ep.policy) {
-              ep.policy.stand = st.thetaStand;
-              ep.policy.supine = st.thetaSupine;
-              ep.policy.prone = st.thetaProne;
-              ep.policy.getup = st.thetaSupine;
-              const use = ep.activeNet === 'stand' ? st.thetaStand : ep.activeNet === 'prone' ? st.thetaProne : st.thetaSupine;
-              if (use) ep.w = use;
-              if (ep.fallen && downN > 1200) { newEp(); downN = 0; }
-            }
-          }
-        } catch (e) { }
+        const torso = world.parts[0];
+        const torsoAngle = b2Rot_GetAngle(b2Body_GetRotation(torso.id));
+        const frontX = Math.cos(torsoAngle);
+        const frontY = Math.sin(torsoAngle);
+        const tailRadius = torso.hx * 1.1;
+        graphics.circle(
+          toX(hipX / 2 + frontX * (torso.hx - tailRadius)),
+          toY(hipY / 2 + frontY * (torso.hx - tailRadius)),
+          tailRadius * scale,
+        ).fill(pantsColor);
       }
-      pollWeights();
-      setInterval(pollWeights, 1000);
-    } catch (e) { $('err').textContent = 'Error: ' + e.message; console.error(e); }
+      for (const index of [11, 12, 13]) drawPart(index);
+      for (const joint of rightKnees) drawJoint(joint, 0.055, limbColor(11), 1);
+      for (const index of [8, 9, 10]) drawPart(index);
+      drawArm(rightArmJoints, limbColor(8), 1);
+      for (const thrown of objects) {
+        const position = b2Body_GetPosition(thrown.id);
+        if (thrown.kind.box) {
+          const angle = b2Rot_GetAngle(b2Body_GetRotation(thrown.id));
+          const cosine = Math.cos(angle);
+          const sine = Math.sin(angle);
+          const points = [];
+          for (const [signX, signY] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+            points.push(toX(position.x + cosine * signX * thrown.kind.half - sine * signY * thrown.kind.half), toY(position.y + sine * signX * thrown.kind.half + cosine * signY * thrown.kind.half));
+          }
+          graphics.poly(points).fill(thrown.kind.color);
+        } else graphics.circle(toX(position.x), toY(position.y), thrown.kind.radius * scale).fill(thrown.kind.color);
+      }
+      if (++frameSkip % 8 === 0) {
+        const scored = scoreDecision(episode.m);
+        paintScore(scored);
+        drawStrongestPaths();
+        const last = state.hist[state.hist.length - 1];
+        const pose = isStanding(episode.m) ? "standing" : (episode.m.handOn ? "on hands" : (episode.m.bodyOn ? "on the floor" : "in the air"));
+        const goal = episode.options.goalX == null ? "" : " · goal " + Math.abs(episode.options.goalX - episode.m.centerX).toFixed(1) + " m";
+        const fitness = last ? " · mean " + last.mean.toFixed(2) + " best " + last.best.toFixed(2) : "";
+        $("status").textContent = "Generation " + state.gen + " · watching " + watchName() + (paused ? " · paused" : "") + " · " + pool.workers.length + " workers" + fitness;
+        label.text = "Head " + (episode.m.headHeight || 0).toFixed(2) + " m · torso " + (Math.abs(episode.m.torsoAngle) * 180 / Math.PI).toFixed(0) + "° · " + pose + goal;
+      }
+      drawChart();
+    });
+
+    function drawChart() {
+      chart.clear();
+      const width = Math.min(240, app.screen.width - 24);
+      const height = 70;
+      const originX = app.screen.width - width - 12;
+      chart.roundRect(originX, 12, width, height, 6).fill({ color: 0x000000, alpha: 0.35 });
+      const history = state.hist;
+      if (history.length < 2) return;
+      for (const [key, color] of [["mean", 0x6f95ff], ["best", 0x43d9ad]]) {
+        history.forEach((sample, index) => {
+          const x = originX + 4 + index / (history.length - 1) * (width - 8);
+          const y = 12 + height - 4 - clamp((sample[key] + 2) / 10, 0, 1) * (height - 8);
+          if (index) chart.lineTo(x, y);
+          else chart.moveTo(x, y);
+        });
+        chart.stroke({ width: 1.5, color });
+      }
+    }
+    function drawStrongestPaths() {
+      const canvas = $("diagram");
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      if (width < 20 || !episode || !episode.x || !episode.h || !episode.w) return;
+      const ratio = Math.min(2, devicePixelRatio || 1);
+      if (canvas.width !== Math.floor(width * ratio)) { canvas.width = Math.floor(width * ratio); canvas.height = Math.floor(height * ratio); }
+      const context = canvas.getContext("2d");
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      context.font = "12px system-ui,sans-serif";
+      context.fillStyle = "#9aa3c7";
+      context.fillText("Strongest paths only", 8, 16);
+      const hidden = episode.h;
+      const input = episode.x;
+      const weights = episode.w;
+      const stride = 1 + inputCount + hidden.length;
+      const ranked = [...Array(hidden.length).keys()].sort((a, b) => Math.abs(hidden[b]) - Math.abs(hidden[a])).slice(0, 4);
+      context.font = "11px system-ui,sans-serif";
+      ranked.forEach((unit, row) => {
+        const y = 36 + row * 28;
+        context.fillStyle = "#e7e9f5";
+        context.fillText("h" + unit, 8, y);
+        let bestIndex = 0;
+        let best = 0;
+        const base = unit * stride + 1;
+        for (let i = 0; i < inputCount; i++) {
+          const contribution = Math.abs(weights[base + i] * input[i]);
+          if (contribution > best) { best = contribution; bestIndex = i; }
+        }
+        const label = observationLabel(bestIndex);
+        context.fillStyle = weights[base + bestIndex] >= 0 ? "#3ecf8e" : "#ff4d5a";
+        context.fillText(label.name, 36, y);
+      });
+    }
+
+    function rememberBest() {
+      const every = +$("snapshotEvery").value || 100;
+      if (!state.gen || state.gen % every !== 0) return;
+      if (!state.bestEverTheta) return;
+      if (!state.snapshots) state.snapshots = [];
+      const previous = state.snapshots[state.snapshots.length - 1];
+      if (previous && !(state.bestEverScore > previous.score)) return;
+      state.snapshots.push({
+        gen: state.gen,
+        score: state.bestEverScore,
+        weights: Float32Array.from(state.bestEverTheta),
+      });
+      if (state.snapshots.length > 40) state.snapshots.shift();
+      fillSavedList();
+    }
+    function fillSavedList() {
+      const select = $("savedNet");
+      const current = select.value;
+      select.innerHTML = "";
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "—";
+      select.appendChild(blank);
+      for (const item of state.snapshots || []) {
+        const option = document.createElement("option");
+        option.value = String(item.gen);
+        option.textContent = "gen " + item.gen + " · " + Number(item.score).toFixed(2);
+        select.appendChild(option);
+      }
+      const keep = [...select.options].some((option) => option.value === current);
+      select.value = keep ? current : "";
+      if (current && !keep && !$("watchParent").checked && !$("watchGeneration").checked && !$("watchEver").checked) {
+        $("watchParent").checked = true;
+      }
+    }
+    function saveSession() {
+      try {
+        const pack = (weights) => weights ? Array.from(weights, (value) => +value.toFixed(4)) : null;
+        localStorage.setItem("ragdoll-panel", JSON.stringify({
+          gen: state.gen,
+          theta: pack(state.theta),
+          bestGenTheta: pack(state.bestGenTheta),
+          bestEverTheta: pack(state.bestEverTheta),
+          bestEverScore: state.bestEverScore,
+          eliteScore: state.eliteScore,
+          hist: state.hist.slice(-80),
+          snapshots: (state.snapshots || []).slice(-40).map((item) => ({
+            gen: item.gen, score: item.score, weights: pack(item.weights),
+          })),
+        }));
+      } catch (error) { /* a full history can exceed the quota; the run still continues */ }
+    }
+    function loadSession() {
+      try {
+        const saved = JSON.parse(localStorage.getItem("ragdoll-panel") || "null");
+        if (!saved || !saved.theta) return null;
+        const parent = padWeights(saved.theta);
+        if (!parent) return null;
+        const revived = freshState(randomNormal);
+        revived.theta = parent;
+        revived.gen = saved.gen || 0;
+        revived.bestGenTheta = padWeights(saved.bestGenTheta) || parent.slice();
+        revived.bestEverTheta = padWeights(saved.bestEverTheta) || parent.slice();
+        revived.bestEverScore = saved.bestEverScore ?? -1e9;
+        revived.eliteScore = saved.eliteScore ?? -1e9;
+        revived.hist = saved.hist || [];
+        revived.snapshots = (saved.snapshots || []).slice(-40).map((item) => ({
+          gen: item.gen,
+          score: item.score,
+          weights: padWeights(item.weights),
+        })).filter((item) => item.weights);
+        revived.m = new Float32Array(parent.length);
+        revived.v = new Float32Array(parent.length);
+        return revived;
+      } catch (error) { return null; }
+    }
   </script>
 </body>
 </html>
