@@ -292,6 +292,7 @@ export class NeuralRagDollWorld {
     };
 
     this.app.ticker.add((ticker) => {
+      this.episode.measure.recordRays = this.$("viewRays").checked;
       this.accumulator += Math.min(ticker.deltaMS, 50);
       while (this.accumulator >= 1000 / config.physics.hz) {
         this.accumulator -= 1000 / config.physics.hz;
@@ -392,6 +393,13 @@ export class NeuralRagDollWorld {
           }
           this.throws.poly(points).fill(thrown.kind.color);
         } else this.throws.circle(toX(position.x), toY(position.y), thrown.kind.radius * scale).fill(thrown.kind.color);
+      }
+      if (this.$("viewRays").checked) {
+        for (const ray of this.episode.measure.rays || []) {
+          const color = !ray.hit ? 0x8b93b0 : ray.gap < 0.02 ? 0xff4d5a : ray.gap < 0.35 ? 0xffb020 : 0x3ecf8e;
+          this.throws.moveTo(toX(ray.x0), toY(ray.y0)).lineTo(toX(ray.x1), toY(ray.y1)).stroke({ width: 1.5, color, alpha: ray.hit ? 0.95 : 0.35 });
+          if (ray.hit) this.throws.circle(toX(ray.x1), toY(ray.y1), 3).fill(color);
+        }
       }
       if (++this.frameSkip % 8 === 0) {
         const scored = scoreDecision(this.episode.measure);

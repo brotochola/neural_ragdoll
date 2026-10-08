@@ -88,6 +88,7 @@ export function createSim(box) {
     b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake, b2Body_GetLinearVelocity,
     b2Body_GetAngularVelocity, b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed,
     CreateCircle, b2DestroyBody, b2World_CastRay, b2DefaultQueryFilter, b2Shape_GetFilter,
+    b2Shape_GetBody, b2Body_GetType, b2World_OverlapAABB, b2Shape_RayCast,
   } = box;
   const dynamicBody = b2BodyType.b2_dynamicBody;
   const staticBody = b2BodyType.b2_staticBody;
@@ -187,20 +188,47 @@ export function createSim(box) {
     return fraction;
   }
 
-  function clearanceOf(part, platformPosition, platformCos, platformSin) {
-    const position = b2Body_GetPosition(part.id);
-    const angle = b2Rot_GetAngle(b2Body_GetRotation(part.id));
+  // ponytail: one cast per shape. b2World_CastRay rewrites its ray after the first fixture, so the platform under the ground is invisible. A dynamic floor needs a category bit.
+  function floorGap(worldId, x, y, rays) {
+    const lift = 0.25;
+    const reach = 4;
+    const length = lift + reach;
+    const originY = y + lift;
+    let gap = reach;
+    let hit = false;
+    const origin = vector(x, originY);
+    const translation = vector(0, -length);
+    b2World_OverlapAABB(worldId, {
+      lowerBoundX: x - 0.01, lowerBoundY: originY - length, upperBoundX: x + 0.01, upperBoundY: originY,
+    }, queryFilter, (shapeId) => {
+      if (b2Shape_GetFilter(shapeId).groupIndex === -1) return true;
+      if (b2Body_GetType(b2Shape_GetBody(shapeId)) === dynamicBody) return true;
+      const cast = b2Shape_RayCast(shapeId, origin, translation);
+      if (cast.hit && cast.fraction >= 0 && cast.fraction <= 1) {
+        hit = true;
+        gap = Math.min(gap, cast.fraction * length - lift);
+      }
+      return true;
+    }, 0);
+    if (rays) rays.push({ x0: x, y0: y, x1: x, y1: hit ? y - gap : y - reach, hit, gap });
+    return { gap, hit };
+  }
+
+  function partClearance(worldId, part, position, angle, rays) {
+    let gap = 4;
+    if (part.circle) {
+      const radius = part.r;
+      for (const [offsetX, offsetY] of [[0, -radius], [radius, 0], [0, radius], [-radius, 0]]) {
+        gap = Math.min(gap, floorGap(worldId, position.x + offsetX, position.y + offsetY, rays).gap);
+      }
+      return gap;
+    }
     const cosine = Math.cos(angle);
     const sine = Math.sin(angle);
-    let gap = 1e9;
     for (const [signX, signY] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
       const worldX = position.x + cosine * signX * part.hx - sine * signY * part.hy;
       const worldY = position.y + sine * signX * part.hx + cosine * signY * part.hy;
-      const localX = platformCos * (worldX - platformPosition.x) + platformSin * (worldY - platformPosition.y);
-      const localY = -platformSin * (worldX - platformPosition.x) + platformCos * (worldY - platformPosition.y);
-      const outsideX = Math.abs(localX) - config.body.platformHalfWidth;
-      const outsideY = Math.abs(localY) - config.body.platformHalfThickness;
-      gap = Math.min(gap, outsideX > 0 && outsideY > 0 ? Math.hypot(outsideX, outsideY) : Math.max(outsideX, outsideY), worldY + 0.5);
+      gap = Math.min(gap, floorGap(worldId, worldX, worldY, rays).gap);
     }
     return gap;
   }
@@ -231,10 +259,6 @@ export function createSim(box) {
 
   function fillMeasure(world, measure) {
     const platformAngleNow = b2Rot_GetAngle(b2Body_GetRotation(world.platformId));
-    const slope = Math.tan(platformAngleNow);
-    const platformPosition = b2Body_GetPosition(world.platformId);
-    const platformCos = Math.cos(platformAngleNow);
-    const platformSin = Math.sin(platformAngleNow);
     let mass = 0;
     let momentX = 0;
     let momentY = 0;
@@ -244,6 +268,7 @@ export function createSim(box) {
     const head = world.parts[config.partIndex.head];
     const footLeft = world.parts[config.partIndex.footLeft];
     const footRight = world.parts[config.partIndex.footRight];
+    const rays = measure.recordRays ? (measure.rays = []) : null;
     for (let i = 0; i < world.parts.length; i++) {
       const part = world.parts[i];
       const position = b2Body_GetPosition(part.id);
@@ -253,10 +278,12 @@ export function createSim(box) {
       measure.partVelocityX[i] = vx;
       measure.partVelocityY[i] = vy;
       measure.partSpin[i] = b2Body_GetAngularVelocity(part.id);
-      const height = position.y - position.x * slope;
+      const angle = b2Rot_GetAngle(b2Body_GetRotation(part.id));
+      const above = floorGap(world.worldId, position.x, position.y, rays);
+      const height = above.hit ? above.gap : position.y;
       measure.partHeight[i] = height;
-      measure.partAngle[i] = b2Rot_GetAngle(b2Body_GetRotation(part.id));
-      measure.clearance[i] = clearanceOf(part, platformPosition, platformCos, platformSin);
+      measure.partAngle[i] = angle;
+      measure.clearance[i] = partClearance(world.worldId, part, position, angle, rays);
       measure.touch[i] = measure.clearance[i] < config.body.touchGapMeters;
       mass += part.m;
       momentX += part.m * position.x;
@@ -297,8 +324,11 @@ export function createSim(box) {
       const angle = b2Rot_GetAngle(b2Body_GetRotation(foot.id));
       const cosine = Math.cos(angle);
       const sine = Math.sin(angle);
-      measure.sole[soleCursor++] = Math.max(0, position.y - sine * foot.hx - cosine * foot.hy - (position.x - cosine * foot.hx + sine * foot.hy) * slope);
-      measure.sole[soleCursor++] = Math.max(0, position.y + sine * foot.hx - cosine * foot.hy - (position.x + cosine * foot.hx + sine * foot.hy) * slope);
+      for (const signX of [-1, 1]) {
+        const worldX = position.x + cosine * signX * foot.hx + sine * foot.hy;
+        const worldY = position.y + sine * signX * foot.hx - cosine * foot.hy;
+        measure.sole[soleCursor++] = Math.max(0, floorGap(world.worldId, worldX, worldY, rays).gap);
+      }
     }
     measure.handOn = !!(measure.touch[config.partIndex.handLeft] || measure.touch[config.partIndex.handRight]);
     measure.bodyOn = false;
@@ -315,7 +345,6 @@ export function createSim(box) {
 
   // Pose one physics frame ahead if every part keeps its current speed. No collision, motor, or joint.
   function predictMeasure(world, measure, dt) {
-    const slope = Math.tan(measure.platformAngle || 0);
     const count = world.parts.length;
     const predicted = {
       partAngle: new Float32Array(count),
@@ -340,11 +369,11 @@ export function createSim(box) {
       const part = world.parts[i];
       const position = b2Body_GetPosition(part.id);
       const x = position.x + (measure.partVelocityX[i] || 0) * dt;
-      const y = position.y + (measure.partVelocityY[i] || 0) * dt;
+      const rise = (measure.partVelocityY[i] || 0) * dt;
       aheadX[i] = x;
       predicted.partAngle[i] = (measure.partAngle[i] || 0) + (measure.partSpin[i] || 0) * dt;
-      predicted.partHeight[i] = y - x * slope;
-      predicted.clearance[i] = (measure.clearance[i] || 0) + (measure.partVelocityY[i] || 0) * dt;
+      predicted.partHeight[i] = (measure.partHeight[i] || 0) + rise;
+      predicted.clearance[i] = (measure.clearance[i] || 0) + rise;
       predicted.touch[i] = predicted.clearance[i] < config.body.touchGapMeters;
       mass += part.m;
       momentX += part.m * x;
@@ -363,15 +392,11 @@ export function createSim(box) {
     predicted.stanceWidth = Math.abs(predicted.footXLeft - predicted.footXRight);
     let soleCursor = 0;
     for (const index of [footLeft, footRight]) {
-      const foot = world.parts[index];
-      const position = b2Body_GetPosition(foot.id);
-      const x = position.x + (measure.partVelocityX[index] || 0) * dt;
-      const y = position.y + (measure.partVelocityY[index] || 0) * dt;
-      const angle = predicted.partAngle[index];
-      const cosine = Math.cos(angle);
-      const sine = Math.sin(angle);
-      predicted.sole[soleCursor++] = Math.max(0, y - sine * foot.hx - cosine * foot.hy - (x - cosine * foot.hx + sine * foot.hy) * slope);
-      predicted.sole[soleCursor++] = Math.max(0, y + sine * foot.hx - cosine * foot.hy - (x + cosine * foot.hx + sine * foot.hy) * slope);
+      const rise = (measure.partVelocityY[index] || 0) * dt;
+      for (let corner = 0; corner < 2; corner++) {
+        predicted.sole[soleCursor] = Math.max(0, (measure.sole[soleCursor] || 0) + rise);
+        soleCursor++;
+      }
     }
     if (measure.goalDistanceMeters != null) {
       predicted.goalDistanceMeters = measure.goalDistanceMeters - (predicted.centerX - measure.centerX);

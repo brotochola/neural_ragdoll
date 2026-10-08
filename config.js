@@ -3,7 +3,7 @@
 const physicsHz = 60;
 const partCount = 14;
 const sensedInputCount = 82;
-const rewardRowCount = 25;
+const rewardRowCount = 26;
 const partSpeedInputCount = partCount * 3;
 const rewardTotalNow = true;
 const rewardTotalPrevious = true;
@@ -26,7 +26,7 @@ export const config = {
   },
   net: {
     hidden1Ratio: 4 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
-    hidden2Ratio: 4 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
+    hidden2Ratio: 16 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
     jointCount: 13, // Motor joints, and the width of the action vector.
     sensedInputCount, // Observation length before part speeds and reward rows. Goal x is 79, goal y is 80, standing is 81.
     goalInputIndex: 79, // Index of the goal-x observation. Goal y is the next index.
@@ -77,6 +77,7 @@ export const config = {
     handOnFloor: 0.05, // Penalty weight while a hand is near the floor.
     handPark: 1.5, // Extra hand penalty once the torso is already upright.
     thighOnFloor: 0.5, // Penalty weight while a thigh is near the floor.
+    tailOnFloor: 1.5, // Penalty weight while the tail is near the floor. Not gated by an upright torso.
     thighSpread: 2, // Penalty weight for a thigh angle outside the standing band, only while upright.
     footInAir: 1.5, // Penalty weight per foot off the floor, only while upright.
     balance: 1.6, // Weight of the center of mass against the midpoint of the feet.
@@ -230,6 +231,7 @@ export const config = {
     thighRight: 11,
     shinRight: 12,
     footRight: 13,
+    hip: 14, // Tail circle welded under the torso. Not one of the 14 speed inputs.
   },
 };
 

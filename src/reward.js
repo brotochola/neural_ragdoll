@@ -79,6 +79,13 @@ export function scoreDecision(measure) {
   const thighClear = (index) => 1 - clamp((measure.clearance?.[index] ?? 1) / config.body.thighClearMeters, 0, 1);
   rows.push({ name: "Left thigh clearance", tip: thighTip, value: -weight.thighOnFloor * thighClear(part.thighLeft) });
   rows.push({ name: "Right thigh clearance", tip: thighTip, value: -weight.thighOnFloor * thighClear(part.thighRight) });
+  // La cola resta aunque el torso siga tumbado. Sentarse en ella no es levantarse.
+  const tailClose = 1 - clamp((measure.clearance?.[part.hip] ?? 1) / config.body.thighClearMeters, 0, 1);
+  rows.push({
+    name: "Tail",
+    tip: "Subtracts while the tail is within 35 cm of the floor. Not gated by the torso, so sitting on it costs during a get-up.",
+    value: -weight.tailOnFloor * tailClose,
+  });
   let spread = Math.abs((angle[part.thighLeft] || 0) - (angle[part.thighRight] || 0)) % (Math.PI * 2);
   if (spread > Math.PI) spread = Math.PI * 2 - spread;
   const spreadPenalty = spread < config.body.thighSpreadMinRadians
