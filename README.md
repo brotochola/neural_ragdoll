@@ -28,7 +28,9 @@ The fitness of an episode is the average of those samples.
 
 ## Reward rows
 
-Each row is one measurement. Green adds, red subtracts. The large **Standing** bonus needs both feet down, nothing else touching, an upright torso, and a high head.
+Each row is one measurement. Green adds, red subtracts. The large **Standing** bonus needs both feet down, nothing else touching, an upright torso, and a high head. A true stand adds one more point, and that same 0 or 1 is the last network input.
+
+**Thigh spread** subtracts when the thighs are closer than 10° or wider than 60°, on the floor as well as standing. A step in between adds nothing.
 
 Angles are the cosine of that bone: +1 is vertical, 0 is on its side, -1 is upside down.
 

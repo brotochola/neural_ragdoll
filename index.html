@@ -121,7 +121,7 @@
   <script type="module">
     import { CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2DestroyBody, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Vec2 } from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
     import * as Box2D from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
-    import { actionEveryNFrames, physicsHz, inputCount, platformHalfWidth, platformHalfThickness } from "./config.js";
+    import { actionEveryNFrames, physicsHz, inputCount, partIndex, platformHalfWidth, platformHalfThickness } from "./config.js";
     import { scoreDecision, isStanding, clamp } from "./src/reward.js";
     import { askGeneration, tellGeneration, freshState, makeRandom, padWeights } from "./src/net.js";
     import { createSim, observationLabels, jointNames, thrownKinds } from "./src/sim.js";
@@ -180,11 +180,13 @@
         const generationState = state;
         try {
           const generation = askGeneration(generationState, sim.situation(random, $("trainPose").value), Math.max(4, pool.workers.length), randomNormal);
+          const starts = [];
+          for (let pair = 0; pair < generation.count; pair++) starts.push(sim.varyStart(generation.situation, random));
           const tasks = generation.weights.map((weights, index) => ({
             index,
             weights,
             phase: index % actionEveryNFrames,
-            options: generation.situation,
+            options: starts[Math.floor(index / 2)] || generation.situation,
           }));
           const scores = await evaluatePopulation(tasks);
           if (state !== generationState) continue;
@@ -316,10 +318,13 @@
     await app.init({ resizeTo: host, background: 0x12162a, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
     host.appendChild(app.canvas);
     const graphics = new PIXI.Graphics();
+    const throws = new PIXI.Graphics();
     const chart = new PIXI.Graphics();
+    const doll = new PIXI.Container();
+    doll.sortableChildren = true;
     const label = new PIXI.Text({ text: "", style: { fill: 0xdfe4ff, fontSize: 13, fontFamily: "system-ui,sans-serif", lineHeight: 18 } });
     label.position.set(12, 10);
-    app.stage.addChild(graphics, chart, label);
+    app.stage.addChild(graphics, doll, throws, chart, label);
     resetEpisode();
     trainLoop();
 
@@ -327,17 +332,58 @@
     canvas.style.touchAction = "none";
     const colors = [0x4f8cff, 0xffd166, 0x7aa2ff, 0x7aa2ff, 0xffd166, 0x43d9ad, 0x43d9ad, 0xf78c6c];
     const limbColor = (index) => colors[2 + (index - 2) % 6];
-    const pantsColor = limbColor(5);
-    const leftArmJoints = world.joints.slice(1, 4);
-    const rightArmJoints = world.joints.slice(7, 10);
-    const armHalfWidth = world.parts[2].hx;
-    const leftKnees = [];
-    const rightKnees = [];
-    const hipMarks = [];
-    for (const joint of world.joints) {
-      if (joint.mark === "knee") (joint.a < 8 ? leftKnees : rightKnees).push(joint);
-      else if (joint.mark === "hip") hipMarks.push(joint);
-    }
+    const pantsColor = limbColor(partIndex.thighLeft);
+    const darken = (color) => {
+      const scale = 0.62;
+      const red = (color >> 16) & 255;
+      const green = (color >> 8) & 255;
+      const blue = color & 255;
+      return (Math.round(red * scale) << 16) | (Math.round(green * scale) << 8) | Math.round(blue * scale);
+    };
+    const partColor = (index) => {
+      if (index < 2) return colors[index];
+      const color = limbColor(index);
+      return index < partIndex.upperArmRight ? darken(color) : color;
+    };
+    const solidTexture = (circle) => {
+      const size = 32;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      if (circle) {
+        context.beginPath();
+        context.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+        context.fill();
+      } else context.fillRect(0, 0, size, size);
+      return PIXI.Texture.from(canvas);
+    };
+    const boxTexture = solidTexture(false);
+    const circleTexture = solidTexture(true);
+    let depth = 1;
+    const addDollSprite = (texture, tint) => {
+      const sprite = new PIXI.Sprite(texture);
+      sprite.anchor.set(0.5);
+      sprite.tint = tint;
+      sprite.zIndex = depth++;
+      doll.addChild(sprite);
+      return sprite;
+    };
+    const partSprites = [];
+    const addPartSprite = (index) => {
+      partSprites[index] = addDollSprite(boxTexture, partColor(index));
+    };
+    for (const index of [partIndex.thighLeft, partIndex.shinLeft, partIndex.footLeft]) addPartSprite(index);
+    const leftKnee = world.joints.find((joint) => joint.mark === "knee" && joint.a === partIndex.thighLeft);
+    const leftKneeSprite = addDollSprite(circleTexture, partColor(partIndex.thighLeft));
+    for (const index of [partIndex.upperArmLeft, partIndex.forearmLeft, partIndex.handLeft, partIndex.torso, partIndex.head]) addPartSprite(index);
+    const tailSprite = addDollSprite(circleTexture, pantsColor);
+    const hipMarks = world.joints.filter((joint) => joint.mark === "hip");
+    for (const index of [partIndex.thighRight, partIndex.shinRight, partIndex.footRight]) addPartSprite(index);
+    const rightKnee = world.joints.find((joint) => joint.mark === "knee" && joint.a === partIndex.thighRight);
+    const rightKneeSprite = addDollSprite(circleTexture, partColor(partIndex.thighRight));
+    for (const index of [partIndex.upperArmRight, partIndex.forearmRight, partIndex.handRight]) addPartSprite(index);
     let accumulator = 0;
     let frameSkip = 0;
 
@@ -438,77 +484,55 @@
         graphics.moveTo(toX(episode.options.goalX), toY(0)).lineTo(toX(episode.options.goalX), toY(1.2)).stroke({ width: 3, color: 0x43d9ad });
         graphics.circle(toX(episode.options.goalX), toY(1.2), 7).fill(0x43d9ad);
       }
-      const drawPart = (index) => {
+      const placePart = (index) => {
         const part = world.parts[index];
+        const sprite = partSprites[index];
         const position = b2Body_GetPosition(part.id);
+        const x = position.x;
+        const y = position.y;
         const angle = b2Rot_GetAngle(b2Body_GetRotation(part.id));
-        const cosine = Math.cos(angle);
-        const sine = Math.sin(angle);
-        if (part.circle) { graphics.circle(toX(position.x), toY(position.y), part.r * scale).fill(pantsColor); return; }
-        const points = [];
-        for (const [signX, signY] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-          points.push(toX(position.x + cosine * signX * part.hx - sine * signY * part.hy), toY(position.y + sine * signX * part.hx + cosine * signY * part.hy));
-        }
-        const behind = index >= 2 && index < 8;
-        graphics.poly(points).fill({ color: index < 2 ? colors[index] : limbColor(index), alpha: behind ? 0.6 : 1 });
+        sprite.position.set(toX(x), toY(y));
+        sprite.rotation = -angle;
+        sprite.width = part.hx * 2 * scale;
+        sprite.height = part.hy * 2 * scale;
       };
-      const anchorOf = (partIndex, localX, localY) => {
-        const part = world.parts[partIndex];
+      const anchorOf = (joint) => {
+        const part = world.parts[joint.a];
         const position = b2Body_GetPosition(part.id);
         const x = position.x;
         const y = position.y;
         const angle = b2Rot_GetAngle(b2Body_GetRotation(part.id));
         const cosine = Math.cos(angle);
         const sine = Math.sin(angle);
-        return { x: x + cosine * localX - sine * localY, y: y + sine * localX + cosine * localY };
+        return { x: x + cosine * joint.ax - sine * joint.ay, y: y + sine * joint.ax + cosine * joint.ay };
       };
-      const drawJoint = (joint, radius, color, alpha) => {
-        const point = anchorOf(joint.a, joint.ax, joint.ay);
-        graphics.circle(toX(point.x), toY(point.y), radius * scale).fill({ color, alpha });
+      const placeKnee = (joint, sprite) => {
+        const point = anchorOf(joint);
+        sprite.position.set(toX(point.x), toY(point.y));
+        sprite.width = 0.11 * scale;
+        sprite.height = 0.11 * scale;
       };
-      const drawArm = (joints, color, alpha) => {
-        const shoulder = anchorOf(joints[0].a, joints[0].ax, joints[0].ay);
-        const elbowA = anchorOf(joints[1].a, joints[1].ax, joints[1].ay);
-        const elbowB = anchorOf(joints[1].b, joints[1].bx, joints[1].by);
-        const wrist = anchorOf(joints[2].a, joints[2].ax, joints[2].ay);
-        const elbow = { x: (elbowA.x + elbowB.x) / 2, y: (elbowA.y + elbowB.y) / 2 };
-        graphics.moveTo(toX(shoulder.x), toY(shoulder.y))
-          .lineTo(toX(elbow.x), toY(elbow.y))
-          .lineTo(toX(wrist.x), toY(wrist.y))
-          .stroke({ width: armHalfWidth * 2 * scale, color, alpha, cap: "round", join: "round" });
-      };
-      for (const index of [5, 6, 7]) drawPart(index);
-      for (const joint of leftKnees) drawJoint(joint, 0.055, limbColor(5), 0.6);
-      for (const index of [2, 3, 4]) drawPart(index);
-      drawArm(leftArmJoints, limbColor(2), 0.6);
-      for (const index of [0, 1]) drawPart(index);
+      for (const index of [partIndex.thighLeft, partIndex.shinLeft, partIndex.footLeft, partIndex.upperArmLeft, partIndex.forearmLeft, partIndex.handLeft, partIndex.torso, partIndex.head, partIndex.thighRight, partIndex.shinRight, partIndex.footRight, partIndex.upperArmRight, partIndex.forearmRight, partIndex.handRight]) placePart(index);
+      placeKnee(leftKnee, leftKneeSprite);
+      placeKnee(rightKnee, rightKneeSprite);
       if (hipMarks.length === 2) {
         let hipX = 0;
         let hipY = 0;
         for (const joint of hipMarks) {
-          const part = world.parts[joint.a];
-          const position = b2Body_GetPosition(part.id);
-          const angle = b2Rot_GetAngle(b2Body_GetRotation(part.id));
-          const cosine = Math.cos(angle);
-          const sine = Math.sin(angle);
-          hipX += position.x + cosine * joint.ax - sine * joint.ay;
-          hipY += position.y + sine * joint.ax + cosine * joint.ay;
+          const point = anchorOf(joint);
+          hipX += point.x;
+          hipY += point.y;
         }
-        const torso = world.parts[0];
+        const torso = world.parts[partIndex.torso];
         const torsoAngle = b2Rot_GetAngle(b2Body_GetRotation(torso.id));
         const frontX = Math.cos(torsoAngle);
         const frontY = Math.sin(torsoAngle);
         const tailRadius = torso.hx * 1.1;
-        graphics.circle(
-          toX(hipX / 2 + frontX * (torso.hx - tailRadius)),
-          toY(hipY / 2 + frontY * (torso.hx - tailRadius)),
-          tailRadius * scale,
-        ).fill(pantsColor);
+        tailSprite.position.set(toX(hipX / 2 + frontX * (torso.hx - tailRadius)), toY(hipY / 2 + frontY * (torso.hx - tailRadius)));
+        tailSprite.width = tailRadius * 2 * scale;
+        tailSprite.height = tailRadius * 2 * scale;
       }
-      for (const index of [11, 12, 13]) drawPart(index);
-      for (const joint of rightKnees) drawJoint(joint, 0.055, limbColor(11), 1);
-      for (const index of [8, 9, 10]) drawPart(index);
-      drawArm(rightArmJoints, limbColor(8), 1);
+      throws.clear();
       for (const thrown of objects) {
         const position = b2Body_GetPosition(thrown.id);
         if (thrown.kind.box) {
@@ -519,8 +543,8 @@
           for (const [signX, signY] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
             points.push(toX(position.x + cosine * signX * thrown.kind.half - sine * signY * thrown.kind.half), toY(position.y + sine * signX * thrown.kind.half + cosine * signY * thrown.kind.half));
           }
-          graphics.poly(points).fill(thrown.kind.color);
-        } else graphics.circle(toX(position.x), toY(position.y), thrown.kind.radius * scale).fill(thrown.kind.color);
+          throws.poly(points).fill(thrown.kind.color);
+        } else throws.circle(toX(position.x), toY(position.y), thrown.kind.radius * scale).fill(thrown.kind.color);
       }
       if (++frameSkip % 8 === 0) {
         const scored = scoreDecision(episode.m);

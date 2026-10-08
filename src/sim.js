@@ -11,6 +11,9 @@ import {
   touchGapMeters,
   episodeFrames,
   uprightStartChance,
+  startTiltJitterRadians,
+  startShiftMeters,
+  startDropJitterMeters,
   goalNearMeters,
   goalFarExtraMeters,
   motorGain,
@@ -78,6 +81,7 @@ function buildObservationLabels() {
     { name: "clear elbow R", tip: "Gap under the right forearm." },
     { name: "goal x", tip: "Horizontal distance to the marker, relative to the body. 0 means arrived." },
     { name: "goal y", tip: "Height of the marker above the floor. 0 while the marker is on the floor." },
+    { name: "standing", tip: "1 when the body is truly standing: both feet, nothing else down, upright, high head, a real stance, and quiet. Otherwise 0." },
   );
   return labels;
 }
@@ -230,7 +234,7 @@ export function createSim(box) {
     let lowest = Infinity;
     const placed = [];
     for (const part of world.parts) {
-      const x = cosine * part.cx - sine * (part.cy - 0.04);
+      const x = cosine * part.cx - sine * (part.cy - 0.04) + (options.shiftX || 0);
       const y = 0.04 + drop + sine * part.cx + cosine * (part.cy - 0.04);
       placed.push({ part, x, y });
       lowest = Math.min(lowest, y - Math.abs(sine) * part.hx - Math.abs(cosine) * part.hy);
@@ -460,6 +464,7 @@ export function createSim(box) {
       input[cursor++] = gap01(partIndex.forearmRight);
       input[cursor++] = measure.goalDx || 0;
       input[cursor++] = measure.goalDy || 0;
+      input[cursor++] = isStanding(measure) ? 1 : 0;
       if (cursor !== inputCount) throw new Error("observation length " + cursor);
       forwardInto(this.weights, input, this.hidden, this.nextHidden, this.action);
       this.previousAction.set(this.action);
@@ -571,6 +576,14 @@ export function createSim(box) {
     return down(randomSource() < 0.5 ? -1 : 1);
   }
 
+  function varyStart(base, randomSource) {
+    return Object.assign({}, base, {
+      tilt: (base.tilt || 0) + (randomSource() * 2 - 1) * startTiltJitterRadians,
+      drop: (base.drop || 0) + randomSource() * startDropJitterMeters,
+      shiftX: (randomSource() * 2 - 1) * startShiftMeters,
+    });
+  }
+
   function spawnThrown(world, kind, x, y, vx, vy) {
     const position = vector(x, y);
     const created = kind.box
@@ -581,7 +594,7 @@ export function createSim(box) {
   }
 
   return {
-    build, Episode, situation, spawnThrown, resetPose, platformHalfWidth, platformHalfThickness,
+    build, Episode, situation, varyStart, spawnThrown, resetPose, platformHalfWidth, platformHalfThickness,
     setRandom(seed) { random = makeLocalRandom(seed); },
     randomNormal,
   };

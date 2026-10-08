@@ -15,7 +15,7 @@ export const hiddenUnitCount = 20;
 export const jointCount = 13;
 // Previous joint count of inputs, kept so older saved weights can be padded.
 export const legacyInputCount = 79;
-export const inputCount = 81;
+export const inputCount = 82;
 export const hiddenLeak = 0.25;
 
 export const platformHalfWidth = 20;
@@ -32,6 +32,8 @@ export const headHeightMeters = 1.68;
 export const torsoHeightMeters = 1.26;
 export const handClearMeters = 0.15;
 export const thighClearMeters = 0.35;
+export const thighSpreadMinRadians = (10 * Math.PI) / 180;
+export const thighSpreadMaxRadians = (40 * Math.PI) / 180;
 export const balanceSpanMeters = 0.4;
 export const goalSpanMeters = 2.5;
 export const goalWalkSpeed = 0.5;
@@ -49,11 +51,13 @@ export const rewardWeight = {
   torsoHeight: 1.8,
   handOnFloor: 0.15,
   handPark: 1.5,
-  thighOnFloor: 0.35,
-  footInAir: 0.5,
-  balance: 0.6,
-  headImpact: 0.8,
+  thighOnFloor: 0.5,
+  thighSpread: 10,
+  footInAir: 1.5,
+  balance: 1.6,
+  headImpact: 2.8,
   standing: 5,
+  standingFlag: 3,
   stanceComfort: 0.4,
   goalDistanceUp: 0, //2,
   goalDistanceDown: 0, //0.7,
@@ -73,6 +77,9 @@ export const trainableJointIndexes = [1, 2, 4, 5, 6, 7, 8, 10, 11, 12];
 
 export const episodeFrames = 960;
 export const uprightStartChance = 0.55;
+export const startTiltJitterRadians = 0.12;
+export const startShiftMeters = 0.4;
+export const startDropJitterMeters = 0.06;
 export const motorGain = 12;
 export const motorSpeedLimit = 10;
 export const goalNearMeters = 1.2;

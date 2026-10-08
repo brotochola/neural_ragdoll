@@ -14,6 +14,8 @@ import {
   standingStanceMinMeters,
   standingStanceMaxMeters,
   comfortableStanceMeters,
+  thighSpreadMinRadians,
+  thighSpreadMaxRadians,
 } from "../config.js";
 
 export const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
@@ -84,6 +86,18 @@ export function scoreDecision(measure) {
   const thighClear = (index) => 1 - clamp((measure.clearance?.[index] ?? 1) / thighClearMeters, 0, 1);
   rows.push({ name: "Left thigh clearance", tip: thighTip, value: -weight.thighOnFloor * thighClear(part.thighLeft) });
   rows.push({ name: "Right thigh clearance", tip: thighTip, value: -weight.thighOnFloor * thighClear(part.thighRight) });
+  let spread = Math.abs((angle[part.thighLeft] || 0) - (angle[part.thighRight] || 0)) % (Math.PI * 2);
+  if (spread > Math.PI) spread = Math.PI * 2 - spread;
+  const spreadPenalty = spread < thighSpreadMinRadians
+    ? (thighSpreadMinRadians - spread) / thighSpreadMinRadians
+    : spread > thighSpreadMaxRadians
+      ? (spread - thighSpreadMaxRadians) / (Math.PI - thighSpreadMaxRadians)
+      : 0;
+  rows.push({
+    name: "Thigh spread",
+    tip: "Angle between the thighs. Subtracts below 10° and above 60°, including on the floor. A step in between adds nothing. A full split subtracts the whole weight.",
+    value: -weight.thighSpread * clamp(spreadPenalty, 0, 1),
+  });
 
   const footTip = "Subtracts while that foot is off the floor. A planted foot adds nothing by itself.";
   rows.push({ name: "Left foot", tip: footTip, value: measure.touch?.[part.footLeft] ? 0 : -weight.footInAir });
@@ -97,13 +111,14 @@ export function scoreDecision(measure) {
     value: weight.balance * (1 - 2 * lean),
   });
 
-  const impact = measure.clearance && measure.clearance[part.head] < 0.03 && measure.headVelocityY < -1
-    ? weight.headImpact * clamp(-measure.headVelocityY / 3, 0, 2)
-    : 0;
+  const headDown = Math.max(0, -(measure.headVelocityY || 0));
+  const headOnFloor = measure.touch?.[part.head] ? 1 : 0;
+  const headResting = headOnFloor * weight.headImpact;
+  const headStrike = headOnFloor && headDown > 1 ? weight.headImpact * clamp(headDown / 3, 0, 2) : 0;
   rows.push({
     name: "Head impact",
-    tip: "Subtracts only when the head is within 3 cm of the floor and still moving down fast.",
-    value: -impact,
+    tip: "Subtracts while the head is touching the floor. If it is also moving down faster than 1 m/s, it subtracts more, up to twice the weight again.",
+    value: -(headResting + headStrike),
   });
 
   const bothFeet = (measure.touch?.[part.footLeft] ? 1 : 0) + (measure.touch?.[part.footRight] ? 1 : 0);
@@ -118,8 +133,8 @@ export function scoreDecision(measure) {
   const stanceComfort = Math.exp(-14 * ((measure.stanceWidth || 0) - comfortableStanceMeters) ** 2);
   rows.push({
     name: "Standing",
-    tip: "The large bonus. Both feet down, nothing else touching, torso upright, head high. A stance near 29 cm adds a little more.",
-    value: onFeet * (weight.standing + weight.stanceComfort * stanceComfort),
+    tip: "The large bonus. Both feet down, nothing else touching, torso upright, head high. A stance near 29 cm adds a little more. A true stand, quiet and in a real stance, adds one more.",
+    value: onFeet * (weight.standing + weight.stanceComfort * stanceComfort) + (isStanding(measure) ? weight.standingFlag : 0),
   });
 
   const hasGoal = measure.goalDistanceMeters != null;
@@ -146,7 +161,7 @@ export function scoreDecision(measure) {
     if (row.name === "Goal speed" && !hasGoal) continue;
     if (row.name === "Goal distance") ceiling += weight.goalDistanceUp;
     else if (row.name === "Goal speed") ceiling += weight.goalSpeedUp;
-    else if (row.name === "Standing") ceiling += weight.standing + weight.stanceComfort;
+    else if (row.name === "Standing") ceiling += weight.standing + weight.stanceComfort + weight.standingFlag;
     else if (row.name === "Head height") ceiling += weight.headHeight;
     else if (row.name === "Torso height") ceiling += weight.torsoHeight;
     else if (row.value > 0 || row.name.endsWith("angle") || row.name.endsWith("arm") || row.name.endsWith("thigh") || row.name.endsWith("shin") || row.name === "Balance") {

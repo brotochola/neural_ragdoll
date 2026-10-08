@@ -34,7 +34,8 @@ const hiddenBlock = hiddenUnitCount * hiddenStride;
 function isGoalInputWeight(index) {
   if (index >= hiddenBlock) return false;
   const local = index % hiddenStride;
-  return local === inputCount - 1 || local === inputCount;
+  // Goal x, goal y, and the standing bit after them. The bit is trained, or it stays zero.
+  return local >= inputCount - 2 && local <= inputCount;
 }
 function explorationOf(index, scale) {
   if (isGoalInputWeight(index)) return scale;
