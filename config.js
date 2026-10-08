@@ -1,103 +1,207 @@
-// Every tuning number lives here. The sim, the reward, and the trainer read these names.
+// Every tuning number lives on this object. The sim, the reward, and the trainer read these names.
 
-export const physicsHz = 60;
-export const physicsTimeStep = 1 / physicsHz;
-// Box2D splits each frame into this many smaller solves. 4 was stiffer; 2 is the faster setting.
-export const solverSubsteps = 2;
+const physicsHz = 60;
+const partCount = 14;
+const sensedInputCount = 82;
+const rewardRowCount = 25;
+const partSpeedInputCount = partCount * 3;
 
-// The body holds an action for this many frames, then picks a new one.
-export const actionEveryNFrames = 10;
-// The score is sampled this often, not on the same frame as the new action.
-export const rewardEveryNFrames = 10;
-export const rewardFrameOffset = 5;
-
-export const hiddenUnitCount = 20;
-export const jointCount = 13;
-// Previous joint count of inputs, kept so older saved weights can be padded.
-export const legacyInputCount = 79;
-export const inputCount = 82;
-export const hiddenLeak = 0.25;
-
-export const platformHalfWidth = 20;
-export const platformHalfThickness = 0.1;
-export const platformPeriodSeconds = 8;
-
-export const touchGapMeters = 0.005;
-export const comfortableStanceMeters = 0.29;
-export const standingHeadMeters = 1.45;
-export const standingTorsoAngleRadians = (15 * Math.PI) / 180;
-export const standingStanceMinMeters = 0.05;
-export const standingStanceMaxMeters = 0.9;
-export const headHeightMeters = 1.68;
-export const torsoHeightMeters = 1.26;
-export const handClearMeters = 0.15;
-export const thighClearMeters = 0.35;
-export const thighSpreadMinRadians = (10 * Math.PI) / 180;
-export const thighSpreadMaxRadians = (40 * Math.PI) / 180;
-export const balanceSpanMeters = 0.4;
-export const goalSpanMeters = 2.5;
-export const goalWalkSpeed = 0.5;
-export const goalCloseEnoughMeters = 0.45;
-
-// Each reward row is multiplied by its weight. Positive rows can reach +weight when the pose is ideal.
-export const rewardWeight = {
-  torsoAngle: 1,
-  headAngle: 0.75,
-  upperArmAngle: 0.12,
-  forearmAngle: 0.08,
-  thighAngle: 0.5,
-  shinAngle: 0.25,
-  headHeight: 2,
-  torsoHeight: 1.8,
-  handOnFloor: 0.15,
-  handPark: 1.5,
-  thighOnFloor: 0.5,
-  thighSpread: 10,
-  footInAir: 1.5,
-  balance: 1.6,
-  headImpact: 2.8,
-  standing: 5,
-  standingFlag: 3,
-  stanceComfort: 0.4,
-  goalDistanceUp: 0, //2,
-  goalDistanceDown: 0, //0.7,
-  goalSpeedUp: 0, //1.2,
-  goalSpeedDown: 0, //0.4,
+export const config = {
+  physics: {
+    hz: physicsHz, // Steps per simulated second.
+    timeStep: 1 / physicsHz, // Seconds advanced by one physics step.
+    solverSubsteps: 3, // Box2D solver iterations per step. 4 was stiffer; 2 is faster.
+  },
+  cadence: {
+    actionEveryNFrames: 10, // Frames an action is held before the net picks a new one.
+    rewardEveryNFrames: 10, // Frames between score samples.
+    rewardFrameOffset: 5, // Sample the score this many frames after a new action, not on the action frame.
+  },
+  net: {
+    hiddenUnitCount: 20, // Hidden units in the Elman layer.
+    jointCount: 13, // Motor joints, and the width of the action vector.
+    legacyInputCount: 79, // Input width of older saved weights, so they can be padded.
+    sensedInputCount, // Observation length before part speeds and reward rows. Goal x is 79, goal y is 80, standing is 81.
+    goalInputIndex: 79, // Index of the goal-x observation. Goal y is the next index.
+    standingInputIndex: 81, // Index of the binary standing observation.
+    partCount, // Dynamic body parts, including the hip.
+    partSpeedInputCount, // Three numbers per part: vx, vy, spin.
+    rewardRowCount, // Reward rows copied into the observation. Score-only rows are not included.
+    inputCount: sensedInputCount + partSpeedInputCount + rewardRowCount, // Full observation length.
+    freshInputExplorationScale: 0.04, // Noise on the newer speed and reward columns. Less than the goal columns.
+    hiddenLeak: 0.25, // Fraction of the previous hidden state kept each step.
+  },
+  body: {
+    platformHalfWidth: 20, // Half the platform length, in meters.
+    platformHalfThickness: 0.1, // Half the platform thickness, in meters.
+    platformPeriodSeconds: 8, // Period of a tilting platform, when one is enabled.
+    touchGapMeters: 0.005, // Clearance below this counts as touching the floor.
+    comfortableStanceMeters: 0.29, // Stance width that scores the full stance comfort.
+    standingHeadMeters: 1.45, // Head height required to count as standing.
+    standingTorsoAngleRadians: (15 * Math.PI) / 180, // Max absolute torso tilt that still counts as standing.
+    standingStanceMinMeters: 0.05, // Narrowest stance that still counts as standing.
+    standingStanceMaxMeters: 0.9, // Widest stance that still counts as standing.
+    headHeightMeters: 1.68, // Head height of the standing blueprint. The height reward and the head-height input use this.
+    torsoHeightMeters: 1.26, // Torso height of the standing blueprint.
+    handClearMeters: 0.15, // A hand this close to the floor is fully "on the floor" for the hand penalty.
+    thighClearMeters: 0.35, // A thigh this close to the floor is fully "on the floor" for the thigh penalty.
+    thighSpreadMinRadians: (10 * Math.PI) / 180, // Thighs closer than this are penalized once the torso is upright.
+    thighSpreadMaxRadians: (40 * Math.PI) / 180, // Thighs wider than this are penalized once the torso is upright.
+    balanceSpanMeters: 0.4, // Center-of-mass offset from the feet that spends the whole balance range.
+    goalSpanMeters: 2.5, // Marker distance at which the goal-distance reward reaches zero.
+    goalWalkSpeed: 0.5, // Horizontal speed, m/s, that scores the full goal-speed reward.
+  },
+  reward: {
+    torsoAngle: 1, // Weight of the torso cosine. +1 of this when upright, -1 when upside down.
+    headAngle: 0.75, // Weight of the head cosine.
+    upperArmAngle: 0.12, // Weight of each upper-arm cosine. +1 when that arm is vertical.
+    forearmAngle: 0.08, // Weight of each forearm cosine.
+    thighAngle: 0.5, // Weight of each thigh cosine.
+    shinAngle: 0.25, // Weight of each shin cosine.
+    headHeight: 4, // Head-height weight. The floor value is -this; a full upright reach is +this.
+    torsoHeight: 1.8, // Torso-height weight. Same shape as the head height.
+    handOnFloor: 0.05, // Penalty weight while a hand is near the floor.
+    handPark: 1.5, // Extra hand penalty once the torso is already upright.
+    thighOnFloor: 0.5, // Penalty weight while a thigh is near the floor.
+    thighSpread: 2, // Penalty weight for a thigh angle outside the standing band, only while upright.
+    footInAir: 1.5, // Penalty weight per foot off the floor, only while upright.
+    balance: 1.6, // Weight of the center of mass against the midpoint of the feet.
+    headImpact: 6.8, // Penalty weight while the head touches the floor. A fast downward hit can add up to twice this again.
+    standing: 5, // Standing bonus, split across flat soles, a clear body, an upright torso, and a high head.
+    standingFlag: 3, // Extra bonus when isStanding is true: both feet, nothing else down, upright, high head, a real stance, and quiet.
+    stanceComfort: 2, // Bonus for a stance near the comfortable width, scaled by how flat the soles are. A very wide stance subtracts.
+    goalDistanceUp: 0, // Marker-closeness weight while on the feet. Phase 3 replaces this.
+    goalDistanceDown: 0, // Marker-closeness weight while not on the feet.
+    goalSpeedUp: 0, // Toward-marker speed weight while on the feet. Phase 3 replaces this.
+    goalSpeedDown: 0, // Toward-marker speed weight while not on the feet.
+    motion: 2, // Penalty weight for part speed and spin while the torso is upright.
+  },
+  curriculum: {
+    // Rows the Train menu and the headless run walk through. Each row lasts `generations`.
+    // start "mixed" uses the upright start chance; "down" is face-up or face-down; "up" is standing.
+    phases: [
+      { id: 1, name: "Stand", generations: 2000, start: "mixed", falls: true, balls: true, goal: false },
+      { id: 2, name: "Get up", generations: 4000, start: "down", falls: false, balls: false, goal: false },
+      { id: 3, name: "Walk", generations: 4000, start: "up", falls: false, balls: false, goal: true },
+    ],
+    phase: 1, // Active phase id. setTrainingPhase writes this.
+    byPhases: false, // When true, a run stays on each phase for its generation budget, then advances.
+    phase3GoalDistanceUp: 2, // Marker-closeness weight while on the feet, used only when the active phase has a goal.
+    phase3GoalDistanceDown: 0.7, // Marker-closeness weight while down, in a goal phase.
+    phase3GoalSpeedUp: 1.2, // Toward-marker speed weight while on the feet, in a goal phase.
+    phase3GoalSpeedDown: 0.4, // Toward-marker speed weight while down, in a goal phase.
+  },
+  scale: {
+    partSpeed: 3, // Part linear speed is divided by this before it enters the net.
+    partSpin: 6, // Part angular speed is divided by this before it enters the net.
+    rewardInput: 8, // A reward row is divided by this before it enters the net.
+    motionFull: 12, // Sum of part speeds and spins that spends the whole motion penalty.
+  },
+  start: {
+    fallDropChance: 0.25, // Chance an upright start is instead dropped from height, when the phase allows falls.
+    fallDropMinMeters: 1.2, // Lowest drop height.
+    fallDropMaxMeters: 2.2, // Highest drop height.
+    ballChance: 0.35, // Chance a ball is thrown, when the phase allows balls.
+    ballThrowFrame: 180, // Frame on which the ball is spawned.
+    ballSpeed: 8, // Horizontal speed of a thrown ball, m/s.
+    ballStartMeters: 2.2, // How far to the side of the torso a ball starts.
+    uprightDropMeters: 0.12, // Gap under the feet of an upright start that is not a fall.
+    uprightTiltRadians: 0.08, // Max tilt of an upright start.
+    uprightStartChance: 0.55, // Chance a mixed-start episode begins upright. Otherwise it begins face-up or face-down.
+    downTiltMinRadians: 1.15, // Minimum tilt of a face-up or face-down start.
+    downTiltSpanRadians: 0.55, // Extra random tilt added past the minimum.
+    downDropMeters: 0.05, // Gap under a face-up or face-down start before it settles.
+    downSettleFrames: 40, // Physics steps run before the episode clock, so a down start reaches the floor.
+  },
+  search: {
+    explorationScale: 0.18, // Noise never drops below this.
+    explorationFloor: 0.22, // Starting amplitude of the decaying noise. The used scale is the max of this decay and explorationScale.
+    explorationHalfLifeGenerations: 6000, // Generations for the decaying noise to halve.
+    limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
+    bodyExplorationScale: 0.01, // Noise on hidden weights. Small, so balance can shift without a rewrite.
+    learningRate: 0.025, // Adam step size at generation 0.
+    learningRateFloor: 0.01, // Adam step size never drops below this.
+    learningRateHalfLifeGenerations: 8000, // Generations for the Adam step size to halve.
+    trainableJointIndexes: [1, 2, 4, 5, 6, 7, 8, 10, 11, 12], // Output joints that receive limb noise. Neck and wrists stay put.
+    adamBeta1: 0.9, // Adam first-moment decay.
+    adamBeta2: 0.999, // Adam second-moment decay.
+    adamEpsilon: 1e-8, // Added under the Adam denominator.
+    hiddenInitScale: 0.12, // Fresh hidden weights are a gaussian times this.
+    outputInitScale: 0.04, // Fresh joint-output weights are a gaussian times this.
+    randomWeightAbsMin: 8, // Random-weights button: each weight is at least this far from zero.
+    randomWeightAbsMax: 20, // Random-weights button: each weight is at most this far from zero.
+    goalCloseEnoughMeters: 0.45, // Elite replace also needs the best child at least this close to the marker.
+    eliteMissingGapMeters: 9, // Gap assumed when a score has no marker distance.
+    headImpactQuiet: 1.5, // A stand counts as quiet when the peak head-down speed is below this, in m/s.
+  },
+  episode: {
+    frames: 960, // Length of one scored episode.
+    startTiltJitterRadians: 0.12, // Extra tilt added on top of a situation.
+    startShiftMeters: 0.4, // Extra horizontal shift of a situation.
+    startDropJitterMeters: 0.06, // Extra drop height added on top of a situation.
+    motorGain: 12, // How hard a joint motor chases the action target.
+    motorSpeedLimit: 10, // Max joint motor speed, radians per second.
+    goalNearMeters: 1.2, // Closest random marker distance.
+    goalFarExtraMeters: 1, // Extra meters added at random past the closest marker.
+  },
+  workers: {
+    browserMin: 1, // Fewest browser workers.
+    browserMax: 8, // Most browser workers.
+    browserReserve: 1, // CPU cores left unused when sizing the browser pool.
+    browserHardwareFallback: 4, // Core count assumed when the browser does not report one.
+    browserPairMin: 4, // Fewest antithetic pairs in a browser generation.
+    headlessPairs: 12, // Antithetic pairs in a headless generation.
+    headlessWorkerMin: 2, // Fewest headless workers.
+    headlessWorkerMax: 12, // Most headless workers.
+    headlessWorkerReserve: 2, // CPU cores left unused when sizing the headless pool.
+  },
+  eval: {
+    headlessN: 40, // Held-out episodes per kind for an official headless eval.
+    quickN: 10, // Episodes per kind in a quick eval.
+    quickEvery: 50, // Generations between quick evals.
+    fullMultiple: 4, // A full eval runs every this many quick evals.
+    seedBestCount: 8, // Episodes averaged to seed bestEverScore when a phase starts.
+    officialMinN: 20, // Pass/fail is official only when the eval count is at least this.
+    nearPassSlack: 0.15, // A rate this close to the pass rate still triggers a full eval.
+    passRate: { stand: 0.8, ball: 0.7, drop: 0.65, supine: 0.6, prone: 0.6, walk: 0.6 }, // Fraction of held-out episodes that must pass each kind.
+    walkGoalMeters: 2, // Marker distance used by the walk eval.
+    walkClosingMeters: 0.5, // A walk passes when the gap to the marker shrinks by at least this.
+    seed: 424242, // Seed of the held-out eval situations.
+    shiftMeters: 0.15, // Horizontal jitter of a non-walk eval start.
+  },
+  partIndex: {
+    // Body part indexes. Same order the sim builds them.
+    torso: 0,
+    head: 1,
+    upperArmLeft: 2,
+    forearmLeft: 3,
+    handLeft: 4,
+    thighLeft: 5,
+    shinLeft: 6,
+    footLeft: 7,
+    upperArmRight: 8,
+    forearmRight: 9,
+    handRight: 10,
+    thighRight: 11,
+    shinRight: 12,
+    footRight: 13,
+  },
 };
 
-export const explorationScale = 0.18;
-export const explorationFloor = 0.22;
-export const explorationHalfLifeGenerations = 6000;
-export const limbExplorationScale = 0.05;
-export const learningRate = 0.05;
-export const learningRateFloor = 0.02;
-export const learningRateHalfLifeGenerations = 8000;
-// Shoulder, elbow, hip, knee, ankle on both sides. The rest of the net stays put.
-export const trainableJointIndexes = [1, 2, 4, 5, 6, 7, 8, 10, 11, 12];
+export function setTrainingPhase(phase) {
+  const id = phase | 0;
+  config.curriculum.phase = config.curriculum.phases.some((item) => item.id === id)
+    ? id
+    : config.curriculum.phases[0].id;
+}
 
-export const episodeFrames = 960;
-export const uprightStartChance = 0.55;
-export const startTiltJitterRadians = 0.12;
-export const startShiftMeters = 0.4;
-export const startDropJitterMeters = 0.06;
-export const motorGain = 12;
-export const motorSpeedLimit = 10;
-export const goalNearMeters = 1.2;
-export const goalFarExtraMeters = 1;
+export function setTrainingByPhases(on) {
+  config.curriculum.byPhases = !!on;
+}
 
-export const partIndex = {
-  torso: 0,
-  head: 1,
-  upperArmLeft: 2,
-  forearmLeft: 3,
-  handLeft: 4,
-  thighLeft: 5,
-  shinLeft: 6,
-  footLeft: 7,
-  upperArmRight: 8,
-  forearmRight: 9,
-  handRight: 10,
-  thighRight: 11,
-  shinRight: 12,
-  footRight: 13,
-};
+export function activeTrainingPhase() {
+  return (
+    config.curriculum.phases.find((item) => item.id === config.curriculum.phase) ||
+    config.curriculum.phases[0]
+  );
+}

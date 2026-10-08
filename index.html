@@ -5,44 +5,329 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Neural ragdoll</title>
   <style>
-    :root { color-scheme: dark; --bg:#0e1220; --panel:#171c2e; --line:#2a3148; --text:#e7e9f5; --muted:#9aa3c7; --good:#3ecf8e; --bad:#ff4d5a; --accent:#6f95ff; }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, "Segoe UI", sans-serif; }
-    body { display: flex; flex-direction: column; min-height: 100%; }
-    header { padding: 12px 16px 4px; }
-    header h1 { margin: 0; font-size: 18px; }
-    header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
-    #layout { flex: 1; display: flex; gap: 10px; padding: 10px; min-height: 0; }
-    #stage { flex: 1.4; min-width: 280px; min-height: 320px; border-radius: 12px; overflow: hidden; background: #12162a; }
-    #readout { width: min(440px, 40vw); min-width: 300px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-    section { background: var(--panel); border-radius: 12px; padding: 12px; }
-    section h2 { margin: 0 0 8px; font-size: 13px; letter-spacing: .02em; }
-    #status { font-size: 13px; line-height: 1.45; color: var(--muted); }
-    #watch { display: flex; gap: 8px; flex-wrap: wrap; }
-    #watch label { font-size: 13px; display: flex; gap: 6px; align-items: center; cursor: help; }
-    #total { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
-    #total small { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 8px; }
-    .good { color: var(--good); } .bad { color: var(--bad); }
-    #terms { max-height: 280px; overflow: auto; }
-    .row { display: grid; grid-template-columns: minmax(128px, 1.1fr) 1fr 64px; gap: 8px; align-items: center; font-size: 12px; padding: 3px 0; cursor: help; }
-    .bar { height: 8px; border-radius: 4px; background: #1c2238; position: relative; }
-    .bar i { position: absolute; top: 0; bottom: 0; }
-    #net { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-    #netlist { overflow: auto; flex: 1; min-height: 80px; }
-    #netlist h3 { margin: 8px 0 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-    #diagramWrap { height: 180px; border-top: 1px solid var(--line); margin: 8px -12px -12px; position: relative; }
-    #diagram { position: absolute; inset: 0; width: 100%; height: 100%; }
-    #bars { display: flex; flex-direction: column; }
-    .bar-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; }
-    .bar-row .group { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); min-width: 88px; }
-    button, select { background: var(--accent); color: white; border: 0; border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer; }
-    select { background: var(--panel); }
-    label.ctrl { font-size: 13px; display: flex; gap: 6px; align-items: center; cursor: help; }
-    #hint { padding: 0 16px 12px; color: var(--muted); font-size: 12px; }
-    #error { color: var(--bad); padding: 0 16px 8px; font-size: 13px; }
+    :root {
+      color-scheme: dark;
+      --bg: #0e1220;
+      --panel: #171c2e;
+      --line: #2a3148;
+      --text: #e7e9f5;
+      --muted: #9aa3c7;
+      --good: #3ecf8e;
+      --bad: #ff4d5a;
+      --accent: #6f95ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, "Segoe UI", sans-serif;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+    }
+
+    header {
+      padding: 12px 16px 4px;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    header p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    #layout {
+      flex: 1;
+      display: flex;
+      gap: 10px;
+      padding: 10px;
+      min-height: 0;
+    }
+
+    #stage {
+      flex: 1.4;
+      min-width: 280px;
+      min-height: 320px;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #12162a;
+    }
+
+    #readout {
+      width: 250px;
+      min-width: 0;
+      flex: 0 0 250px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 0;
+    }
+
+    section {
+      background: var(--panel);
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    section h2 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      letter-spacing: .02em;
+    }
+
+    #status {
+      min-height: 0;
+      font-size: 12px;
+      line-height: 1.3;
+      color: var(--muted);
+    }
+
+    #watch {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    #watch label {
+      font-size: 13px;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      cursor: help;
+    }
+
+    #total {
+      font-size: 28px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #total small {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+      margin-left: 8px;
+    }
+
+    .good {
+      color: var(--good);
+    }
+
+    .bad {
+      color: var(--bad);
+    }
+
+    #readout #total {
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    #readout section {
+      padding: 6px 8px;
+    }
+
+    #readout section h2 {
+      margin: 0 0 4px;
+    }
+
+    #terms .row {
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 46px;
+      gap: 4px;
+      font-size: 11px;
+      line-height: 1;
+      padding: 0;
+    }
+
+    #terms .bar {
+      height: 5px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: minmax(128px, 1.1fr) 1fr 64px;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      padding: 3px 0;
+      cursor: help;
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 4px;
+      background: #1c2238;
+      position: relative;
+    }
+
+    .bar i {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+    }
+
+    #bars {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .bar-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 12px;
+    }
+
+    .bar-row .group {
+      font-size: 11px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      min-width: 88px;
+    }
+
+    button,
+    select {
+      background: var(--accent);
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    select {
+      background: var(--panel);
+    }
+
+    label.ctrl {
+      font-size: 13px;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      cursor: help;
+    }
+
+    #hint {
+      padding: 0 16px 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    #error {
+      color: var(--bad);
+      padding: 0 16px 8px;
+      font-size: 13px;
+    }
+
+    dialog {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      font: inherit;
+      padding: 12px;
+    }
+
+    .dialog-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    #logDialog,
+    #graphDialog {
+      position: fixed;
+      margin: 0;
+      z-index: 6;
+    }
+
+    #logDialog {
+      inset: 12px 12px auto auto;
+      width: min(480px, calc(100vw - 24px));
+    }
+
+    #logBody {
+      margin: 0;
+      white-space: pre-wrap;
+      font: inherit;
+      font-size: 13px;
+      max-height: 50vh;
+      overflow: auto;
+    }
+
+    #graphDialog {
+      inset: 12px auto auto 12px;
+      width: min(980px, calc(100vw - 24px));
+      height: calc(100vh - 170px);
+      overflow: auto;
+    }
+
+    #graphTitle {
+      font-size: 14px;
+    }
+
+    #graphSentence,
+    #graphMissing {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    #graphCanvas {
+      width: 100%;
+      height: min(62vh, 560px);
+      display: block;
+      background: #12162a;
+    }
+
+    .train-hint {
+      font-size: 12px;
+      color: var(--muted);
+      flex: 1 1 240px;
+    }
+
+    #graphDialog #netlist {
+      max-height: 200px;
+      overflow: auto;
+      margin-top: 8px;
+    }
+
+    #netlist h3 {
+      margin: 8px 0 4px;
+      font-size: 11px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
     @media (max-width: 900px) {
-      #layout { flex-direction: column; }
-      #readout { width: auto; }
+      #layout {
+        flex-direction: column;
+      }
+
+      #readout {
+        width: auto;
+        flex: none;
+      }
     }
   </style>
 </head>
@@ -63,19 +348,27 @@
         <div id="total">–</div>
         <div id="terms"></div>
       </section>
-      <section id="net">
-        <h2 title="What the network sees, remembers, and sends to the joints on this decision.">Network</h2>
-        <div id="netlist"></div>
-        <div id="diagramWrap" title="Only the strongest paths into the most active hidden units. Green excites, red inhibits. This is not the whole network."><canvas id="diagram"></canvas></div>
-      </section>
     </div>
   </div>
   <div id="bars">
     <div class="bar-row">
       <span class="group">Training</span>
-      <button id="pause" title="Stops the search. The doll on screen keeps moving.">Pause</button>
-      <button id="restart" title="Throws away this session, including saved networks, and starts from random weights.">Restart from scratch</button>
-      <label class="ctrl" title="Pose the workers use at the start of each episode. Mix keeps the usual split, mostly standing. This does not move the doll on screen.">Train from
+      <button id="pause"
+        title="Loading this page does not train until you press this. The doll on screen keeps moving.">Start training</button>
+      <button id="restart"
+        title="Throws away this session, including saved networks, and starts from random weights.">Restart from
+        scratch</button>
+      <label class="ctrl"
+        title="What this run is practicing. Stand, get up, or walk. By phases runs that list in config.js, in order, for many hours.">Task
+        <select id="trainPhase">
+          <option value="1">Stand</option>
+          <option value="2" selected>Get up</option>
+          <option value="3">Walk</option>
+          <option value="phases">By phases</option>
+        </select>
+      </label>
+      <label class="ctrl"
+        title="How each training episode begins. This is not the task. Mix uses the mix for the current task.">Episode start
         <select id="trainPose">
           <option value="mix">Mix</option>
           <option value="up">Standing</option>
@@ -83,7 +376,10 @@
           <option value="prone">Face down</option>
         </select>
       </label>
-      <label class="ctrl" title="How often the best network of the session is kept, when its score beats the previous save.">Save best every
+      <span class="train-hint">Task is what to learn. Episode start is the first pose of each episode.</span>
+      <label class="ctrl"
+        title="How often the best network of the session is kept, when its score beats the previous save.">Save best
+        every
         <select id="snapshotEvery">
           <option value="100" selected>100 generations</option>
           <option value="10">10 generations</option>
@@ -91,16 +387,26 @@
       </label>
     </div>
     <div class="bar-row">
-      <span class="group">Play</span>
+      <span class="group">Network</span>
       <div id="watch">
-        <label title="The weights being updated right now. They change a little every generation. The pose stays until you press Reset pose."><input type="radio" name="watch" id="watchParent" checked> Parent</label>
-        <label title="The individual that scored highest in the last generation. The doll keeps playing it until you press Reset pose."><input type="radio" name="watch" id="watchGeneration"> Best this generation</label>
-        <label title="The highest score since this session started. The doll keeps playing it until you press Reset pose."><input type="radio" name="watch" id="watchEver"> Best ever</label>
+        <label
+          title="The weights being updated right now. They change a little every generation. The pose stays until you press Reset pose."><input
+            type="radio" name="watch" id="watchParent" checked> Parent</label>
+        <label
+          title="The individual that scored highest in the last generation. The doll keeps playing it until you press Reset pose."><input
+            type="radio" name="watch" id="watchGeneration"> Best this generation</label>
+        <label
+          title="The highest score since this session started. The doll keeps playing it until you press Reset pose."><input
+            type="radio" name="watch" id="watchEver"> Best ever</label>
       </div>
-      <label class="ctrl" title="A saved best from this session. Picking one shows that network until you pick another or press Reset pose.">Saved
+      <label class="ctrl"
+        title="A saved best from this session. Picking one shows that network until you pick another or press Reset pose.">Saved
         <select id="savedNet"></select>
       </label>
-      <button id="reset" title="Puts the doll back at the start of a new episode, with the weights you are watching.">Reset pose</button>
+      <button id="reset"
+        title="Puts the doll back at the start of a new episode, with the weights you are watching.">Reset pose</button>
+      <button id="randomWeights"
+        title="Replaces every saved network with extreme random weights and shows that network. Training continues from it.">Random weights</button>
       <label class="ctrl" title="How the next reset pose begins. Workers ignore this.">Start
         <select id="startPose">
           <option value="up">Standing</option>
@@ -108,22 +414,51 @@
           <option value="prone">Face down</option>
         </select>
       </label>
+      <button id="loadNetwork"
+        title="Loads a saved network JSON. Training stays paused until you press Start training.">Load network</button>
+      <input id="loadNetworkFile" type="file" accept=".json,application/json" hidden>
+      <button id="saveFolder"
+        title="Pick a folder once. New backups are written there until you reload.">Save folder</button>
+      <button id="log" title="Opens a list of what happened in this visit.">Log</button>
+      <button id="graphBtn" title="Opens a graph of every unit and connection in the network the doll is using.">Network graph</button>
+    </div>
+    <div class="bar-row">
+      <span class="group">Throw</span>
       <label class="ctrl" title="What Fire throws, or what a drag on empty space throws.">Object
         <select id="objectKind"></select>
       </label>
       <button id="fire" title="Throws the chosen object in from the side.">Fire</button>
-      <label class="ctrl" title="Speed of a thrown object.">Speed <input id="speed" type="range" min="3" max="25" value="8"> <span id="speedValue">8 m/s</span></label>
+      <label class="ctrl" title="Speed of a thrown object.">Speed <input id="speed" type="range" min="3" max="25"
+          value="8"> <span id="speedValue">8 m/s</span></label>
     </div>
   </div>
-  <div id="hint">Green adds, red subtracts. Standing is the large bonus: both feet, nothing else on the floor, torso upright, head high. The marker is the goal.</div>
+  <dialog id="logDialog">
+    <div class="dialog-bar">
+      <strong>Log</strong>
+      <button id="logClose" type="button">Close</button>
+    </div>
+    <pre id="logBody">Nothing yet.</pre>
+  </dialog>
+  <dialog id="graphDialog">
+    <div class="dialog-bar">
+      <strong id="graphTitle">Network</strong>
+      <button id="graphClose" type="button">Close</button>
+    </div>
+    <p id="graphSentence">Every unit and every connection is shown; brightness is this decision.</p>
+    <p id="graphMissing"></p>
+    <canvas id="graphCanvas"></canvas>
+    <div id="netlist"></div>
+  </dialog>
+  <div id="hint">Green adds, red subtracts. Standing adds flat soles, a clear body, an upright torso, and a high head
+    as separate shares. A stance near 29 cm adds more while the soles are down. The marker is the goal.</div>
   <div id="error"></div>
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js"></script>
   <script type="module">
     import { CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2DestroyBody, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Vec2 } from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
     import * as Box2D from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
-    import { actionEveryNFrames, physicsHz, inputCount, partIndex, platformHalfWidth, platformHalfThickness } from "./config.js";
+    import { config, setTrainingPhase, setTrainingByPhases, activeTrainingPhase } from "./config.js";
     import { scoreDecision, isStanding, clamp } from "./src/reward.js";
-    import { askGeneration, tellGeneration, freshState, makeRandom, padWeights } from "./src/net.js";
+    import { askGeneration, tellGeneration, freshState, makeRandom, padWeights, hiddenCountOf } from "./src/net.js";
     import { createSim, observationLabels, jointNames, thrownKinds } from "./src/sim.js";
 
     const $ = (id) => document.getElementById(id);
@@ -132,7 +467,11 @@
     let random = makeRandom(7);
     const randomNormal = () => Math.sqrt(-2 * Math.log(random() + 1e-12)) * Math.cos(6.2831853 * random());
     let state = loadSession() || freshState(randomNormal);
-    let paused = false;
+    let paused = true;
+    let phaseStartGen = state.gen || 0;
+    let backupDir = null;
+    let backedBestScore = state.bestEverScore ?? -1e9;
+    const visit = { log: [], parentName: "", loadedLabel: "", trained: false };
     const vector = (x, y) => new b2Vec2(x, y);
 
     for (let i = 0; i < thrownKinds.length; i++) {
@@ -145,7 +484,7 @@
 
     const pool = { workers: [], ready: false };
     function bootWorkers() {
-      const count = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
+      const count = Math.max(config.workers.browserMin, Math.min(config.workers.browserMax, (navigator.hardwareConcurrency || config.workers.browserHardwareFallback) - config.workers.browserReserve));
       return Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
         const worker = new Worker("./src/browser-worker.js", { type: "module" });
         const timer = setTimeout(() => reject(new Error("A worker did not answer in 15 s")), 15000);
@@ -163,7 +502,7 @@
           const worker = pool.workers[workerIndex];
           worker.onmessage = (event) => resolve(event.data);
           worker.onerror = () => reject(new Error("Worker failed"));
-          worker.postMessage({ tasks: bucket });
+          worker.postMessage({ tasks: bucket, trainingPhase: config.curriculum.phase });
         });
       })).then((groups) => {
         const flat = groups.flat();
@@ -179,21 +518,25 @@
         if (paused) { await new Promise((resolve) => setTimeout(resolve, 150)); continue; }
         const generationState = state;
         try {
-          const generation = askGeneration(generationState, sim.situation(random, $("trainPose").value), Math.max(4, pool.workers.length), randomNormal);
+          const generation = askGeneration(generationState, sim.situation(random, $("trainPose").value), Math.max(config.workers.browserPairMin, pool.workers.length), randomNormal);
           const starts = [];
           for (let pair = 0; pair < generation.count; pair++) starts.push(sim.varyStart(generation.situation, random));
           const tasks = generation.weights.map((weights, index) => ({
             index,
             weights,
-            phase: index % actionEveryNFrames,
+            phase: index % config.cadence.actionEveryNFrames,
             options: starts[Math.floor(index / 2)] || generation.situation,
           }));
           const scores = await evaluatePopulation(tasks);
           if (state !== generationState) continue;
           if (scores.some((score) => !score || !Number.isFinite(score.fitness))) throw new Error("A worker returned an empty score");
           tellGeneration(state, generation, scores);
-          rememberBest();
+          await rememberBest();
           saveSession();
+          visit.trained = true;
+          const finished = state.hist[state.hist.length - 1];
+          if (finished) logEvent("generation finished (gen " + state.gen + ", mean " + finished.mean.toFixed(2) + ", best " + finished.best.toFixed(2) + ")");
+          advanceTrainPhase();
         } catch (error) {
           $("error").textContent = error.message;
           pool.ready = false;
@@ -213,12 +556,68 @@
       if ($("watchGeneration").checked) return state.bestGenTheta || state.theta;
       return state.theta;
     }
-    function watchName() {
-      const saved = savedSnapshot();
-      if (saved) return "gen " + saved.gen;
+    function watchModeLabel() {
+      if (savedSnapshot()) return "saved";
       if ($("watchEver").checked) return "best ever";
       if ($("watchGeneration").checked) return "best this generation";
       return "parent";
+    }
+    function trainPhaseLabel() {
+      const name = activeTrainingPhase().name;
+      return config.curriculum.byPhases ? "By phases: " + name : name;
+    }
+    function applyTrainPhase() {
+      const value = $("trainPhase").value;
+      if (value === "phases") {
+        if (!config.curriculum.byPhases) {
+          setTrainingByPhases(true);
+          setTrainingPhase(config.curriculum.phases[0].id);
+          phaseStartGen = state.gen || 0;
+        }
+      } else {
+        setTrainingByPhases(false);
+        setTrainingPhase(+value);
+      }
+    }
+    function advanceTrainPhase() {
+      if (!config.curriculum.byPhases) return;
+      const phase = activeTrainingPhase();
+      const index = config.curriculum.phases.findIndex((item) => item.id === phase.id);
+      if (index < 0 || index >= config.curriculum.phases.length - 1) return;
+      if ((state.gen || 0) - phaseStartGen < phase.generations) return;
+      const next = config.curriculum.phases[index + 1];
+      setTrainingPhase(next.id);
+      phaseStartGen = state.gen || 0;
+      logEvent("By phases: " + next.name + " (gen " + state.gen + ")");
+    }
+    function networkTitle() {
+      const saved = savedSnapshot();
+      if (saved) return saved.name || ("gen " + saved.gen);
+      if ($("watchEver").checked) {
+        const gen = Number.isFinite(state.bestEverGen) ? state.bestEverGen : state.gen;
+        return "Best ever, generation " + gen + (state.bestEverName ? ", " + state.bestEverName : "");
+      }
+      if ($("watchGeneration").checked) {
+        return "Best this generation, generation " + state.gen + (state.bestGenName ? ", " + state.bestGenName : "");
+      }
+      if (visit.parentName) return visit.parentName;
+      if (visit.loadedLabel && paused && !visit.trained) return "Loaded " + visit.loadedLabel;
+      return "Parent, generation " + state.gen;
+    }
+    function logEvent(line) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      visit.log.push(pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds()) + "  " + line);
+      const body = $("logBody");
+      body.textContent = visit.log.join("\n");
+      body.scrollTop = body.scrollHeight;
+    }
+    function paintLog() {
+      $("logBody").textContent = visit.log.length ? visit.log.join("\n") : "Nothing yet.";
+    }
+    function toggleDialog(dialog) {
+      if (dialog.open) dialog.close();
+      else dialog.show();
     }
 
     const world = sim.build();
@@ -243,6 +642,10 @@
       episode = new sim.Episode(world, watchedWeights(), options.tilt, options.drop, options);
       episode.free = true;
       hold = 0;
+      if ($("graphDialog").open) {
+        drawNetworkGraph();
+        paintNetList();
+      }
     }
 
     function paintScore(scored) {
@@ -255,10 +658,12 @@
         const color = term.v >= 0 ? "#3ecf8e" : "#ff4d5a";
         return '<div class="row" title="' + escapeTip(term.tip) + '"><span>' + term.n + '</span><span class="bar"><i style="left:' + left + '%;width:' + width + '%;background:' + color + '"></i></span><span class="' + (term.v >= 0 ? "good" : "bad") + '">' + (term.v >= 0 ? "+" : "") + term.v.toFixed(2) + "</span></div>";
       }).join("");
+    }
+    function paintNetList() {
       const input = episode && episode.x;
       const hidden = episode && episode.h;
       const action = episode && episode.a;
-      if (!input || !hidden || !action) return;
+      if (!input || !hidden || !action) { $("netlist").innerHTML = ""; return; }
       const line = (name, value, tip) => '<div class="row" title="' + escapeTip(tip) + '"><span>' + name + '</span><span class="bar"><i style="width:' + Math.min(100, Math.abs(value) * 100) + '%;background:' + (value >= 0 ? "#3ecf8e" : "#ff4d5a") + '"></i></span><span>' + (value >= 0 ? "+" : "") + value.toFixed(2) + "</span></div>";
       let html = "<h3>Inputs (" + input.length + ")</h3>";
       for (let i = 0; i < input.length; i++) {
@@ -276,20 +681,130 @@
     }
     function escapeTip(text) { return String(text).replace(/"/g, "&quot;"); }
 
+    function paintPause() {
+      $("pause").textContent = paused ? "Start training" : "Pause";
+      $("pause").title = paused
+        ? "Loading this page does not train until you press this. The doll on screen keeps moving."
+        : "Stops the search. The doll on screen keeps moving.";
+    }
     $("pause").onclick = () => {
       paused = !paused;
-      $("pause").textContent = paused ? "Resume" : "Pause";
+      paintPause();
+      logEvent(paused ? "training paused" : "training started");
     };
+    paintPause();
     $("restart").onclick = () => {
       random = makeRandom(Date.now() & 0xffff);
       sim.setRandom(Date.now() & 0xffff);
       state = freshState(randomNormal);
       state.snapshots = [];
+      if (config.curriculum.byPhases) {
+        setTrainingPhase(config.curriculum.phases[0].id);
+        phaseStartGen = 0;
+      }
+      backedBestScore = state.bestEverScore ?? -1e9;
+      visit.parentName = "";
+      visit.loadedLabel = "";
+      visit.trained = false;
       fillSavedList();
       saveSession();
       resetEpisode();
+      logEvent("restart");
     };
     $("reset").onclick = () => resetEpisode();
+    $("saveFolder").onclick = async () => {
+      if (!window.showDirectoryPicker) {
+        $("error").textContent = "This browser has no folder picker.";
+        return;
+      }
+      try {
+        backupDir = await window.showDirectoryPicker({ mode: "readwrite" });
+        $("saveFolder").textContent = "Folder set";
+        $("error").textContent = "";
+        logEvent("save-folder chosen");
+      } catch (error) {
+        if (error && error.name === "AbortError") return;
+        $("error").textContent = "Could not use that folder.";
+      }
+    };
+    $("loadNetwork").onclick = () => {
+      const input = $("loadNetworkFile");
+      input.value = "";
+      input.click();
+    };
+    $("loadNetworkFile").onchange = async () => {
+      const file = $("loadNetworkFile").files && $("loadNetworkFile").files[0];
+      if (!file) return;
+      let data;
+      try { data = JSON.parse(await file.text()); }
+      catch (error) {
+        $("error").textContent = "Could not read that network file.";
+        logEvent("JSON load failed");
+        return;
+      }
+      const revived = networkFromJson(data);
+      if (!revived) {
+        $("error").textContent = "That file is not a network this page can load.";
+        logEvent("JSON load failed");
+        return;
+      }
+      const stem = file.name.replace(/\.json$/i, "");
+      let hash = "";
+      try { hash = await thetaHash8(revived.theta); }
+      catch (error) { hash = ""; }
+      visit.loadedLabel = hash && !stem.endsWith(hash) ? stem + " " + hash : stem;
+      visit.parentName = "";
+      visit.trained = false;
+      if (hash) revived.networkName = fileStamp(new Date()) + "_" + hash;
+      if (data && data.role === "best-ever" && !revived.bestEverName) revived.bestEverName = stem;
+      state = revived;
+      backedBestScore = state.bestEverScore ?? -1e9;
+      paused = true;
+      paintPause();
+      $("error").textContent = "";
+      saveSession();
+      fillSavedList();
+      $("savedNet").value = "";
+      $("watchParent").checked = true;
+      $("watchGeneration").checked = false;
+      $("watchEver").checked = false;
+      resetEpisode();
+      logEvent("JSON load succeeded");
+    };
+    $("randomWeights").onclick = () => {
+      const keptGen = state.gen;
+      const keptHist = state.hist;
+      state = freshState(randomNormal);
+      for (let i = 0; i < state.theta.length; i++) state.theta[i] = (random() < 0.5 ? -1 : 1) * (config.search.randomWeightAbsMin + random() * (config.search.randomWeightAbsMax - config.search.randomWeightAbsMin));
+      state.bestGenTheta = state.theta.slice();
+      state.bestEverTheta = state.theta.slice();
+      state.gen = keptGen;
+      state.hist = keptHist;
+      state.snapshots = [];
+      backedBestScore = state.bestEverScore ?? -1e9;
+      visit.parentName = "";
+      visit.loadedLabel = "";
+      visit.trained = false;
+      fillSavedList();
+      saveSession();
+      resetEpisode();
+      logEvent("random weights");
+    };
+    $("log").onclick = () => {
+      paintLog();
+      toggleDialog($("logDialog"));
+      if ($("logDialog").open) $("logBody").scrollTop = $("logBody").scrollHeight;
+    };
+    $("logClose").onclick = () => $("logDialog").close();
+    $("graphBtn").onclick = () => {
+      const dialog = $("graphDialog");
+      if (dialog.open) dialog.close();
+      else {
+        dialog.show();
+        requestAnimationFrame(() => { drawNetworkGraph(); paintNetList(); });
+      }
+    };
+    $("graphClose").onclick = () => $("graphDialog").close();
     let choosingWatch = false;
     const watchLive = (event) => {
       if (choosingWatch || !event.target.checked) return;
@@ -326,13 +841,15 @@
     label.position.set(12, 10);
     app.stage.addChild(graphics, doll, throws, chart, label);
     resetEpisode();
+    $("trainPhase").onchange = () => applyTrainPhase();
+    applyTrainPhase();
     trainLoop();
 
     const canvas = app.canvas;
     canvas.style.touchAction = "none";
     const colors = [0x4f8cff, 0xffd166, 0x7aa2ff, 0x7aa2ff, 0xffd166, 0x43d9ad, 0x43d9ad, 0xf78c6c];
     const limbColor = (index) => colors[2 + (index - 2) % 6];
-    const pantsColor = limbColor(partIndex.thighLeft);
+    const pantsColor = limbColor(config.partIndex.thighLeft);
     const darken = (color) => {
       const scale = 0.62;
       const red = (color >> 16) & 255;
@@ -343,7 +860,7 @@
     const partColor = (index) => {
       if (index < 2) return colors[index];
       const color = limbColor(index);
-      return index < partIndex.upperArmRight ? darken(color) : color;
+      return index < config.partIndex.upperArmRight ? darken(color) : color;
     };
     const solidTexture = (circle) => {
       const size = 32;
@@ -374,16 +891,17 @@
     const addPartSprite = (index) => {
       partSprites[index] = addDollSprite(boxTexture, partColor(index));
     };
-    for (const index of [partIndex.thighLeft, partIndex.shinLeft, partIndex.footLeft]) addPartSprite(index);
-    const leftKnee = world.joints.find((joint) => joint.mark === "knee" && joint.a === partIndex.thighLeft);
-    const leftKneeSprite = addDollSprite(circleTexture, partColor(partIndex.thighLeft));
-    for (const index of [partIndex.upperArmLeft, partIndex.forearmLeft, partIndex.handLeft, partIndex.torso, partIndex.head]) addPartSprite(index);
+    for (const index of [config.partIndex.thighLeft, config.partIndex.shinLeft, config.partIndex.footLeft]) addPartSprite(index);
+    const leftKnee = world.joints.find((joint) => joint.mark === "knee" && joint.a === config.partIndex.thighLeft);
+    const leftKneeSprite = addDollSprite(circleTexture, partColor(config.partIndex.thighLeft));
+    for (const index of [config.partIndex.upperArmLeft, config.partIndex.forearmLeft, config.partIndex.handLeft]) addPartSprite(index);
     const tailSprite = addDollSprite(circleTexture, pantsColor);
     const hipMarks = world.joints.filter((joint) => joint.mark === "hip");
-    for (const index of [partIndex.thighRight, partIndex.shinRight, partIndex.footRight]) addPartSprite(index);
-    const rightKnee = world.joints.find((joint) => joint.mark === "knee" && joint.a === partIndex.thighRight);
-    const rightKneeSprite = addDollSprite(circleTexture, partColor(partIndex.thighRight));
-    for (const index of [partIndex.upperArmRight, partIndex.forearmRight, partIndex.handRight]) addPartSprite(index);
+    for (const index of [config.partIndex.torso, config.partIndex.head]) addPartSprite(index);
+    for (const index of [config.partIndex.thighRight, config.partIndex.shinRight, config.partIndex.footRight]) addPartSprite(index);
+    const rightKnee = world.joints.find((joint) => joint.mark === "knee" && joint.a === config.partIndex.thighRight);
+    const rightKneeSprite = addDollSprite(circleTexture, partColor(config.partIndex.thighRight));
+    for (const index of [config.partIndex.upperArmRight, config.partIndex.forearmRight, config.partIndex.handRight]) addPartSprite(index);
     let accumulator = 0;
     let frameSkip = 0;
 
@@ -446,8 +964,8 @@
 
     app.ticker.add((ticker) => {
       accumulator += Math.min(ticker.deltaMS, 50);
-      while (accumulator >= 1000 / physicsHz) {
-        accumulator -= 1000 / physicsHz;
+      while (accumulator >= 1000 / config.physics.hz) {
+        accumulator -= 1000 / config.physics.hz;
         if (hold > 0) { hold--; if (!hold) resetEpisode(); }
         else if (episode.step()) hold = 60;
       }
@@ -474,8 +992,8 @@
       const platformSin = Math.sin(platformAngle);
       const corners = [];
       for (const [signX, signY] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-        const localX = signX * platformHalfWidth;
-        const localY = signY * platformHalfThickness;
+        const localX = signX * config.body.platformHalfWidth;
+        const localY = signY * config.body.platformHalfThickness;
         corners.push(toX(platform.x + platformCos * localX - platformSin * localY), toY(platform.y + platformSin * localX + platformCos * localY));
       }
       graphics.poly(corners).fill(0x5a6aa0);
@@ -512,7 +1030,7 @@
         sprite.width = 0.11 * scale;
         sprite.height = 0.11 * scale;
       };
-      for (const index of [partIndex.thighLeft, partIndex.shinLeft, partIndex.footLeft, partIndex.upperArmLeft, partIndex.forearmLeft, partIndex.handLeft, partIndex.torso, partIndex.head, partIndex.thighRight, partIndex.shinRight, partIndex.footRight, partIndex.upperArmRight, partIndex.forearmRight, partIndex.handRight]) placePart(index);
+      for (const index of [config.partIndex.thighLeft, config.partIndex.shinLeft, config.partIndex.footLeft, config.partIndex.upperArmLeft, config.partIndex.forearmLeft, config.partIndex.handLeft, config.partIndex.torso, config.partIndex.head, config.partIndex.thighRight, config.partIndex.shinRight, config.partIndex.footRight, config.partIndex.upperArmRight, config.partIndex.forearmRight, config.partIndex.handRight]) placePart(index);
       placeKnee(leftKnee, leftKneeSprite);
       placeKnee(rightKnee, rightKneeSprite);
       if (hipMarks.length === 2) {
@@ -523,7 +1041,7 @@
           hipX += point.x;
           hipY += point.y;
         }
-        const torso = world.parts[partIndex.torso];
+        const torso = world.parts[config.partIndex.torso];
         const torsoAngle = b2Rot_GetAngle(b2Body_GetRotation(torso.id));
         const frontX = Math.cos(torsoAngle);
         const frontY = Math.sin(torsoAngle);
@@ -549,12 +1067,15 @@
       if (++frameSkip % 8 === 0) {
         const scored = scoreDecision(episode.m);
         paintScore(scored);
-        drawStrongestPaths();
+        if ($("graphDialog").open) {
+          drawNetworkGraph();
+          paintNetList();
+        }
         const last = state.hist[state.hist.length - 1];
         const pose = isStanding(episode.m) ? "standing" : (episode.m.handOn ? "on hands" : (episode.m.bodyOn ? "on the floor" : "in the air"));
         const goal = episode.options.goalX == null ? "" : " · goal " + Math.abs(episode.options.goalX - episode.m.centerX).toFixed(1) + " m";
         const fitness = last ? " · mean " + last.mean.toFixed(2) + " best " + last.best.toFixed(2) : "";
-        $("status").textContent = "Generation " + state.gen + " · watching " + watchName() + (paused ? " · paused" : "") + " · " + pool.workers.length + " workers" + fitness;
+        $("status").textContent = (paused ? "idle" : "running") + " · " + trainPhaseLabel() + " · watching " + watchModeLabel() + " · " + networkTitle() + " · gen " + state.gen + fitness;
         label.text = "Head " + (episode.m.headHeight || 0).toFixed(2) + " m · torso " + (Math.abs(episode.m.torsoAngle) * 180 / Math.PI).toFixed(0) + "° · " + pose + goal;
       }
       drawChart();
@@ -578,46 +1099,221 @@
         chart.stroke({ width: 1.5, color });
       }
     }
-    function drawStrongestPaths() {
-      const canvas = $("diagram");
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      if (width < 20 || !episode || !episode.x || !episode.h || !episode.w) return;
-      const ratio = Math.min(2, devicePixelRatio || 1);
-      if (canvas.width !== Math.floor(width * ratio)) { canvas.width = Math.floor(width * ratio); canvas.height = Math.floor(height * ratio); }
+    function drawNetworkGraph() {
+      const canvas = $("graphCanvas");
+      const missing = $("graphMissing");
+      $("graphTitle").textContent = networkTitle();
+      const weights = episode && episode.w;
+      const hidden = weights && weights.length ? hiddenCountOf(weights.length) : 0;
       const context = canvas.getContext("2d");
+      if (!hidden) {
+        missing.textContent = "No weights to draw.";
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+      missing.textContent = "";
+      const inputs = episode && episode.x;
+      const hiddenAct = episode && episode.h;
+      const outputs = episode && episode.a;
+      const joints = jointNames.length;
+      const width = Math.max(320, canvas.clientWidth || 640);
+      const height = Math.max(360, canvas.clientHeight || 480);
+      const ratio = Math.min(1.5, devicePixelRatio || 1);
+      if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
+        canvas.width = Math.floor(width * ratio);
+        canvas.height = Math.floor(height * ratio);
+      }
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, width, height);
-      context.font = "12px system-ui,sans-serif";
-      context.fillStyle = "#9aa3c7";
-      context.fillText("Strongest paths only", 8, 16);
-      const hidden = episode.h;
-      const input = episode.x;
-      const weights = episode.w;
-      const stride = 1 + inputCount + hidden.length;
-      const ranked = [...Array(hidden.length).keys()].sort((a, b) => Math.abs(hidden[b]) - Math.abs(hidden[a])).slice(0, 4);
-      context.font = "11px system-ui,sans-serif";
-      ranked.forEach((unit, row) => {
-        const y = 36 + row * 28;
-        context.fillStyle = "#e7e9f5";
-        context.fillText("h" + unit, 8, y);
-        let bestIndex = 0;
-        let best = 0;
-        const base = unit * stride + 1;
-        for (let i = 0; i < inputCount; i++) {
-          const contribution = Math.abs(weights[base + i] * input[i]);
-          if (contribution > best) { best = contribution; bestIndex = i; }
+      context.font = "11px system-ui, sans-serif";
+      context.textBaseline = "middle";
+      if (!drawNetworkGraph.labelPad) {
+        let widest = 72;
+        for (let i = 0; i < config.net.inputCount; i++) widest = Math.max(widest, context.measureText(observationLabel(i).name).width);
+        drawNetworkGraph.labelPad = Math.ceil(widest + 16);
+      }
+      const left = Math.min(drawNetworkGraph.labelPad, width * 0.32);
+      const mid = Math.round(width * 0.58);
+      const right = width - 88;
+      const top = 28;
+      const bottom = height - 12;
+      const yOf = (index, count) => count <= 1 ? (top + bottom) / 2 : top + index * (bottom - top) / (count - 1);
+      const inputY = (i) => yOf(i, config.net.inputCount);
+      const hiddenY = (unit) => yOf(unit, hidden);
+      const jointY = (joint) => yOf(joint, joints);
+      const stride = 1 + config.net.inputCount + hidden;
+      const outStride = hidden + 1;
+      const outBase = hidden * stride;
+      const bucketCount = 6;
+      const alphas = [0.06, 0.11, 0.18, 0.3, 0.46, 0.7];
+      const posFF = [];
+      const negFF = [];
+      const posRec = [];
+      const negRec = [];
+      for (let b = 0; b < bucketCount; b++) {
+        posFF.push(new Path2D());
+        negFF.push(new Path2D());
+        posRec.push(new Path2D());
+        negRec.push(new Path2D());
+      }
+      const bucketOf = (w, src) => {
+        const drive = Math.min(1, Math.abs(src || 0) * Math.min(1, Math.abs(w)));
+        return Math.min(bucketCount - 1, (drive * bucketCount) | 0);
+      };
+      const addLine = (path, x0, y0, x1, y1) => { path.moveTo(x0, y0); path.lineTo(x1, y1); };
+      for (let unit = 0; unit < hidden; unit++) {
+        const base = unit * stride;
+        const hy = hiddenY(unit);
+        for (let i = 0; i < config.net.inputCount; i++) {
+          const w = weights[base + 1 + i];
+          addLine((w >= 0 ? posFF : negFF)[bucketOf(w, inputs && inputs[i])], left, inputY(i), mid, hy);
         }
-        const label = observationLabel(bestIndex);
-        context.fillStyle = weights[base + bestIndex] >= 0 ? "#3ecf8e" : "#ff4d5a";
-        context.fillText(label.name, 36, y);
-      });
+        for (let other = 0; other < hidden; other++) {
+          const w = weights[base + 1 + config.net.inputCount + other];
+          const path = (w >= 0 ? posRec : negRec)[bucketOf(w, hiddenAct && hiddenAct[other])];
+          const y1 = hiddenY(other);
+          if (other === unit) {
+            const start = 0.7;
+            path.moveTo(mid - 14 + Math.cos(start) * 6, hy + Math.sin(start) * 6);
+            path.arc(mid - 14, hy, 6, start, Math.PI * 2.15);
+          } else { path.moveTo(mid, y1); path.quadraticCurveTo(mid - 48, (y1 + hy) / 2, mid, hy); }
+        }
+      }
+      for (let joint = 0; joint < joints; joint++) {
+        const oy = jointY(joint);
+        for (let unit = 0; unit < hidden; unit++) {
+          const w = weights[outBase + joint * outStride + 1 + unit];
+          addLine((w >= 0 ? posFF : negFF)[bucketOf(w, hiddenAct && hiddenAct[unit])], mid, hiddenY(unit), right, oy);
+        }
+      }
+      context.lineWidth = 0.55;
+      context.setLineDash([]);
+      for (let b = 0; b < bucketCount; b++) {
+        context.strokeStyle = "rgba(62,207,142," + alphas[b] + ")";
+        context.stroke(posFF[b]);
+        context.strokeStyle = "rgba(255,77,90," + alphas[b] + ")";
+        context.stroke(negFF[b]);
+      }
+      context.lineWidth = 1;
+      context.setLineDash([4, 3]);
+      for (let b = 0; b < bucketCount; b++) {
+        context.strokeStyle = "rgba(62,207,142," + alphas[b] + ")";
+        context.stroke(posRec[b]);
+        context.strokeStyle = "rgba(255,77,90," + alphas[b] + ")";
+        context.stroke(negRec[b]);
+      }
+      context.setLineDash([]);
+      const fillOf = (value) => {
+        const mag = Math.min(1, Math.abs(value || 0));
+        const alpha = 0.18 + 0.82 * mag;
+        return (value || 0) >= 0 ? "rgba(62,207,142," + alpha + ")" : "rgba(255,77,90," + alpha + ")";
+      };
+      const dot = (x, y, radius, value) => {
+        context.fillStyle = fillOf(value);
+        context.beginPath();
+        context.arc(x, y, radius, 0, Math.PI * 2);
+        context.fill();
+      };
+      for (let i = 0; i < config.net.inputCount; i++) dot(left, inputY(i), 1.6, inputs && inputs[i]);
+      for (let unit = 0; unit < hidden; unit++) dot(mid, hiddenY(unit), 5, hiddenAct && hiddenAct[unit]);
+      for (let joint = 0; joint < joints; joint++) dot(right, jointY(joint), 5, outputs && outputs[joint]);
+      const tag = (text, x, y, align) => {
+        context.textAlign = align;
+        const box = context.measureText(text).width;
+        const boxX = align === "right" ? x - box : align === "center" ? x - box / 2 : x;
+        context.fillStyle = "#12162a";
+        context.fillRect(boxX - 2, y - 7, box + 4, 14);
+        context.fillStyle = "#e7e9f5";
+        context.fillText(text, x, y);
+      };
+      tag("recurrent dashed", mid - 28, 11, "center");
+      const labeled = [];
+      const usedY = [];
+      const place = (i) => {
+        const y = inputY(i);
+        for (let k = 0; k < usedY.length; k++) if (Math.abs(usedY[k] - y) < 12) return;
+        usedY.push(y);
+        labeled.push(i);
+      };
+      const labelStep = Math.max(4, Math.ceil(config.net.inputCount / Math.max(6, ((bottom - top) / 15) | 0)));
+      for (let i = 0; i < config.net.inputCount; i += labelStep) place(i);
+      place(config.net.inputCount - 1);
+      if (inputs && inputs.length) {
+        const rank = [];
+        for (let i = 0; i < config.net.inputCount; i++) rank.push(i);
+        rank.sort((a, b) => Math.abs(inputs[b] || 0) - Math.abs(inputs[a] || 0));
+        for (let k = 0; k < 8 && k < rank.length; k++) place(rank[k]);
+      }
+      for (const i of labeled) tag(observationLabel(i).name, left - 8, inputY(i), "right");
+      for (let unit = 0; unit < hidden; unit++) tag("h" + unit, mid + 8, hiddenY(unit), "left");
+      for (let joint = 0; joint < joints; joint++) tag(jointNames[joint], right + 8, jointY(joint), "left");
     }
 
-    function rememberBest() {
+    function fileStamp(date) {
+      const pad = (n) => String(n).padStart(2, "0");
+      return date.getFullYear() + pad(date.getMonth() + 1) + pad(date.getDate()) + "-" + pad(date.getHours()) + pad(date.getMinutes()) + pad(date.getSeconds());
+    }
+    async function thetaHash8(weights) {
+      const packed = JSON.stringify(Array.from(weights, (value) => +(+value).toFixed(4)));
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(packed));
+      return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 8);
+    }
+    async function freeStem(hash) {
+      let when = new Date();
+      for (let n = 0; n < 5; n++) {
+        const stem = fileStamp(when) + "_" + hash;
+        try { await backupDir.getFileHandle(stem + ".json"); }
+        catch (error) { return stem; }
+        when = new Date(when.getTime() + 1000);
+      }
+      return fileStamp(new Date()) + "_" + hash;
+    }
+    function backupPayload(role, stem) {
+      const pack = (weights) => weights ? Array.from(weights, (value) => +value.toFixed(4)) : null;
+      return {
+        role,
+        name: stem,
+        gen: state.gen,
+        bestEverScore: state.bestEverScore,
+        bestEverGen: state.bestEverGen || 0,
+        bestEverName: role === "best-ever" ? stem : (state.bestEverName || ""),
+        trainingPhase: config.curriculum.phase,
+        inputCount: config.net.inputCount,
+        theta: pack(state.theta),
+        bestEverTheta: pack(state.bestEverTheta),
+      };
+    }
+    async function writeBackup(role) {
+      const weights = role === "best-ever" ? state.bestEverTheta : state.theta;
+      if (!weights || !backupDir) return "";
+      try {
+        const hash = await thetaHash8(weights);
+        const stem = await freeStem(hash);
+        const file = stem + ".json";
+        const payload = backupPayload(role, stem);
+        payload.file = file;
+        const handle = await backupDir.getFileHandle(file, { create: true });
+        const writable = await handle.createWritable();
+        await writable.write(JSON.stringify(payload));
+        await writable.close();
+        logEvent("JSON saved (" + file + ")");
+        return stem;
+      } catch (error) { return ""; }
+    }
+    async function rememberBest() {
       const every = +$("snapshotEvery").value || 100;
-      if (!state.gen || state.gen % every !== 0) return;
-      if (!state.bestEverTheta) return;
+      if (!state.gen || !state.bestEverTheta) return;
+      if (state.bestEverScore > backedBestScore) {
+        backedBestScore = state.bestEverScore;
+        state.bestEverGen = state.gen;
+        state.bestEverName = "";
+        const stem = await writeBackup("best-ever");
+        if (stem) state.bestEverName = stem;
+      }
+      if (state.gen % every !== 0) return;
+      const parentStem = await writeBackup("parent");
+      if (parentStem) visit.parentName = parentStem;
       if (!state.snapshots) state.snapshots = [];
       const previous = state.snapshots[state.snapshots.length - 1];
       if (previous && !(state.bestEverScore > previous.score)) return;
@@ -625,6 +1321,7 @@
         gen: state.gen,
         score: state.bestEverScore,
         weights: Float32Array.from(state.bestEverTheta),
+        name: state.bestEverName || "",
       });
       if (state.snapshots.length > 40) state.snapshots.shift();
       fillSavedList();
@@ -658,13 +1355,49 @@
           bestGenTheta: pack(state.bestGenTheta),
           bestEverTheta: pack(state.bestEverTheta),
           bestEverScore: state.bestEverScore,
+          bestEverName: state.bestEverName || "",
+          bestEverGen: Number.isFinite(state.bestEverGen) ? state.bestEverGen : null,
+          networkName: state.networkName || "",
           eliteScore: state.eliteScore,
           hist: state.hist.slice(-80),
           snapshots: (state.snapshots || []).slice(-40).map((item) => ({
-            gen: item.gen, score: item.score, weights: pack(item.weights),
+            gen: item.gen, score: item.score, name: item.name || "", weights: pack(item.weights),
           })),
         }));
       } catch (error) { /* a full history can exceed the quota; the run still continues */ }
+    }
+    function networkFromJson(data) {
+      const rawArray = Array.isArray(data);
+      const packet = rawArray ? { theta: data } : data;
+      if (!packet || typeof packet !== "object") return null;
+      const parent = padWeights(packet.theta);
+      if (!parent) return null;
+      const revived = freshState(randomNormal);
+      revived.theta = parent;
+      revived.bestEverTheta = (!rawArray && padWeights(packet.bestEverTheta)) || parent.slice();
+      revived.bestGenTheta = (!rawArray && padWeights(packet.bestGenTheta)) || parent.slice();
+      revived.m = new Float32Array(parent.length);
+      revived.v = new Float32Array(parent.length);
+      revived.k = 0;
+      if (rawArray) return revived;
+      if (Number.isFinite(+packet.gen) && +packet.gen >= 0) revived.gen = Math.floor(+packet.gen);
+      if (Number.isFinite(+packet.bestEverScore)) revived.bestEverScore = +packet.bestEverScore;
+      if (typeof packet.bestEverName === "string") revived.bestEverName = packet.bestEverName.replace(/\.json$/i, "");
+      if (Number.isFinite(+packet.bestEverGen) && +packet.bestEverGen >= 0) revived.bestEverGen = Math.floor(+packet.bestEverGen);
+      if (typeof packet.name === "string") revived.networkName = packet.name.replace(/\.json$/i, "");
+      if (Number.isFinite(+packet.eliteScore)) revived.eliteScore = +packet.eliteScore;
+      if (Array.isArray(packet.hist)) {
+        revived.hist = packet.hist.filter((item) => item && Number.isFinite(+item.mean) && Number.isFinite(+item.best));
+      }
+      if (Array.isArray(packet.snapshots)) {
+        revived.snapshots = packet.snapshots.slice(-40).map((item) => ({
+          gen: item && item.gen,
+          score: item && item.score,
+          name: item && typeof item.name === "string" ? item.name.replace(/\.json$/i, "") : "",
+          weights: item && padWeights(item.weights),
+        })).filter((item) => item.weights && Number.isFinite(+item.gen) && Number.isFinite(+item.score));
+      }
+      return revived;
     }
     function loadSession() {
       try {
@@ -678,11 +1411,15 @@
         revived.bestGenTheta = padWeights(saved.bestGenTheta) || parent.slice();
         revived.bestEverTheta = padWeights(saved.bestEverTheta) || parent.slice();
         revived.bestEverScore = saved.bestEverScore ?? -1e9;
+        revived.bestEverName = typeof saved.bestEverName === "string" ? saved.bestEverName : "";
+        if (saved.bestEverGen != null && Number.isFinite(+saved.bestEverGen)) revived.bestEverGen = Math.floor(+saved.bestEverGen);
+        revived.networkName = typeof saved.networkName === "string" ? saved.networkName : "";
         revived.eliteScore = saved.eliteScore ?? -1e9;
         revived.hist = saved.hist || [];
         revived.snapshots = (saved.snapshots || []).slice(-40).map((item) => ({
           gen: item.gen,
           score: item.score,
+          name: item.name || "",
           weights: padWeights(item.weights),
         })).filter((item) => item.weights);
         revived.m = new Float32Array(parent.length);

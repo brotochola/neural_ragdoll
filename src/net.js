@@ -1,74 +1,53 @@
 // Elman net and the one-parent search. h_t keeps a leak of h_{t-1}. a_t = tanh(W h_t).
-import {
-  hiddenUnitCount,
-  jointCount,
-  inputCount,
-  legacyInputCount,
-  hiddenLeak,
-  explorationScale,
-  explorationFloor,
-  explorationHalfLifeGenerations,
-  limbExplorationScale,
-  learningRate,
-  learningRateFloor,
-  learningRateHalfLifeGenerations,
-  trainableJointIndexes,
-  goalCloseEnoughMeters,
-} from "../config.js";
+import { config } from "../config.js";
+
+const net = config.net;
+const search = config.search;
 
 export function weightCountOf(hiddenCount) {
-  return hiddenCount * (inputCount + hiddenCount + 1) + jointCount * (hiddenCount + 1);
+  return hiddenCount * (net.inputCount + hiddenCount + 1) + net.jointCount * (hiddenCount + 1);
 }
 export function hiddenCountOf(length) {
-  const span = inputCount + 1 + jointCount;
-  const discriminant = span * span - 4 * (jointCount - length);
+  const span = net.inputCount + 1 + net.jointCount;
+  const discriminant = span * span - 4 * (net.jointCount - length);
   if (!(discriminant >= 0)) return 0;
   const hiddenCount = Math.round((-span + Math.sqrt(discriminant)) / 2);
   return hiddenCount >= 1 && weightCountOf(hiddenCount) === length ? hiddenCount : 0;
 }
-export const weightCount = weightCountOf(hiddenUnitCount);
+export const weightCount = weightCountOf(net.hiddenUnitCount);
 
-const hiddenStride = inputCount + hiddenUnitCount + 1;
-const hiddenBlock = hiddenUnitCount * hiddenStride;
+const hiddenStride = net.inputCount + net.hiddenUnitCount + 1;
+const hiddenBlock = net.hiddenUnitCount * hiddenStride;
 
-function isGoalInputWeight(index) {
-  if (index >= hiddenBlock) return false;
-  const local = index % hiddenStride;
-  // Goal x, goal y, and the standing bit after them. The bit is trained, or it stays zero.
-  return local >= inputCount - 2 && local <= inputCount;
-}
 function explorationOf(index, scale) {
-  if (isGoalInputWeight(index)) return scale;
-  if (index < hiddenBlock) return 0;
-  const joint = Math.floor((index - hiddenBlock) / (hiddenUnitCount + 1));
-  return trainableJointIndexes.includes(joint) ? limbExplorationScale : 0;
+  if (index < hiddenBlock) {
+    const local = index % hiddenStride;
+    if (local === net.goalInputIndex + 1 || local === net.goalInputIndex + 2 || local === net.standingInputIndex + 1) return scale;
+    if (local > net.sensedInputCount && local <= net.inputCount) return net.freshInputExplorationScale;
+    return search.bodyExplorationScale;
+  }
+  const joint = Math.floor((index - hiddenBlock) / (net.hiddenUnitCount + 1));
+  return search.trainableJointIndexes.includes(joint) ? search.limbExplorationScale : 0;
 }
 
 // Older saves have fewer inputs. New columns are inserted as zeros so the old policy is unchanged.
 export function padWeights(source) {
   if (!source || !source.length) return null;
   if (hiddenCountOf(source.length)) return Float32Array.from(source);
-  const oldInputCount = (source.length - jointCount * (hiddenUnitCount + 1)) / hiddenUnitCount - hiddenUnitCount - 1;
-  if (oldInputCount !== (oldInputCount | 0) || oldInputCount < 1 || oldInputCount >= inputCount) return null;
-  const extra = inputCount - oldInputCount;
+  const oldInputCount = (source.length - net.jointCount * (net.hiddenUnitCount + 1)) / net.hiddenUnitCount - net.hiddenUnitCount - 1;
+  if (oldInputCount !== (oldInputCount | 0) || oldInputCount < 1 || oldInputCount >= net.inputCount) return null;
+  const extra = net.inputCount - oldInputCount;
   const padded = new Float32Array(weightCount);
   let read = 0;
   let write = 0;
-  for (let unit = 0; unit < hiddenUnitCount; unit++) {
+  for (let unit = 0; unit < net.hiddenUnitCount; unit++) {
     padded[write++] = source[read++];
     for (let i = 0; i < oldInputCount; i++) padded[write++] = source[read++];
     write += extra;
-    for (let i = 0; i < hiddenUnitCount; i++) padded[write++] = source[read++];
+    for (let i = 0; i < net.hiddenUnitCount; i++) padded[write++] = source[read++];
   }
-  for (let i = 0; i < jointCount * (hiddenUnitCount + 1); i++) padded[write++] = source[read++];
+  for (let i = 0; i < net.jointCount * (net.hiddenUnitCount + 1); i++) padded[write++] = source[read++];
   return padded;
-}
-
-export function netsFromCheckpoint(checkpoint) {
-  const seed = padWeights(checkpoint.bestTheta) || padWeights(checkpoint.thetaStand) || padWeights(checkpoint.theta);
-  if (!seed) throw new Error("checkpoint size does not match this network");
-  const take = (weights) => padWeights(weights) || seed;
-  return { parent: take(checkpoint.theta), bestEver: take(checkpoint.bestTheta) || seed.slice() };
 }
 
 // Writes the next hidden state and the action into caller-owned buffers.
@@ -77,11 +56,11 @@ export function forwardInto(weights, input, hidden, nextHidden, action) {
   let cursor = 0;
   for (let unit = 0; unit < hiddenSize; unit++) {
     let sum = weights[cursor++];
-    for (let i = 0; i < inputCount; i++) sum += weights[cursor++] * input[i];
+    for (let i = 0; i < net.inputCount; i++) sum += weights[cursor++] * input[i];
     for (let i = 0; i < hiddenSize; i++) sum += weights[cursor++] * hidden[i];
-    nextHidden[unit] = hiddenLeak * hidden[unit] + (1 - hiddenLeak) * Math.tanh(sum);
+    nextHidden[unit] = net.hiddenLeak * hidden[unit] + (1 - net.hiddenLeak) * Math.tanh(sum);
   }
-  for (let joint = 0; joint < jointCount; joint++) {
+  for (let joint = 0; joint < net.jointCount; joint++) {
     let sum = weights[cursor++];
     for (let unit = 0; unit < hiddenSize; unit++) sum += weights[cursor++] * nextHidden[unit];
     action[joint] = Math.tanh(sum);
@@ -101,8 +80,8 @@ export function makeRandom(seed) {
 export function freshState(randomNormal) {
   const parent = new Float32Array(weightCount);
   const hiddenEnd = hiddenBlock;
-  for (let i = 0; i < hiddenEnd; i++) parent[i] = randomNormal() * 0.12;
-  for (let i = hiddenEnd; i < weightCount; i++) parent[i] = randomNormal() * 0.04;
+  for (let i = 0; i < hiddenEnd; i++) parent[i] = randomNormal() * search.hiddenInitScale;
+  for (let i = hiddenEnd; i < weightCount; i++) parent[i] = randomNormal() * search.outputInitScale;
   return {
     theta: parent,
     gen: 0,
@@ -122,7 +101,7 @@ export function freshState(randomNormal) {
 export function askGeneration(state, situation, count, randomNormal) {
   const parent = state.theta;
   const length = parent.length;
-  const scale = Math.max(explorationScale, explorationFloor * Math.pow(0.5, (state.gen || 0) / explorationHalfLifeGenerations));
+  const scale = Math.max(search.explorationScale, search.explorationFloor * Math.pow(0.5, (state.gen || 0) / search.explorationHalfLifeGenerations));
   const noise = [];
   const weights = [];
   const phases = [];
@@ -151,24 +130,24 @@ export function tellGeneration(state, generation, scores) {
   const rank = new Array(values.length);
   order.forEach((index, place) => { rank[index] = place / (values.length - 1) - 0.5; });
   const gradient = new Float32Array(length);
-  const scale = generation.scale || explorationScale;
+  const scale = generation.scale || search.explorationScale;
   for (let pair = 0; pair < count; pair++) {
     const difference = rank[2 * pair] - rank[2 * pair + 1];
     for (let i = 0; i < length; i++) if (explorationOf(i, scale)) gradient[i] += difference * generation.noise[pair][i];
   }
   const stepIndex = ++state.k;
-  const firstMoment = 0.9;
-  const secondMoment = 0.999;
+  const firstMoment = search.adamBeta1;
+  const secondMoment = search.adamBeta2;
   const firstFix = 1 - Math.pow(firstMoment, stepIndex);
   const secondFix = 1 - Math.pow(secondMoment, stepIndex);
-  const stepSize = Math.max(learningRateFloor, learningRate * Math.pow(0.5, (state.gen || 0) / learningRateHalfLifeGenerations));
+  const stepSize = Math.max(search.learningRateFloor, search.learningRate * Math.pow(0.5, (state.gen || 0) / search.learningRateHalfLifeGenerations));
   for (let i = 0; i < length; i++) {
     const coordinateScale = explorationOf(i, scale);
     if (!coordinateScale) continue;
     const estimate = gradient[i] / (count * coordinateScale);
     state.m[i] = firstMoment * state.m[i] + (1 - firstMoment) * estimate;
     state.v[i] = secondMoment * state.v[i] + (1 - secondMoment) * estimate * estimate;
-    state.theta[i] += (stepSize * (state.m[i] / firstFix)) / (Math.sqrt(state.v[i] / secondFix) + 1e-8);
+    state.theta[i] += (stepSize * (state.m[i] / firstFix)) / (Math.sqrt(state.v[i] / secondFix) + search.adamEpsilon);
   }
   const bestIndex = order[order.length - 1];
   const bestWeights = generation.weights[bestIndex];
@@ -179,7 +158,7 @@ export function tellGeneration(state, generation, scores) {
     state.bestEverScore = values[bestIndex];
   }
   // Only replace the parent when someone actually arrived. A high score from standing still does not.
-  if (values[bestIndex] > (state.eliteScore ?? -1e9) && (scores[bestIndex].gap ?? 9) < goalCloseEnoughMeters) {
+  if (values[bestIndex] > (state.eliteScore ?? -1e9) && (scores[bestIndex].gap ?? search.eliteMissingGapMeters) < search.goalCloseEnoughMeters) {
     state.theta.set(bestWeights);
     state.eliteScore = values[bestIndex];
     state.m = new Float32Array(length);
@@ -187,7 +166,7 @@ export function tellGeneration(state, generation, scores) {
     state.k = 0;
   }
   state.gen++;
-  const stood = scores.filter((score) => score.stoodUp && (score.headImpact || 0) < 1.5).length / scores.length;
+  const stood = scores.filter((score) => score.stoodUp && (score.headImpact || 0) < search.headImpactQuiet).length / scores.length;
   state.hist.push({
     mean: values.reduce((sum, value) => sum + value, 0) / values.length,
     best: Math.max(...values),
@@ -196,5 +175,3 @@ export function tellGeneration(state, generation, scores) {
   });
   if (state.hist.length > 400) state.hist = state.hist.slice(-400);
 }
-
-export { legacyInputCount };
