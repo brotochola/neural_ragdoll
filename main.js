@@ -192,7 +192,7 @@ export class NeuralRagDollWorld {
       this.$("speedValue").textContent = this.$("speed").value + " m/s";
       this.saveUi();
     };
-    for (const id of ["trainPose", "snapshotEvery", "startPose", "viewRays", "objectKind"]) {
+    for (const id of ["snapshotEvery", "startPose", "viewRays", "objectKind"]) {
       this.$(id).addEventListener("change", () => this.saveUi());
     }
 
@@ -429,7 +429,7 @@ export class NeuralRagDollWorld {
         const pose = isStanding(this.episode.measure) ? "standing" : (this.episode.measure.handOn ? "on hands" : (this.episode.measure.bodyOn ? "on the floor" : "in the air"));
         const goal = this.episode.options.goalX == null ? "" : " · goal " + Math.abs(this.episode.options.goalX - this.episode.measure.centerX).toFixed(1) + " m";
         this.paintTraining();
-        this.label.text = "Head " + (this.episode.measure.headHeight || 0).toFixed(2) + " m · torso " + (Math.abs(this.episode.measure.torsoAngle) * 180 / Math.PI).toFixed(0) + "° · " + pose + goal;
+        this.label.text = "Head " + (this.episode.measure.headHeight || 0).toFixed(2) + " m · torso " + (Math.abs(Math.atan2(this.episode.measure.torsoSin || 0, this.episode.measure.torsoCos || 1)) * 180 / Math.PI).toFixed(0) + "° · " + pose + goal;
       }
       this.drawChart();
     });
@@ -458,7 +458,17 @@ export class NeuralRagDollWorld {
         worker.postMessage({ tasks: bucket, trainingPhase: config.curriculum.phase });
       });
     })).then((groups) => {
-      const flat = groups.flat();
+      const timings = [];
+      const flat = [];
+      for (const group of groups) {
+        if (!group || Array.isArray(group)) {
+          if (group) flat.push(...group);
+          continue;
+        }
+        flat.push(...(group.results || []));
+        if (group.steps > 0) timings.push(group);
+      }
+      this.workerTiming = timings;
       const ordered = new Array(items.length);
       for (const row of flat) ordered[row.index] = row;
       return ordered;
@@ -472,18 +482,27 @@ export class NeuralRagDollWorld {
       if (this.paused) { await new Promise((resolve) => setTimeout(resolve, 150)); continue; }
       const generationState = this.state;
       try {
-        const generation = generationState.ask(this.sim.situation(this.random, this.$("trainPose").value), Math.max(config.workers.browserPairMin, this.pool.workers.length), this.randomNormal);
+        const generation = generationState.ask(null, Math.max(config.workers.browserPairMin, this.pool.workers.length), this.randomNormal);
         const starts = [];
-        for (let pair = 0; pair < generation.count; pair++) starts.push(this.sim.varyStart(generation.situation, this.random));
-        const tasks = generation.weights.map((weights, index) => ({
-          index,
-          weights,
-          phase: index % config.cadence.actionEveryNFrames,
-          options: starts[Math.floor(index / 2)] || generation.situation,
-        }));
-        const scores = await this.evaluatePopulation(tasks);
+        const tasks = [];
+        let taskIndex = 0;
+        for (let child = 0; child < generation.weights.length; child++) {
+          if (child % 2 === 0) starts.push(this.sim.trainingStarts(this.random));
+          const trio = starts[Math.floor(child / 2)];
+          for (let pose = 0; pose < trio.length; pose++) {
+            tasks.push({
+              index: taskIndex++,
+              weights: generation.weights[child],
+              phase: child % config.cadence.actionEveryNFrames,
+              options: trio[pose],
+            });
+          }
+        }
+        const rows = await this.evaluatePopulation(tasks);
         if (this.state !== generationState) continue;
-        if (scores.some((score) => !score || !Number.isFinite(score.fitness))) throw new Error("A worker returned an empty score");
+        if (rows.some((score) => !score || !Number.isFinite(score.fitness))) throw new Error("A worker returned an empty score");
+        const scores = [];
+        for (let child = 0; child < generation.weights.length; child++) scores.push(this.sim.poseScore(rows.slice(child * 3, child * 3 + 3)));
         this.state.tell(generation, scores);
         await this.rememberBest();
         this.saveSession();
@@ -491,7 +510,8 @@ export class NeuralRagDollWorld {
         const finished = this.state.hist[this.state.hist.length - 1];
         if (finished) {
           const mut = this.mutationStatus(", ");
-          this.logEvent("generation finished (gen " + this.state.gen + ", avg " + finished.mean.toFixed(2) + ", gen best " + finished.best.toFixed(2) + mut + ")");
+          const began = Number.isFinite(finished.start) ? finished.start.toFixed(2) + " → " : "";
+          this.logEvent("generation finished (gen " + this.state.gen + ", " + began + finished.mean.toFixed(2) + ", gen best " + finished.best.toFixed(2) + mut + ")");
         }
         this.advanceTrainPhase();
       } catch (error) {
@@ -516,17 +536,11 @@ export class NeuralRagDollWorld {
   }
 
   phaseLesson(phase) {
-    if (phase.name === "Stand") return "Stand can be dropped, and a ball can be thrown.";
-    if (phase.name === "Get up") return "Get up starts on the floor.";
-    if (phase.name === "Walk") return "Walk starts standing, and the marker is the goal.";
-    const bits = [];
-    if (phase.start === "down") bits.push("starts on the floor");
-    else if (phase.start === "up") bits.push("starts standing");
-    else bits.push("starts standing or on the floor");
-    if (phase.falls) bits.push("can be dropped");
+    const bits = ["each child starts standing, on its back, and face down"];
+    if (phase.falls) bits.push("a standing start can be dropped");
     if (phase.balls) bits.push("a ball can be thrown");
     if (phase.goal) bits.push("the marker is the goal");
-    return phase.name + " " + bits.join(", ") + ".";
+    return phase.name + ": " + bits.join(", ") + ".";
   }
 
   phaseStat() {
@@ -564,7 +578,7 @@ export class NeuralRagDollWorld {
     if (this.$("watchEver").checked) {
       return {
         value: "Best ever",
-        tip: "The doll is using the child with the highest score since this session started.",
+        tip: "The doll is using the parent from when the 20-generation average ending last reached a new high.",
       };
     }
     if (this.$("watchGeneration").checked) {
@@ -579,6 +593,31 @@ export class NeuralRagDollWorld {
     };
   }
 
+  workerTimingRows() {
+    const pending = "Shows up after the first generation finishes.";
+    const blank = [
+      ["Ragdolls per worker", "–", pending],
+      ["Seconds per generation", "–", pending],
+      ["Milliseconds per frame", "–", pending],
+    ];
+    const rows = (this.workerTiming || []).filter((row) => row && row.steps > 0 && row.ms >= 0 && Array.isArray(row.results));
+    if (!rows.length) return blank;
+    const range = (values, digits) => {
+      const low = Math.min(...values);
+      const high = Math.max(...values);
+      const a = low.toFixed(digits);
+      const b = high.toFixed(digits);
+      return a === b ? a : a + "–" + b;
+    };
+    const ragdolls = rows.map((row) => row.results.length);
+    const total = ragdolls.reduce((sum, count) => sum + count, 0);
+    return [
+      ["Ragdolls per worker", range(ragdolls, 0), "How many ragdolls each worker ran in the last generation. There were " + total + " ragdolls in total, split across " + rows.length + " workers. A pair is two ragdolls. They share a starting pose and try opposite small changes. More pairs means more ragdolls here."],
+      ["Seconds per generation", range(rows.map((row) => row.ms / 1000), 1), "How long each worker took to finish every ragdoll it was given, one after another. The workers run at the same time, so a generation lasts about this long. More ragdolls per worker makes this longer."],
+      ["Milliseconds per frame", range(rows.map((row) => row.ms / row.steps), 2), "How long one physics frame takes while a ragdoll is moving. A frame is one small update of the body. This stays about the same when you add ragdolls. The generation gets longer because there are more frames to run, not because each frame gets slower. The picture on screen aims for a frame every 16 milliseconds. The workers run faster than that and do not wait."],
+    ];
+  }
+
   paintTraining() {
     const last = this.state.hist[this.state.hist.length - 1];
     const phase = this.phaseStat();
@@ -587,14 +626,17 @@ export class NeuralRagDollWorld {
     const everText = Number.isFinite(ever) && ever > -1e8 ? ever.toFixed(2) : "–";
     const boost = this.state.mutationBoost || 1;
     const pct = Math.round((this.state.mutationFraction || 0) * 100);
+    const ending = last && Number.isFinite(last.end) ? last.end : last ? last.mean : null;
+    const arrow = !last || !Number.isFinite(ending) ? "–" : Number.isFinite(last.start) ? last.start.toFixed(2) + " → " + ending.toFixed(2) : ending.toFixed(2);
     const rows = [
       ["Phase", phase.value, phase.tip],
       ["Generation", String(this.state.gen || 0), "How many generations have finished. Each generation is a batch of children of the parent, scored on one episode each."],
-      ["Generation average", last ? last.mean.toFixed(2) : "–", "Average score of every child in the last finished generation. The blue line. Not a network you can put on the doll.", "avg"],
-      ["Generation best", last ? last.best.toFixed(2) : "–", "Highest score among those children. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.", "best"],
-      ["Best ever", everText, "Highest score any child has reached in this session. Network → Best ever plays those weights. The green line can sit below this, because it is only the last generation."],
+      ...this.workerTimingRows(),
+      ["Start → end", arrow, "Average reward of the children in the first 0.5 s, then in the last 3 s. The fitness is that ending, minus whatever was lost since the start. A child that ends where it began keeps the ending. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.", "avg"],
+      ["Generation best", last ? last.best.toFixed(2) : "–", "Highest fitness among those children: the last 3 s, minus whatever that child lost since its first 0.5 s. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.", "best"],
+      ["Best ever", everText, "The 20-generation average fitness, at the last time it reached a new high. The fitness is the ending minus any drop from the start. Network → Best ever plays the parent from that generation. A single lucky child does not set this."],
       ["Watching", watching.value, watching.tip],
-      ["Plateau", (this.state.flatGens || 0) + " gens", "Generations without enough new records to relax the search. At 100, a quarter of each generation is pushed farther from the parent. One new Best ever removes 100 from this count."],
+      ["Plateau", (this.state.flatGens || 0) + " gens", "Generations since the 20-generation average fitness last reached a new high. The fitness is the ending minus any drop from the start. At 100, a quarter of each generation is pushed farther from the parent. One new Best ever removes 100 from this count."],
       ["Mutation", "x" + boost + (pct > 0 ? " · " + pct + "%" : ""), "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting."],
     ];
     this.$("status").innerHTML = rows.map((row) => {
@@ -772,36 +814,52 @@ export class NeuralRagDollWorld {
     const originY = 12;
     this.chart.roundRect(originX, originY, width, height, 6).fill({ color: 0x000000, alpha: 0.35 });
     const history = this.state.hist;
-    let low = Infinity;
-    let high = -Infinity;
-    for (const sample of history) {
-      if (Number.isFinite(sample.mean)) { low = Math.min(low, sample.mean); high = Math.max(high, sample.mean); }
-      if (Number.isFinite(sample.best)) { low = Math.min(low, sample.best); high = Math.max(high, sample.best); }
-    }
-    const flatLine = !(high > low);
-    const drawLow = flatLine ? (Number.isFinite(low) ? low : 0) - 1 : low;
-    const drawHigh = flatLine ? drawLow + 2 : high;
+    const drawLow = -16;
+    const drawHigh = 24;
     const span = drawHigh - drawLow;
-    if (history.length >= 2) {
-      for (const [key, color] of [["mean", 0x6f95ff], ["best", 0x43d9ad]]) {
-        history.forEach((sample, index) => {
-          const x = originX + 4 + index / (history.length - 1) * (width - 8);
-          const y = originY + plot - 4 - ((sample[key] - drawLow) / span) * (plot - 8);
-          if (index) this.chart.lineTo(x, y);
-          else this.chart.moveTo(x, y);
-        });
-        this.chart.stroke({ width: 1.5, color });
+    const yOf = (value) => {
+      const clamped = Math.min(drawHigh, Math.max(drawLow, value));
+      return originY + plot - 4 - ((clamped - drawLow) / span) * (plot - 8);
+    };
+    const smoothWindow = config.search.recordWindow;
+    const smoothed = [];
+    for (let index = 0; index < history.length; index++) {
+      const begin = Math.max(0, index - smoothWindow + 1);
+      let sum = 0;
+      let n = 0;
+      for (let i = begin; i <= index; i++) {
+        if (!Number.isFinite(history[i].mean)) continue;
+        sum += history[i].mean;
+        n++;
       }
+      smoothed.push(n ? sum / n : NaN);
     }
-    this.chartScale.text = history.length && Number.isFinite(low) ? (flatLine ? low.toFixed(2) : low.toFixed(2) + "–" + high.toFixed(2)) : "";
+    if (history.length >= 2) {
+      smoothed.forEach((value, index) => {
+        const x = originX + 4 + index / (history.length - 1) * (width - 8);
+        const y = yOf(Number.isFinite(value) ? value : drawLow);
+        if (index) this.chart.lineTo(x, y);
+        else this.chart.moveTo(x, y);
+      });
+      this.chart.stroke({ width: 1.5, color: 0x6f95ff });
+      history.forEach((sample, index) => {
+        const x = originX + 4 + index / (history.length - 1) * (width - 8);
+        const y = yOf(Number.isFinite(sample.best) ? sample.best : drawLow);
+        if (index) this.chart.lineTo(x, y);
+        else this.chart.moveTo(x, y);
+      });
+      this.chart.stroke({ width: 1.5, color: 0x43d9ad });
+    }
+    this.chartScale.text = drawLow + "–" + drawHigh;
     this.chartScale.position.set(originX + width - 72, originY + 2);
     const last = history[history.length - 1];
+    const lastSmooth = smoothed.length ? smoothed[smoothed.length - 1] : NaN;
     const legendY = originY + plot + 4;
     this.chart.rect(originX + 8, legendY + 2, 8, 8).fill(0x6f95ff);
     this.chart.rect(originX + width / 2, legendY + 2, 8, 8).fill(0x43d9ad);
     this.chartMean.position.set(originX + 20, legendY);
     this.chartBest.position.set(originX + width / 2 + 12, legendY);
-    this.chartMean.text = "avg" + (last ? " " + last.mean.toFixed(2) : "");
+    this.chartMean.text = "avg" + (Number.isFinite(lastSmooth) ? " " + lastSmooth.toFixed(2) : "");
     this.chartBest.text = "gen best" + (last ? " " + last.best.toFixed(2) : "");
   }
 
@@ -822,8 +880,11 @@ drawNetworkGraph() {
     missing.textContent = "";
     const feedforward = layout.feedforward;
     const recurrent = layout.recurrent;
+    const feedbackCount = layout.feedback;
     const inputs = episode.input;
     const firstAct = episode.network && episode.network.compressed;
+    const feedbackAct = episode.network && episode.network.feedback;
+    const feedbackFrom = episode.network && episode.network.feedbackFrom;
     const memoryAct = episode.hidden;
     const outputs = episode.action;
     const joints = jointNames.length;
@@ -848,18 +909,15 @@ drawNetworkGraph() {
     const top = 28;
     const bottom = height - 12;
     const yOf = (index, count) => count <= 1 ? (top + bottom) / 2 : top + index * (bottom - top) / (count - 1);
-    const columns = feedforward
-      ? [
-          { title: "", count: config.net.inputCount, x: left, radius: 1.6, values: inputs, tag: (i) => this.observationLabel(i).name, align: "right" },
-          { title: "hidden 1", count: feedforward, x: left + (right - left) * 0.38, radius: 3.5, values: firstAct, tag: (i) => "a" + i, align: "left" },
-          { title: "hidden 2", count: recurrent, x: left + (right - left) * 0.68, radius: 3.5, values: memoryAct, tag: (i) => "b" + i, align: "left" },
-          { title: "", count: joints, x: right, radius: 5, values: outputs, tag: (i) => jointNames[i], align: "left" },
-        ]
-      : [
-          { title: "", count: config.net.inputCount, x: left, radius: 1.6, values: inputs, tag: (i) => this.observationLabel(i).name, align: "right" },
-          { title: "recurrent dashed", count: recurrent, x: Math.round(width * 0.58), radius: 5, values: memoryAct, tag: (i) => "h" + i, align: "left" },
-          { title: "", count: joints, x: right, radius: 5, values: outputs, tag: (i) => jointNames[i], align: "left" },
-        ];
+    const columns = [
+      { title: "", count: config.net.inputCount, x: left, radius: 1.6, values: inputs, tag: (i) => this.observationLabel(i).name, align: "right" },
+    ];
+    if (feedforward) columns.push({ title: "hidden 1", count: feedforward, radius: 3.5, values: firstAct, tag: (i) => "a" + i, align: "left" });
+    if (feedbackCount) columns.push({ title: "feedback", count: feedbackCount, radius: 3.5, values: feedbackAct, tag: (i) => "f" + i, align: "left" });
+    columns.push({ title: feedforward ? "hidden 2" : "recurrent dashed", count: recurrent, radius: feedforward ? 3.5 : 5, values: memoryAct, tag: (i) => (feedforward ? "b" : "h") + i, align: "left" });
+    columns.push({ title: "", count: joints, x: right, radius: 5, values: outputs, tag: (i) => jointNames[i], align: "left" });
+    const inner = columns.slice(1, -1);
+    for (let i = 0; i < inner.length; i++) inner[i].x = left + (right - left) * (i + 1) / (inner.length + 1);
     const yAt = (column, index) => yOf(index, column.count);
     const bucketCount = 6;
     const alphas = [0.06, 0.11, 0.18, 0.3, 0.46, 0.7];
@@ -894,29 +952,10 @@ drawNetworkGraph() {
     };
     const inputColumn = columns[0];
     const jointColumn = columns[columns.length - 1];
-    if (!feedforward) {
-      const hiddenColumn = columns[1];
-      const stride = 1 + config.net.inputCount + recurrent;
-      const outStride = recurrent + 1;
-      const outBase = recurrent * stride;
-      for (let unit = 0; unit < recurrent; unit++) {
-        const base = unit * stride;
-        const hiddenY = yAt(hiddenColumn, unit);
-        for (let i = 0; i < config.net.inputCount; i++) {
-          wire(weights[base + 1 + i], inputs && inputs[i], inputColumn.x, yAt(inputColumn, i), hiddenColumn.x, hiddenY);
-        }
-        for (let other = 0; other < recurrent; other++) {
-          memoryArc(weights[base + 1 + config.net.inputCount + other], memoryAct && memoryAct[other], hiddenColumn.x, yAt(hiddenColumn, other), hiddenY, other === unit);
-        }
-      }
-      for (let joint = 0; joint < joints; joint++) {
-        for (let unit = 0; unit < recurrent; unit++) {
-          wire(weights[outBase + joint * outStride + 1 + unit], memoryAct && memoryAct[unit], hiddenColumn.x, yAt(hiddenColumn, unit), jointColumn.x, yAt(jointColumn, joint));
-        }
-      }
-    } else {
-      const firstColumn = columns[1];
-      const memoryColumn = columns[2];
+    const memoryColumn = columns[columns.length - 2];
+    const firstColumn = feedforward ? columns[1] : null;
+    const feedbackColumn = feedbackCount ? columns[feedforward ? 2 : 1] : null;
+    if (feedforward) {
       for (let unit = 0; unit < feedforward; unit++) {
         const base = unit * layout.feedforwardStride;
         const hiddenY = yAt(firstColumn, unit);
@@ -924,21 +963,43 @@ drawNetworkGraph() {
           wire(weights[base + 1 + i], inputs && inputs[i], inputColumn.x, yAt(inputColumn, i), firstColumn.x, hiddenY);
         }
       }
-      for (let unit = 0; unit < recurrent; unit++) {
-        const base = layout.feedforwardBlock + unit * layout.recurrentStride;
-        const hiddenY = yAt(memoryColumn, unit);
-        for (let i = 0; i < feedforward; i++) {
-          wire(weights[base + 1 + i], firstAct && firstAct[i], firstColumn.x, yAt(firstColumn, i), memoryColumn.x, hiddenY);
-        }
-        for (let other = 0; other < recurrent; other++) {
-          memoryArc(weights[base + 1 + feedforward + other], memoryAct && memoryAct[other], memoryColumn.x, yAt(memoryColumn, other), hiddenY, other === unit);
+    }
+    if (feedbackCount) {
+      for (let unit = 0; unit < feedbackCount; unit++) {
+        const base = layout.feedbackBase + unit * layout.feedbackStride;
+        const feedbackY = yAt(feedbackColumn, unit);
+        for (let joint = 0; joint < joints; joint++) {
+          wire(weights[base + 1 + joint], feedbackFrom && feedbackFrom[joint], jointColumn.x, yAt(jointColumn, joint), feedbackColumn.x, feedbackY);
         }
       }
-      for (let joint = 0; joint < joints; joint++) {
-        const base = layout.outputBase + joint * (recurrent + 1);
-        for (let unit = 0; unit < recurrent; unit++) {
-          wire(weights[base + 1 + unit], memoryAct && memoryAct[unit], memoryColumn.x, yAt(memoryColumn, unit), jointColumn.x, yAt(jointColumn, joint));
+    }
+    for (let unit = 0; unit < recurrent; unit++) {
+      const base = layout.recurrentBase + unit * layout.recurrentStride;
+      const hiddenY = yAt(memoryColumn, unit);
+      let offset = 1;
+      if (feedforward) {
+        for (let i = 0; i < feedforward; i++) {
+          wire(weights[base + offset + i], firstAct && firstAct[i], firstColumn.x, yAt(firstColumn, i), memoryColumn.x, hiddenY);
         }
+        offset += feedforward;
+      } else {
+        for (let i = 0; i < config.net.inputCount; i++) {
+          wire(weights[base + offset + i], inputs && inputs[i], inputColumn.x, yAt(inputColumn, i), memoryColumn.x, hiddenY);
+        }
+        offset += config.net.inputCount;
+      }
+      for (let i = 0; i < feedbackCount; i++) {
+        wire(weights[base + offset + i], feedbackAct && feedbackAct[i], feedbackColumn.x, yAt(feedbackColumn, i), memoryColumn.x, hiddenY);
+      }
+      offset += feedbackCount;
+      for (let other = 0; other < recurrent; other++) {
+        memoryArc(weights[base + offset + other], memoryAct && memoryAct[other], memoryColumn.x, yAt(memoryColumn, other), hiddenY, other === unit);
+      }
+    }
+    for (let joint = 0; joint < joints; joint++) {
+      const base = layout.outputBase + joint * (recurrent + 1);
+      for (let unit = 0; unit < recurrent; unit++) {
+        wire(weights[base + 1 + unit], memoryAct && memoryAct[unit], memoryColumn.x, yAt(memoryColumn, unit), jointColumn.x, yAt(jointColumn, joint));
       }
     }
     context.lineWidth = 0.55;
@@ -1132,6 +1193,7 @@ drawNetworkGraph() {
         networkName: this.state.networkName || "",
         eliteScore: this.state.eliteScore,
         flatGens: this.state.flatGens || 0,
+        bestSmooth: Number.isFinite(this.state.bestSmooth) ? this.state.bestSmooth : null,
         hist: this.state.hist.slice(-80),
         snapshots: (this.state.snapshots || []).slice(-40).map((item) => ({
           gen: item.gen, score: item.score, name: item.name || "", weights: pack(item.weights),
@@ -1147,7 +1209,6 @@ drawNetworkGraph() {
       localStorage.setItem("ragdoll-ui", JSON.stringify({
         paused: this.paused,
         trainPhase: this.$("trainPhase").value,
-        trainPose: this.$("trainPose").value,
         snapshotEvery: this.$("snapshotEvery").value,
         watch,
         savedNet: this.$("savedNet").value,
@@ -1174,7 +1235,6 @@ drawNetworkGraph() {
       el.value = text;
     };
     pick("trainPhase", saved.trainPhase);
-    pick("trainPose", saved.trainPose);
     pick("snapshotEvery", saved.snapshotEvery);
     pick("startPose", saved.startPose);
     pick("objectKind", saved.objectKind);
@@ -1224,6 +1284,7 @@ drawNetworkGraph() {
     if (Number.isFinite(+packet.bestEverGen) && +packet.bestEverGen >= 0) revived.bestEverGen = Math.floor(+packet.bestEverGen);
     if (typeof packet.name === "string") revived.networkName = packet.name.replace(/\.json$/i, "");
     if (Number.isFinite(+packet.eliteScore)) revived.eliteScore = +packet.eliteScore;
+    if (Number.isFinite(+packet.bestSmooth)) revived.bestSmooth = +packet.bestSmooth;
     if (Array.isArray(packet.hist)) {
       revived.hist = packet.hist.filter((item) => item && Number.isFinite(+item.mean) && Number.isFinite(+item.best));
     }
@@ -1255,6 +1316,7 @@ drawNetworkGraph() {
       revived.networkName = typeof saved.networkName === "string" ? saved.networkName : "";
       revived.eliteScore = saved.eliteScore ?? -1e9;
       if (Number.isFinite(+saved.flatGens) && +saved.flatGens > 0) revived.flatGens = Math.floor(+saved.flatGens);
+      if (Number.isFinite(+saved.bestSmooth)) revived.bestSmooth = +saved.bestSmooth;
       revived.refreshMutationBoost();
       revived.hist = saved.hist || [];
       revived.snapshots = (saved.snapshots || []).slice(-40).map((item) => ({

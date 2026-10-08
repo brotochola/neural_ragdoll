@@ -2,12 +2,12 @@
 
 const physicsHz = 60;
 const partCount = 14;
-const sensedInputCount = 82;
+const sensedInputCount = 79; // 26 joint, 4 sin/cos, 2 heights, 4 mass, 40 face rays, goal x/y, standing.
 const rewardRowCount = 26;
 const partSpeedInputCount = partCount * 3;
-const rewardTotalNow = true;
-const rewardTotalPrevious = true;
-const rewardTotalNext = true;
+const rewardTotalNow = false;
+const rewardTotalPrevious = false;
+const rewardTotalNext = false;
 const rewardTotalInputCount =
   Number(rewardTotalNow) +
   Number(rewardTotalPrevious) +
@@ -20,30 +20,27 @@ export const config = {
     solverSubsteps: 3, // Box2D solver iterations per step. 4 was stiffer; 2 is faster.
   },
   cadence: {
-    actionEveryNFrames: 2, // Frames an action is held before the net picks a new one.
-    rewardEveryNFrames: 2, // Frames between score samples.
-    rewardFrameOffset: 1, // Sample the score this many frames after a new action, not on the action frame.
+    actionEveryNFrames: 5, // Frames an action is held before the net picks a new one. 5 = 12 decisions/s (was 10 = 6/s, slow for balance).
+    rewardEveryNFrames: 1, // Frames between score samples.
+    rewardFrameOffset: 0, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
-    hidden1Ratio: 7 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
-    hidden2Ratio: 5 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
+    hidden1Ratio: 50 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
+    hidden2Ratio: 15 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
+    feedbackUnits: 8, // Nonlinear summary of the previous action. It enters the recurrent layer only.
     jointCount: 13, // Motor joints, and the width of the action vector.
-    sensedInputCount, // Observation length before part speeds and reward rows. Goal x is 79, goal y is 80, standing is 81.
-    goalInputIndex: 79, // Index of the goal-x observation. Goal y is the next index.
-    standingInputIndex: 81, // Index of the binary standing observation.
+    sensedInputCount, // Observation length before part speeds. Goal x is 76, goal y is 77, standing is 78.
+    goalInputIndex: 76, // Index of the goal-x observation. Goal y is the next index.
+    standingInputIndex: 78, // Index of the binary standing observation.
     partCount, // Dynamic body parts, including the hip.
     partSpeedInputCount, // Three numbers per part: vx, vy, spin.
-    rewardRowCount, // Reward rows copied into the observation. Score-only rows are not included.
+    rewardRowCount, // Score rows shown on screen. They are not copied into the observation.
     rewardTotalNow, // Append the reward total from this decision.
     rewardTotalPrevious, // Append the reward total from the previous decision, one action interval ago.
     rewardTotalNext, // Append the reward total estimated one physics frame ahead.
-    inputCount:
-      sensedInputCount +
-      partSpeedInputCount +
-      rewardRowCount +
-      rewardTotalInputCount, // Full observation length.
-    freshInputExplorationScale: 0.04, // Noise on the newer speed and reward columns. Less than the goal columns.
-    hiddenLeak: 0.25, // Fraction of the previous hidden state kept each step.
+    inputCount: sensedInputCount + partSpeedInputCount + rewardTotalInputCount, // Full observation length.
+    freshInputExplorationScale: 0.04, // Noise on the part-speed columns. Less than the goal columns.
+    hiddenLeak: 0.6, // Fraction of the previous hidden state kept each step.
   },
   body: {
     platformHalfWidth: 20, // Half the platform length, in meters.
@@ -72,6 +69,7 @@ export const config = {
     forearmAngle: 0.15, // Weight of each forearm cosine.
     thighAngle: 1.5, // Weight of each thigh cosine.
     shinAngle: 0.25, // Weight of each shin cosine.
+    kneeBend: 2, // Per knee. Cost is this times (1 - cos of the bend) times how far the torso has turned up. Straight is free. A small bend is almost free. A right angle spends the whole weight.
     headHeight: 4, // Head-height weight. The floor value is -this; a full upright reach is +this.
     torsoHeight: 1.8, // Torso-height weight. Same shape as the head height.
     handOnFloor: 0.05, // Penalty weight while a hand is near the floor.
@@ -93,15 +91,15 @@ export const config = {
   },
   curriculum: {
     // Rows the Train menu and the headless run walk through. Each row lasts `generations`.
-    // start "mixed" uses the upright start chance; "down" is face-up or face-down; "up" is standing.
+    // start "up" is standing. "mixed" and "down" are a random tilt and a random height.
     phases: [
       {
         id: 1,
         name: "Stand",
         generations: 2000,
         start: "mixed",
-        falls: true,
-        balls: true,
+        falls: false, // Turn back on once the stand eval passes.
+        balls: false, // Turn back on once the stand eval passes.
         goal: false,
       },
       {
@@ -146,7 +144,6 @@ export const config = {
     ballStartMeters: 2.2, // How far to the side of the torso a ball starts.
     uprightDropMeters: 0.12, // Gap under the feet of an upright start that is not a fall.
     uprightTiltRadians: 0.08, // Max tilt of an upright start.
-    uprightStartChance: 0.55, // Chance a mixed-start episode begins upright. Otherwise it begins face-up or face-down.
     downTiltMinRadians: 1.15, // Minimum tilt of a face-up or face-down start.
     downTiltSpanRadians: 0.55, // Extra random tilt added past the minimum.
     downDropMeters: 0.05, // Gap under a face-up or face-down start before it settles.
@@ -159,11 +156,14 @@ export const config = {
     stagnationGenerations: 100, // Plateau length before the large noise starts. One new best removes this many generations from the count.
     stagnationBoost: 2, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
     stagnationBoostCap: 8, // Large-noise ceiling. Limb noise at the cap is 0.4, still near the parent.
+    sigmaCap: 0.4, // One weight's noise never exceeds this. The plateau boost cannot blow up the goal and standing columns.
+    recordWindow: 20, // Generations in the ending average that sets a record.
+    recordMargin: 0.25, // That average must clear the previous record by this much.
     stagnationMutateCap: 0.25, // Share of pairs that receive the large noise once a plateau starts. The rest keep the normal noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
-    bodyExplorationScale: 0.01, // Noise on hidden weights. Small, so balance can shift without a rewrite.
-    learningRate: 0.025, // Adam step size at generation 0.
-    learningRateFloor: 0.01, // Adam step size never drops below this.
+    bodyExplorationScale: 0.02, // Noise on hidden weights. Small, so balance can shift without a rewrite.
+    learningRate: 0.01, // Adam step size at generation 0. Was 0.025, 2.5x the hidden-weight noise.
+    learningRateFloor: 0.003, // Adam step size never drops below this.
     learningRateHalfLifeGenerations: 8000, // Generations for the Adam step size to halve.
     trainableJointIndexes: [1, 2, 4, 5, 6, 7, 8, 10, 11, 12], // Output joints that receive limb noise. Neck and wrists stay put.
     adamBeta1: 0.9, // Adam first-moment decay.
@@ -173,12 +173,14 @@ export const config = {
     outputInitScale: 0.04, // Fresh joint-output weights are a gaussian times this.
     randomWeightAbsMin: 8, // Random-weights button: each weight is at least this far from zero.
     randomWeightAbsMax: 20, // Random-weights button: each weight is at most this far from zero.
-    goalCloseEnoughMeters: 0.45, // Elite replace also needs the best child at least this close to the marker.
+    goalCloseEnoughMeters: -1, // Elite replace also needs the best child at least this close to the marker.
     eliteMissingGapMeters: 9, // Gap assumed when a score has no marker distance.
     headImpactQuiet: 1.5, // A stand counts as quiet when the peak head-down speed is below this, in m/s.
   },
   episode: {
     frames: 960, // Length of one scored episode.
+    startWindowSeconds: 0.5, // Mean reward over the first this many seconds. A drop from here to the ending is subtracted from the fitness.
+    endWindowSeconds: 3, // Mean reward over the last this many seconds. The fitness is this, minus any drop from the start window.
     startTiltJitterRadians: 0.12, // Extra tilt added on top of a situation.
     startShiftMeters: 0.4, // Extra horizontal shift of a situation.
     startDropJitterMeters: 0.06, // Extra drop height added on top of a situation.
@@ -192,8 +194,8 @@ export const config = {
     browserMax: 8, // Most browser workers.
     browserReserve: 1, // CPU cores left unused when sizing the browser pool.
     browserHardwareFallback: 4, // Core count assumed when the browser does not report one.
-    browserPairMin: 4, // Fewest antithetic pairs in a browser generation.
-    headlessPairs: 12, // Antithetic pairs in a headless generation.
+    browserPairMin: 24, // Fewest antithetic pairs in a browser generation. Was 4: too few samples for ~1100 weights.
+    headlessPairs: 48, // Antithetic pairs in a headless generation.
     headlessWorkerMin: 2, // Fewest headless workers.
     headlessWorkerMax: 12, // Most headless workers.
     headlessWorkerReserve: 2, // CPU cores left unused when sizing the headless pool.

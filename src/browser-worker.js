@@ -10,15 +10,18 @@ onmessage = (event) => {
   if (event.data && event.data.trainingPhase != null) setTrainingPhase(event.data.trainingPhase);
   const results = [];
   const tasks = event.data.tasks || [];
+  const started = performance.now();
+  let steps = 0;
   for (let index = 0; index < tasks.length; index++) {
     const task = tasks[index];
     const weights = task.weights instanceof Float32Array ? task.weights : Float32Array.from(task.weights);
     const options = Object.assign({}, task.options, { phase: (task.phase != null ? task.phase : index) % config.cadence.actionEveryNFrames });
     const episode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
     while (!episode.step());
+    steps += episode.frame;
     const stats = episode.stats;
     episode.cleanup();
     results.push({ index: task.index, ...stats });
   }
-  postMessage(results);
+  postMessage({ results, ms: performance.now() - started, steps });
 };

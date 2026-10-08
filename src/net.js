@@ -1,6 +1,6 @@
 // Red de Elman y la búsqueda de un solo padre.
-// El estado oculto guarda una fracción del paso anterior. La acción es la tanh de una capa lineal.
-// Los pesos, el estado oculto y la acción viven en Float32Array. No hay tensores.
+// El estado oculto guarda una fracción del paso anterior. La acción anterior entra por una capa de feedback a esa memoria.
+// La acción es la tanh de una capa lineal. Los pesos, el estado oculto y la acción viven en Float32Array. No hay tensores.
 import { config } from "../config.js";
 
 const net = config.net;
@@ -20,18 +20,28 @@ export class ElmanNetwork {
     const second = unitsFromRatio(net.hidden2Ratio);
     const feedforward = second > 0 ? first : 0;
     const recurrent = second > 0 ? second : first;
+    const feedback = net.feedbackUnits > 0 ? net.feedbackUnits : 0;
     const feedforwardStride = 1 + inputCount;
-    const recurrentStride = 1 + (feedforward || inputCount) + recurrent;
+    const feedbackStride = 1 + net.jointCount;
+    const recurrentStride = 1 + (feedforward || inputCount) + feedback + recurrent;
     const feedforwardBlock = feedforward * feedforwardStride;
+    const feedbackBlock = feedback * feedbackStride;
     const recurrentBlock = recurrent * recurrentStride;
+    const feedbackBase = feedforwardBlock;
+    const recurrentBase = feedforwardBlock + feedbackBlock;
     return {
       inputCount,
       feedforward,
+      feedback,
       recurrent,
       feedforwardStride,
+      feedbackStride,
       recurrentStride,
       feedforwardBlock,
-      outputBase: feedforwardBlock + recurrentBlock,
+      feedbackBlock,
+      feedbackBase,
+      recurrentBase,
+      outputBase: recurrentBase + recurrentBlock,
     };
   }
 
@@ -53,12 +63,15 @@ export class ElmanNetwork {
     this.hidden = new Float32Array(layout.recurrent);
     this.nextHidden = new Float32Array(layout.recurrent);
     this.compressed = new Float32Array(layout.feedforward);
+    this.feedback = new Float32Array(layout.feedback);
+    this.feedbackFrom = new Float32Array(net.jointCount);
     this.action = new Float32Array(net.jointCount);
   }
 
   // Un paso adelante. Escribe la acción nueva y deja `hidden` en el estado de este paso.
-  // Con una capa, cada unidad oculta es leak * anterior + (1 - leak) * tanh(sesgo + pesos · entrada + pesos · oculto).
-  // Con dos, la primera es tanh(sesgo + pesos · entrada), sin memoria. La segunda es la Elman, y mira a la primera y a sí misma.
+  // La capa de feedback es tanh(sesgo + pesos · acción anterior), sin memoria. Entra solo a la capa recurrente.
+  // Con una capa, cada unidad oculta es leak * anterior + (1 - leak) * tanh(sesgo + pesos · entrada + pesos · feedback + pesos · oculto).
+  // Con dos, la primera es tanh(sesgo + pesos · entrada), sin memoria. La segunda es la Elman.
   // Cada articulación: tanh(sesgo + pesos · oculto nuevo).
   forward(input) {
     const layout = ElmanNetwork.layout;
@@ -72,11 +85,18 @@ export class ElmanNetwork {
         this.compressed[unit] = Math.tanh(sum);
       }
     }
+    this.feedbackFrom.set(this.action);
+    for (let unit = 0; unit < layout.feedback; unit++) {
+      let sum = weights[cursor++];
+      for (let i = 0; i < net.jointCount; i++) sum += weights[cursor++] * this.feedbackFrom[i];
+      this.feedback[unit] = Math.tanh(sum);
+    }
     const incoming = layout.feedforward ? this.compressed : input;
     const incomingCount = layout.feedforward || layout.inputCount;
     for (let unit = 0; unit < layout.recurrent; unit++) {
       let sum = weights[cursor++];
       for (let i = 0; i < incomingCount; i++) sum += weights[cursor++] * incoming[i];
+      for (let i = 0; i < layout.feedback; i++) sum += weights[cursor++] * this.feedback[i];
       for (let i = 0; i < layout.recurrent; i++) sum += weights[cursor++] * this.hidden[i];
       this.nextHidden[unit] = leak * this.hidden[unit] + (1 - leak) * Math.tanh(sum);
     }
@@ -85,6 +105,7 @@ export class ElmanNetwork {
       for (let unit = 0; unit < layout.recurrent; unit++) sum += weights[cursor++] * this.nextHidden[unit];
       this.action[joint] = Math.tanh(sum);
     }
+    if (cursor !== weights.length) throw new Error("weight cursor " + cursor);
     const previousHidden = this.hidden;
     this.hidden = this.nextHidden;
     this.nextHidden = previousHidden;
@@ -93,22 +114,27 @@ export class ElmanNetwork {
 
 // Cuánto ruido le toca a cada peso. El cuerpo casi no se mueve; los miembros y el goal, sí.
 // El ruido grande del goal y de standing solo cae en los pesos que multiplican la entrada.
-// `boost` agranda todo ese ruido cuando el puntaje lleva generaciones sin mejorar. Cuello y muñecas siguen en 0.
+// `boost` agranda ese ruido cuando el puntaje no mejora. sigmaCap lo corta. Cuello y muñecas siguen en 0.
 function explorationOf(index, scale, boost) {
   const extra = boost > 0 ? boost : 1;
   const layout = ElmanNetwork.layout;
+  let sigma = search.bodyExplorationScale * extra;
   if (index < layout.outputBase) {
-    const readsInput = !layout.feedforward || index < layout.feedforwardBlock;
+    const inFeedback = index >= layout.feedbackBase && index < layout.feedbackBase + layout.feedbackBlock;
+    const readsInput = !inFeedback && (layout.feedforward ? index < layout.feedforwardBlock : index >= layout.recurrentBase);
     if (readsInput) {
       const stride = layout.feedforward ? layout.feedforwardStride : layout.recurrentStride;
-      const local = index % stride;
-      if (local === net.goalInputIndex + 1 || local === net.goalInputIndex + 2 || local === net.standingInputIndex + 1) return scale * extra;
-      if (local > net.sensedInputCount && local <= net.inputCount) return net.freshInputExplorationScale * extra;
+      const origin = layout.feedforward ? 0 : layout.recurrentBase;
+      const local = (index - origin) % stride;
+      if (local === net.goalInputIndex + 1 || local === net.goalInputIndex + 2 || local === net.standingInputIndex + 1) sigma = scale * extra;
+      else if (local > net.sensedInputCount && local <= net.inputCount) sigma = net.freshInputExplorationScale * extra;
     }
-    return search.bodyExplorationScale * extra;
+  } else {
+    const joint = Math.floor((index - layout.outputBase) / (layout.recurrent + 1));
+    sigma = search.trainableJointIndexes.includes(joint) ? search.limbExplorationScale * extra : 0;
   }
-  const joint = Math.floor((index - layout.outputBase) / (layout.recurrent + 1));
-  return search.trainableJointIndexes.includes(joint) ? search.limbExplorationScale * extra : 0;
+  const cap = search.sigmaCap;
+  return sigma > 0 && cap > 0 ? Math.min(cap, sigma) : sigma;
 }
 
 // x1 por debajo del umbral, luego stagnationBoost, y otra vez cada tantas generaciones, hasta el tope.
@@ -146,6 +172,7 @@ export class EvolutionSearch {
     this.bestGenScore = -1e9;
     this.bestEverTheta = parent.slice();
     this.bestEverScore = -1e9;
+    this.bestSmooth = null;
     this.eliteScore = -1e9;
     this.flatGens = 0;
     this.mutationBoost = 1;
@@ -228,16 +255,6 @@ export class EvolutionSearch {
     const bestWeights = generation.weights[bestIndex];
     this.bestGenTheta = Float32Array.from(bestWeights);
     this.bestGenScore = values[bestIndex];
-    if (values[bestIndex] > (this.bestEverScore ?? -1e9)) {
-      this.bestEverTheta = Float32Array.from(bestWeights);
-      this.bestEverScore = values[bestIndex];
-      // Un récord baja un tramo. Una racha de récords apaga la exploración.
-      this.flatGens = Math.max(0, (this.flatGens || 0) - search.stagnationGenerations);
-    } else {
-      this.flatGens = (this.flatGens || 0) + 1;
-    }
-    this.mutationBoost = explorationBoost(this.flatGens);
-    this.mutationFraction = mutationFraction(this.flatGens);
     // El padre solo se reemplaza si alguien llegó al marcador. Un puntaje alto por quedarse parado no alcanza.
     if (values[bestIndex] > (this.eliteScore ?? -1e9) && (scores[bestIndex].gap ?? search.eliteMissingGapMeters) < search.goalCloseEnoughMeters) {
       this.theta.set(bestWeights);
@@ -248,14 +265,58 @@ export class EvolutionSearch {
     }
     this.gen++;
     const stood = scores.filter((score) => score.stoodUp && (score.headImpact || 0) < search.headImpactQuiet).length / scores.length;
+    let startSum = 0;
+    let startCount = 0;
+    let endSum = 0;
+    let endCount = 0;
+    for (const score of scores) {
+      if (Number.isFinite(score.start)) {
+        startSum += score.start;
+        startCount++;
+      }
+      if (Number.isFinite(score.end)) {
+        endSum += score.end;
+        endCount++;
+      }
+    }
     this.hist.push({
       mean: values.reduce((sum, value) => sum + value, 0) / values.length,
       best: Math.max(...values),
+      start: startCount ? startSum / startCount : null,
+      end: endCount ? endSum / endCount : null,
       stood,
       gap: scores.reduce((sum, score) => sum + (score.gap || 0), 0) / scores.length,
       boost,
       fraction: generation.fraction || 0,
     });
     if (this.hist.length > 400) this.hist = this.hist.slice(-400);
+    this.noteSmoothRecord();
+    this.mutationBoost = explorationBoost(this.flatGens);
+    this.mutationFraction = mutationFraction(this.flatGens);
+  }
+
+  // El récord es el promedio de finales de las últimas generaciones, y el peso guardado es el padre.
+  // Un hijo con suerte, que ya arrancó parado, no alcanza.
+  noteSmoothRecord() {
+    const window = search.recordWindow;
+    if (!(window > 0) || this.hist.length < window) return;
+    const tail = this.hist.slice(-window);
+    if (tail.some((row) => !Number.isFinite(row.start))) return;
+    let sum = 0;
+    for (const row of tail) sum += row.mean;
+    const smooth = sum / window;
+    if (!Number.isFinite(this.bestSmooth)) {
+      this.bestSmooth = smooth;
+      return;
+    }
+    if (smooth > this.bestSmooth + search.recordMargin) {
+      this.bestSmooth = smooth;
+      this.bestEverTheta = this.theta.slice();
+      this.bestEverScore = smooth;
+      this.bestEverGen = this.gen;
+      this.flatGens = Math.max(0, (this.flatGens || 0) - search.stagnationGenerations);
+    } else {
+      this.flatGens = (this.flatGens || 0) + 1;
+    }
   }
 }

@@ -58,6 +58,8 @@ function runEpisode(sim, world, job, isStanding) {
     index: job.index,
     kind: job.kind,
     fitness: stats.fitness,
+    start: stats.start,
+    end: stats.end,
     stoodUp: stats.stoodUp,
     headImpact: stats.headImpact || 0,
     gap: stats.gap,
@@ -309,6 +311,7 @@ async function runMain() {
       phase: state.phase,
       drill: state.drill || 0,
       bestEverScore: state.bestEverScore,
+      bestSmooth: Number.isFinite(state.bestSmooth) ? state.bestSmooth : null,
       eliteScore: state.eliteScore,
       flatGens: state.flatGens || 0,
       theta: pack(state.theta),
@@ -356,6 +359,7 @@ async function runMain() {
     state.phase = saved.phase || config.curriculum.phases[0].id;
     state.drill = saved.drill || 0;
     state.bestEverScore = saved.bestEverScore ?? -1e9;
+    if (Number.isFinite(+saved.bestSmooth)) state.bestSmooth = +saved.bestSmooth;
     state.eliteScore = saved.eliteScore ?? -1e9;
     if (Number.isFinite(+saved.flatGens) && +saved.flatGens > 0) state.flatGens = Math.floor(+saved.flatGens);
     state.refreshMutationBoost();
@@ -414,27 +418,29 @@ async function runMain() {
     return out;
   }
 
-  function trainingSituation() {
-    return sim.situation(random);
-  }
-
   async function oneGeneration(state) {
     const before = state.bestEverScore;
-    const generation = state.ask(trainingSituation(), opts.pairs, randomNormal);
-    const starts = [];
-    for (let pair = 0; pair < generation.count; pair++) starts.push(sim.varyStart(generation.situation, random));
-    const jobs = generation.weights.map((weights, index) => ({
-      index,
-      kind: 'train',
-      weights,
-      options: Object.assign({}, starts[Math.floor(index / 2)] || generation.situation, {
-        phase: index % config.cadence.actionEveryNFrames,
-      }),
-    }));
-    const scores = await pool.run(jobs);
-    if (scores.length !== jobs.length || scores.some((score) => !score || !Number.isFinite(score.fitness))) {
+    const generation = state.ask(null, opts.pairs, randomNormal);
+    const jobs = [];
+    const trios = [];
+    let index = 0;
+    for (let child = 0; child < generation.weights.length; child++) {
+      if (child % 2 === 0) trios.push(sim.trainingStarts(random));
+      for (const start of trios[Math.floor(child / 2)]) {
+        jobs.push({
+          index: index++,
+          kind: 'train',
+          weights: generation.weights[child],
+          options: Object.assign({}, start, { phase: child % config.cadence.actionEveryNFrames }),
+        });
+      }
+    }
+    const raw = await pool.run(jobs);
+    if (raw.length !== jobs.length || raw.some((score) => !score || !Number.isFinite(score.fitness))) {
       throw new Error('training returned an empty score');
     }
+    const scores = [];
+    for (let child = 0; child < generation.weights.length; child++) scores.push(sim.poseScore(raw.slice(child * 3, child * 3 + 3)));
     state.tell(generation, scores);
     if ((state.mutationBoost || 1) > (generation.boost || 1)) {
       const pct = Math.round((state.mutationFraction || 0) * 100);
@@ -443,7 +449,7 @@ async function runMain() {
     }
     const last = state.hist[state.hist.length - 1];
     const meanStance = scores.reduce((sum, row) => sum + (row.stance || 0), 0) / scores.length;
-    if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, stood: last.stood, gap: last.gap, stance: meanStance });
+    if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, start: last.start, stood: last.stood, gap: last.gap, stance: meanStance });
     if (state.bestEverScore > before) {
       const file = saveBackup('best-ever', state);
       log('best-ever gen ' + state.gen + ' score ' + state.bestEverScore.toFixed(3) + ' ' + file);
@@ -453,19 +459,22 @@ async function runMain() {
 
   async function seedBest(state) {
     const jobs = [];
+    let index = 0;
     for (let i = 0; i < config.eval.seedBestCount; i++) {
-      const start = sim.varyStart(trainingSituation(), random);
-      jobs.push({
-        index: i,
-        kind: 'train',
-        weights: state.theta,
-        options: Object.assign({}, start, { phase: i % config.cadence.actionEveryNFrames }),
-      });
+      for (const start of sim.trainingStarts(random)) {
+        jobs.push({
+          index: index++,
+          kind: 'train',
+          weights: state.theta,
+          options: Object.assign({}, start, { phase: i % config.cadence.actionEveryNFrames }),
+        });
+      }
     }
     const rows = await pool.run(jobs);
     const mean = rows.reduce((sum, row) => sum + row.fitness, 0) / rows.length;
     state.bestEverTheta = state.theta.slice();
     state.bestEverScore = mean;
+    state.bestSmooth = mean;
     log('seed bestEverScore ' + mean.toFixed(3) + ' phase ' + state.phase);
   }
 
@@ -541,7 +550,8 @@ async function runMain() {
           const sec = ((Date.now() - tick) / 1000).toFixed(2);
           const pct = Math.round((state.mutationFraction || 0) * 100);
           const mut = (state.mutationBoost || 1) > 1 ? ' mut x' + state.mutationBoost + (pct > 0 ? ' ' + pct + '%' : '') : '';
-          log('gen ' + state.gen + ' drill ' + (state.drill || 0) + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' best ' + (last ? last.best.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + ' stance ' + (last && last.stance != null ? last.stance.toFixed(2) : '?') + ' ever ' + state.bestEverScore.toFixed(3) + mut + ' ' + sec + 's');
+          const began = last && Number.isFinite(last.start) ? last.start.toFixed(3) + ' → ' : '';
+          log('gen ' + state.gen + ' drill ' + (state.drill || 0) + ' mean ' + began + (last ? last.mean.toFixed(3) : '?') + ' best ' + (last ? last.best.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + ' stance ' + (last && last.stance != null ? last.stance.toFixed(2) : '?') + ' ever ' + state.bestEverScore.toFixed(3) + mut + ' ' + sec + 's');
         }
         if (opts.quickEvery > 0 && state.gen % opts.quickEvery === 0) {
           const quickKinds = gateKeys(phase);

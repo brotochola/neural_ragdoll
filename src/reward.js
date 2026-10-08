@@ -5,6 +5,7 @@ import { clamp } from "./utils.js";
 
 const part = config.partIndex;
 const weight = config.reward;
+const standingCos = Math.cos(config.body.standingTorsoAngleRadians);
 
 // Parado de verdad: los dos pies abajo, nada más tocando, torso erguido, cabeza alta, base real y quieto.
 export function isStanding(measure) {
@@ -12,7 +13,7 @@ export function isStanding(measure) {
   for (let i = 0; i < measure.touch.length; i++) {
     if (i !== part.footLeft && i !== part.footRight && measure.touch[i]) return false;
   }
-  return Math.abs(measure.torsoAngle) < config.body.standingTorsoAngleRadians
+  return (measure.torsoCos || 0) > standingCos
     && measure.headHeight > config.body.standingHeadMeters
     && measure.stanceWidth >= config.body.standingStanceMinMeters
     && measure.stanceWidth <= config.body.standingStanceMaxMeters
@@ -20,8 +21,8 @@ export function isStanding(measure) {
     && Math.abs(measure.centerVelocityX) < 0.5;
 }
 
-function uprightRow(name, tip, angle, rowWeight) {
-  return { name, tip, value: rowWeight * Math.cos(angle || 0) };
+function uprightRow(name, tip, cosine, rowWeight) {
+  return { name, tip, value: rowWeight * (cosine || 0) };
 }
 
 function heightRow(name, tip, height, fullHeight, rise, rowWeight) {
@@ -33,28 +34,29 @@ function heightRow(name, tip, height, fullHeight, rise, rowWeight) {
 
 // Puntúa un frame ya medido. El total es la suma de las filas; las marcadas scoreOnly solo se muestran.
 export function scoreDecision(measure) {
-  const torsoFace = Math.cos(measure.torsoAngle || 0);
+  const cosineOf = (index) => measure.partCos?.[index] || 0;
+  const sineOf = (index) => measure.partSin?.[index] || 0;
+  const torsoFace = measure.torsoCos || 0;
   const rise = clamp((torsoFace + 0.2) / 1.2, 0, 1);
   const upright = clamp((torsoFace - 0.7) / 0.3, 0, 1);
   const handLeft = 1 - clamp((measure.clearance?.[part.handLeft] ?? 1) / config.body.handClearMeters, 0, 1);
   const handRight = 1 - clamp((measure.clearance?.[part.handRight] ?? 1) / config.body.handClearMeters, 0, 1);
   const park = clamp((torsoFace - 0.55) / 0.35, 0, 1);
-  const angle = measure.partAngle || [];
 
   const rows = [
     // Coseno del ángulo: +1 parado, 0 de costado, -1 cabeza abajo.
-    uprightRow("Torso angle", "Cosine of the torso. +1 is upright, 0 is lying on the side, -1 is upside down.", measure.torsoAngle, weight.torsoAngle),
+    uprightRow("Torso angle", "Cosine of the torso. +1 is upright, 0 is lying on the side, -1 is upside down.", cosineOf(part.torso), weight.torsoAngle),
     // La cabeza también quiere quedar vertical, con menos peso que el torso.
-    uprightRow("Head angle", "Cosine of the head. +1 is upright.", measure.headAngle, weight.headAngle),
+    uprightRow("Head angle", "Cosine of the head. +1 is upright.", cosineOf(part.head), weight.headAngle),
     // Cada brazo, antebrazo, muslo y pantorrilla suma su propio coseno. No es una pose de referencia.
-    uprightRow("Left upper arm", "Cosine of the left upper arm. +1 is vertical.", angle[part.upperArmLeft], weight.upperArmAngle),
-    uprightRow("Right upper arm", "Cosine of the right upper arm. +1 is vertical.", angle[part.upperArmRight], weight.upperArmAngle),
-    uprightRow("Left forearm", "Cosine of the left forearm. +1 is vertical.", angle[part.forearmLeft], weight.forearmAngle),
-    uprightRow("Right forearm", "Cosine of the right forearm. +1 is vertical.", angle[part.forearmRight], weight.forearmAngle),
-    uprightRow("Left thigh", "Cosine of the left thigh. +1 is vertical, like standing.", angle[part.thighLeft], weight.thighAngle),
-    uprightRow("Right thigh", "Cosine of the right thigh. +1 is vertical, like standing.", angle[part.thighRight], weight.thighAngle),
-    uprightRow("Left shin", "Cosine of the left shin. +1 is vertical. A shin near the floor can still be vertical.", angle[part.shinLeft], weight.shinAngle),
-    uprightRow("Right shin", "Cosine of the right shin. +1 is vertical.", angle[part.shinRight], weight.shinAngle),
+    uprightRow("Left upper arm", "Cosine of the left upper arm. +1 is vertical.", cosineOf(part.upperArmLeft), weight.upperArmAngle),
+    uprightRow("Right upper arm", "Cosine of the right upper arm. +1 is vertical.", cosineOf(part.upperArmRight), weight.upperArmAngle),
+    uprightRow("Left forearm", "Cosine of the left forearm. +1 is vertical.", cosineOf(part.forearmLeft), weight.forearmAngle),
+    uprightRow("Right forearm", "Cosine of the right forearm. +1 is vertical.", cosineOf(part.forearmRight), weight.forearmAngle),
+    uprightRow("Left thigh", "Cosine of the left thigh. +1 is vertical, like standing.", cosineOf(part.thighLeft), weight.thighAngle),
+    uprightRow("Right thigh", "Cosine of the right thigh. +1 is vertical, like standing.", cosineOf(part.thighRight), weight.thighAngle),
+    uprightRow("Left shin", "Cosine of the left shin. +1 is vertical. A shin near the floor can still be vertical.", cosineOf(part.shinLeft), weight.shinAngle),
+    uprightRow("Right shin", "Cosine of the right shin. +1 is vertical.", cosineOf(part.shinRight), weight.shinAngle),
     // La altura sube con el torso, también si una mano empuja el piso. La mano se cobra en su propia fila.
     heightRow("Head height", "Head height against a standing reach. Stays at the floor value until the torso turns up. A hand on the floor is scored on its own row.", measure.headHeight, config.body.headHeightMeters, rise, weight.headHeight),
     // Misma compuerta que la cabeza: sin crédito hasta que el torso gira hacia arriba.
@@ -86,8 +88,10 @@ export function scoreDecision(measure) {
     tip: "Subtracts while the tail is within 35 cm of the floor. Not gated by the torso, so sitting on it costs during a get-up.",
     value: -weight.tailOnFloor * tailClose,
   });
-  let spread = Math.abs((angle[part.thighLeft] || 0) - (angle[part.thighRight] || 0)) % (Math.PI * 2);
-  if (spread > Math.PI) spread = Math.PI * 2 - spread;
+  const spread = Math.abs(Math.atan2(
+    sineOf(part.thighLeft) * cosineOf(part.thighRight) - cosineOf(part.thighLeft) * sineOf(part.thighRight),
+    cosineOf(part.thighLeft) * cosineOf(part.thighRight) + sineOf(part.thighLeft) * sineOf(part.thighRight),
+  ));
   const spreadPenalty = spread < config.body.thighSpreadMinRadians
     ? (config.body.thighSpreadMinRadians - spread) / config.body.thighSpreadMinRadians
     : spread > config.body.thighSpreadMaxRadians
@@ -116,13 +120,12 @@ export function scoreDecision(measure) {
 
   const headDown = Math.max(0, -(measure.headVelocityY || 0));
   const headOnFloor = measure.touch?.[part.head] ? 1 : 0;
-  const headResting = headOnFloor * weight.headImpact;
   const headStrike = headOnFloor && headDown > 1 ? weight.headImpact * clamp(headDown / 3, 0, 2) : 0;
-  // La cabeza en el piso resta el peso entero. Si además baja a más de 1 m/s, resta todavía más.
+  // Solo el golpe. Apoyar la cabeza no resta: eso valía más que pararse.
   rows.push({
     name: "Head impact",
-    tip: "Subtracts while the head is touching the floor. If it is also moving down faster than 1 m/s, it subtracts more, up to twice the weight again.",
-    value: -(headResting + headStrike),
+    tip: "Subtracts while the head is touching the floor and moving down faster than 1 m/s, up to twice the weight. Resting the head on the floor does not subtract.",
+    value: -headStrike,
   });
 
   const bothFeet = (measure.touch?.[part.footLeft] ? 1 : 0) + (measure.touch?.[part.footRight] ? 1 : 0);
@@ -133,10 +136,9 @@ export function scoreDecision(measure) {
     }
   }
   const onFeet = (bothFeet === 2 ? 1 : 0) * (1 - otherTouch) * upright * clamp((measure.headHeight || 0) / config.body.standingHeadMeters, 0, 1);
-  // Same 6 cm scale as the sole inputs. 1 is a corner on the floor.
+  // 1 when the sole ray hits at the face. A sole 6 cm up scores 0.
   const soleDown = (index) => clamp(1 - (measure.sole?.[index] || 0) / 0.06, 0, 1);
-  const footFlat = (index) => Math.min(soleDown(index), soleDown(index + 1));
-  const feetFlat = measure.sole ? (footFlat(0) + footFlat(2)) / 2 : 0;
+  const feetFlat = measure.sole ? (soleDown(0) + soleDown(1)) / 2 : 0;
   const bodyClear = 1 - otherTouch;
   const headUp = clamp((measure.headHeight || 0) / config.body.standingHeadMeters, 0, 1);
   // ponytail: linear falloff, not a narrow gaussian. The gaussian was ~0 past 0.5 m, so a 1.3 m stance had no rank signal. Upgrade path: a shaped kernel if 29 cm needs a flat top.
@@ -148,11 +150,16 @@ export function scoreDecision(measure) {
   const clearShare = 0.2 * weight.standing * bodyClear;
   const uprightShare = 0.2 * weight.standing * upright;
   const headShare = 0.2 * weight.standing * headUp;
+  // 0 recta. 1 - cos: 20° casi no resta, un ángulo recto paga el peso entero.
+  const kneeFold = (shinIndex, thighIndex) => 1 - (cosineOf(shinIndex) * cosineOf(thighIndex) + sineOf(shinIndex) * sineOf(thighIndex));
+  const kneeLeft = rise * kneeFold(part.shinLeft, part.thighLeft);
+  const kneeRight = rise * kneeFold(part.shinRight, part.thighRight);
+  const kneeCost = weight.kneeBend * (kneeLeft + kneeRight);
   const included = " Already included in Standing.";
   rows.push({
     name: "Stand soles",
     scoreOnly: true,
-    tip: "How flat both feet are. Each foot scores the lower of its heel and toe, so a foot on its side, on its toes, or in the air stays low. This is 40% of the standing weight." + included,
+    tip: "How close each sole ray is to the floor. A sole in the air or on its side stays low. This is 40% of the standing weight." + included,
     value: soleShare,
   });
   rows.push({
@@ -173,10 +180,13 @@ export function scoreDecision(measure) {
     tip: "Head height against the standing height. This is 20% of the standing weight." + included,
     value: headShare,
   });
+  const kneeTip = "Subtracts while that knee is bent and the torso is turning up. Straight is free. A small bend barely counts. A right angle spends the whole weight. On the floor, with the torso flat, bending to get up is free." + included;
+  rows.push({ name: "Left knee", scoreOnly: true, tip: kneeTip, value: -weight.kneeBend * kneeLeft });
+  rows.push({ name: "Right knee", scoreOnly: true, tip: kneeTip, value: -weight.kneeBend * kneeRight });
   rows.push({
     name: "Standing",
-    tip: "Sum of the four stand rows, plus stance comfort while the soles are down, plus one more for a true quiet stand. Flat soles are 40%, a clear body 20%, an upright torso 20%, and a high head 20%. A stance near 29 cm adds more as the soles get flat; a very wide one subtracts.",
-    value: soleShare + clearShare + uprightShare + headShare + weight.stanceComfort * feetFlat * stanceComfort + (isStanding(measure) ? weight.standingFlag : 0),
+    tip: "Sum of the four stand rows, plus stance comfort while the soles are down, plus one more for a true quiet stand, minus a bent knee while the torso is turning up. Flat soles are 40%, a clear body 20%, an upright torso 20%, and a high head 20%. A stance near 29 cm adds more as the soles get flat; a very wide one subtracts.",
+    value: soleShare + clearShare + uprightShare + headShare + weight.stanceComfort * feetFlat * stanceComfort + (isStanding(measure) ? weight.standingFlag : 0) - kneeCost,
   });
 
   const hasGoal = measure.goalDistanceMeters != null;
