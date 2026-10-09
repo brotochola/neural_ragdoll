@@ -135,7 +135,9 @@ export class NeuralRagDollWorld {
       const keptGen = this.state.gen;
       const keptHist = this.state.hist;
       this.state = new EvolutionSearch(this.randomNormal);
-      for (let i = 0; i < this.state.theta.length; i++) this.state.theta[i] = (this.random() < 0.5 ? -1 : 1) * (config.search.randomWeightAbsMin + this.random() * (config.search.randomWeightAbsMax - config.search.randomWeightAbsMin));
+      const outputBase = ElmanNetwork.layout.outputBase;
+      for (let i = 0; i < outputBase; i++) this.state.theta[i] = this.randomNormal() * config.search.randomHiddenScale;
+      for (let i = outputBase; i < this.state.theta.length; i++) this.state.theta[i] = this.randomNormal() * config.search.randomOutputScale;
       this.state.bestGenTheta = this.state.theta.slice();
       this.state.bestEverTheta = this.state.theta.slice();
       this.state.gen = keptGen;
@@ -500,7 +502,7 @@ export class NeuralRagDollWorld {
           const trio = starts[pair];
           for (let pose = 0; pose < trio.length; pose++) {
             let options = trio[pose];
-            if (hint && pair >= hintFrom) options = Object.assign({}, options, { hint: { joint: hint.joint, sign: hint.sign } });
+            if (hint && pair >= hintFrom && pair < generation.count) options = Object.assign({}, options, { hint: { joint: hint.joint, sign: hint.sign } });
             tasks.push({
               index: taskIndex++,
               weights: generation.weights[child],
@@ -515,6 +517,10 @@ export class NeuralRagDollWorld {
         const scores = [];
         for (let child = 0; child < generation.weights.length; child++) scores.push(this.sim.poseScore(rows.slice(child * 3, child * 3 + 3)));
         this.state.tell(generation, scores);
+        if (this.state.anchorNote) {
+          this.logEvent(this.state.anchorNote);
+          this.state.anchorNote = "";
+        }
         await this.rememberBest();
         this.saveSession();
         this.visit.trained = true;
@@ -635,20 +641,25 @@ export class NeuralRagDollWorld {
     const watching = this.watchingStat();
     const ever = this.state.bestEverScore;
     const everText = Number.isFinite(ever) && ever > -1e8 ? ever.toFixed(2) : "–";
-    const boost = this.state.mutationBoost || 1;
-    const pct = Math.round((this.state.mutationFraction || 0) * 100);
+    const every = config.search.stagnationGenerations;
+    const flat = this.state.flatGens || 0;
+    const steps = every > 0 && flat >= every ? Math.floor(flat / every) : 0;
+    const boost = steps > 0 ? Math.min(config.search.stagnationBoostCap, Math.pow(config.search.stagnationBoost, steps)) : 1;
+    const pct = steps > 0 ? Math.round(Math.min(1, config.search.stagnationMutateCap) * 100) : 0;
+    const anchor = this.state.anchorPairCount ? this.state.anchorPairCount() : 0;
+    const anchorText = anchor > 0 ? " · best ever ×" + anchor : "";
     const ending = last && Number.isFinite(last.end) ? last.end : last ? last.mean : null;
     const arrow = !last || !Number.isFinite(ending) ? "–" : Number.isFinite(last.start) ? last.start.toFixed(2) + " → " + ending.toFixed(2) : ending.toFixed(2);
     const rows = [
       ["Phase", phase.value, phase.tip],
       ["Generation", String(this.state.gen || 0), "How many generations have finished. Each generation is a batch of children of the parent, scored on one episode each."],
       ...this.workerTimingRows(),
-      ["Start → end", arrow, "Average reward of the children in the first 0.5 s, then in the last 3 s. The fitness is that ending, minus whatever was lost since the start. A child that ends where it began keeps the ending. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.", "avg"],
-      ["Generation best", last ? last.best.toFixed(2) : "–", "Highest fitness among those children: the last 3 s, minus whatever that child lost since its first 0.5 s. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.", "best"],
+      ["Start → end", arrow, "Average reward of the parent's children in the first 0.5 s, then in the last 3 s. The light copies of Best ever are not in this average. The fitness is that ending, minus whatever was lost since the start. A child that ends where it began keeps the ending. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.", "avg"],
+      ["Generation best", last ? last.best.toFixed(2) : "–", "Highest fitness among the children, including the light copies of Best ever: the last 3 s, minus whatever that child lost since its first 0.5 s. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.", "best"],
       ["Best ever", everText, "The 20-generation average fitness, at the last time it reached a new high. The fitness is the ending minus any drop from the start. Network → Best ever plays the parent from that generation. A single lucky child does not set this."],
       ["Watching", watching.value, watching.tip],
-      ["Plateau", (this.state.flatGens || 0) + " gens", "Generations since the 20-generation average fitness last reached a new high. The fitness is the ending minus any drop from the start. At 100, a quarter of each generation is pushed farther from the parent. One new Best ever removes 100 from this count."],
-      ["Mutation", "x" + boost + (pct > 0 ? " · " + pct + "%" : ""), "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting."],
+      ["Plateau", flat + " gens", "Generations since the 20-generation average fitness last reached a new high. The fitness is the ending minus any drop from the start. At " + every + ", mutation becomes x" + config.search.stagnationBoost + " for " + Math.round(config.search.stagnationMutateCap * 100) + "% of pairs, and that factor multiplies again every " + every + " generations. One new Best ever removes " + every + " from this count."],
+      ["Mutation", "x" + boost + (pct > 0 ? " · " + pct + "%" : "") + anchorText, "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting. The factor follows the plateau: at " + every + " generations it becomes x" + config.search.stagnationBoost + ". When a Best ever record exists, the extra pairs are light copies of that network. A child that beats its opposite twin and the parent average becomes the parent."],
       ["Hint", this.hintLabel(), "The joint forced to its upper or lower stop. The doll on screen follows it and is not scored. The last " + Math.round(config.hint.pairFraction * 100) + "% of pairs in the next generation get the same force on both children and on all three poses. A child whose own output already pointed that way scores up to " + config.hint.matchWeight + " more. Neck and wrists can be forced, but their output weights are not searched."],
     ];
     this.$("status").innerHTML = rows.map((row) => {

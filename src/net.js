@@ -177,6 +177,17 @@ export class EvolutionSearch {
     this.flatGens = 0;
     this.mutationBoost = 1;
     this.mutationFraction = 0;
+    this.anchorNote = "";
+  }
+
+  // Pares extra copiados de Best ever. Cero hasta que el récord existe y el vector coincide.
+  anchorPairCount() {
+    const pairs = search.bestEverPairs | 0;
+    if (!(pairs > 0)) return 0;
+    const score = this.bestEverScore;
+    if (!(Number.isFinite(score) && score > -1e8)) return 0;
+    if (!this.bestEverTheta || this.bestEverTheta.length !== this.theta.length) return 0;
+    return pairs;
   }
 
   // El factor y la fracción que va a usar la próxima generación. Sirve al retomar una sesión ya estancada.
@@ -212,19 +223,37 @@ export class EvolutionSearch {
         phases.push(weights.length - 1);
       }
     }
-    return { situation, noise, weights, phases, count, scale, boost, fraction, pairBoosts };
+    // Copias leves de Best ever, al final. count sigue siendo solo los pares del padre, así el hint no les cae encima.
+    const anchor = this.anchorPairCount();
+    const anchorParent = this.bestEverTheta;
+    for (let individual = 0; individual < anchor; individual++) {
+      pairBoosts.push(1);
+      const direction = new Float32Array(length);
+      for (let i = 0; i < length; i++) direction[i] = randomNormal();
+      noise.push(direction);
+      for (const sign of [1, -1]) {
+        const child = new Float32Array(length);
+        for (let i = 0; i < length; i++) child[i] = anchorParent[i] + sign * explorationOf(i, scale, 1) * direction[i];
+        weights.push(child);
+        phases.push(weights.length - 1);
+      }
+    }
+    return { situation, noise, weights, phases, count, scale, boost, fraction, pairBoosts, anchorPairs: anchor };
   }
 
   tell(generation, scores) {
     const count = generation.count;
     const values = scores.map((score) => score.fitness);
     const length = this.theta.length;
+    const thetaChildren = count * 2;
     if (!this.m || this.m.length !== length) this.m = new Float32Array(length);
     if (!this.v || this.v.length !== length) this.v = new Float32Array(length);
     this.k = this.k || 0;
-    const order = values.map((_, index) => index).sort((a, b) => values[a] - values[b]);
-    const rank = new Array(values.length);
-    order.forEach((index, place) => { rank[index] = place / (values.length - 1) - 0.5; });
+    const parentValues = values.slice(0, thetaChildren);
+    const order = parentValues.map((_, index) => index).sort((a, b) => parentValues[a] - parentValues[b]);
+    const rank = new Array(thetaChildren);
+    const span = Math.max(1, thetaChildren - 1);
+    order.forEach((index, place) => { rank[index] = place / span - 0.5; });
     const gradient = new Float32Array(length);
     const scale = generation.scale || search.explorationScale;
     const boost = generation.boost || 1;
@@ -251,25 +280,27 @@ export class EvolutionSearch {
       this.v[i] = secondMoment * this.v[i] + (1 - secondMoment) * estimate * estimate;
       this.theta[i] += (stepSize * (this.m[i] / firstFix)) / (Math.sqrt(this.v[i] / secondFix) + search.adamEpsilon);
     }
-    const bestIndex = order[order.length - 1];
-    const bestWeights = generation.weights[bestIndex];
-    this.bestGenTheta = Float32Array.from(bestWeights);
+    let bestIndex = 0;
+    for (let i = 1; i < values.length; i++) if (values[i] > values[bestIndex]) bestIndex = i;
+    this.bestGenTheta = Float32Array.from(generation.weights[bestIndex]);
     this.bestGenScore = values[bestIndex];
-    // El padre solo se reemplaza si alguien llegó al marcador. Un puntaje alto por quedarse parado no alcanza.
-    if (values[bestIndex] > (this.eliteScore ?? -1e9) && (scores[bestIndex].gap ?? search.eliteMissingGapMeters) < search.goalCloseEnoughMeters) {
-      this.theta.set(bestWeights);
-      this.eliteScore = values[bestIndex];
+    // El padre solo se reemplaza si un hijo suyo llegó al marcador. Las copias de Best ever no entran acá.
+    const parentBestIndex = order.length ? order[order.length - 1] : -1;
+    if (parentBestIndex >= 0 && parentValues[parentBestIndex] > (this.eliteScore ?? -1e9) && (scores[parentBestIndex].gap ?? search.eliteMissingGapMeters) < search.goalCloseEnoughMeters) {
+      this.theta.set(generation.weights[parentBestIndex]);
+      this.eliteScore = parentValues[parentBestIndex];
       this.m = new Float32Array(length);
       this.v = new Float32Array(length);
       this.k = 0;
     }
     this.gen++;
-    const stood = scores.filter((score) => score.stoodUp && (score.headImpact || 0) < search.headImpactQuiet).length / scores.length;
+    const parentScores = scores.slice(0, thetaChildren);
+    const stood = parentScores.filter((score) => score.stoodUp && (score.headImpact || 0) < search.headImpactQuiet).length / (parentScores.length || 1);
     let startSum = 0;
     let startCount = 0;
     let endSum = 0;
     let endCount = 0;
-    for (const score of scores) {
+    for (const score of parentScores) {
       if (Number.isFinite(score.start)) {
         startSum += score.start;
         startCount++;
@@ -279,20 +310,52 @@ export class EvolutionSearch {
         endCount++;
       }
     }
+    const parentMean = parentValues.length ? parentValues.reduce((sum, value) => sum + value, 0) / parentValues.length : 0;
     this.hist.push({
-      mean: values.reduce((sum, value) => sum + value, 0) / values.length,
-      best: Math.max(...values),
+      mean: parentMean,
+      best: values.length ? Math.max(...values) : parentMean,
       start: startCount ? startSum / startCount : null,
       end: endCount ? endSum / endCount : null,
       stood,
-      gap: scores.reduce((sum, score) => sum + (score.gap || 0), 0) / scores.length,
+      gap: parentScores.reduce((sum, score) => sum + (score.gap || 0), 0) / (parentScores.length || 1),
       boost,
       fraction: generation.fraction || 0,
     });
     if (this.hist.length > 400) this.hist = this.hist.slice(-400);
     this.noteSmoothRecord();
+    this.adoptAnchor(generation, values, thetaChildren);
     this.mutationBoost = explorationBoost(this.flatGens);
     this.mutationFraction = mutationFraction(this.flatGens);
+  }
+
+  // En el plateau, el hijo que le gana a su gemelo y al promedio del padre pasa a ser el padre. El récord no se toca.
+  adoptAnchor(generation, values, thetaChildren) {
+    this.anchorNote = "";
+    if (!((this.flatGens || 0) >= search.stagnationGenerations)) return;
+    const margin = search.bestEverAdoptMargin;
+    if (!(margin > 0) || !values.length) return;
+    const parentMean = thetaChildren ? values.slice(0, thetaChildren).reduce((sum, value) => sum + value, 0) / thetaChildren : 0;
+    let bestIndex = -1;
+    let bestValue = -Infinity;
+    const pairCount = Math.floor(values.length / 2);
+    for (let pair = 0; pair < pairCount; pair++) {
+      const left = pair * 2;
+      const right = left + 1;
+      const winner = values[left] >= values[right] ? left : right;
+      const loserValue = values[winner === left ? right : left];
+      if (!(values[winner] > loserValue + margin && values[winner] > parentMean + margin)) continue;
+      if (values[winner] > bestValue) {
+        bestValue = values[winner];
+        bestIndex = winner;
+      }
+    }
+    if (bestIndex < 0) return;
+    this.theta.set(generation.weights[bestIndex]);
+    this.m = new Float32Array(this.theta.length);
+    this.v = new Float32Array(this.theta.length);
+    this.k = 0;
+    const source = bestIndex >= thetaChildren ? "best ever child " : "child ";
+    this.anchorNote = source + bestValue.toFixed(2) + " became the parent";
   }
 
   // El récord es el promedio de finales de las últimas generaciones, y el peso guardado es el padre.

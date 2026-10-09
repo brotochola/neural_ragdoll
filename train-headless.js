@@ -442,6 +442,10 @@ async function runMain() {
     const scores = [];
     for (let child = 0; child < generation.weights.length; child++) scores.push(sim.poseScore(raw.slice(child * 3, child * 3 + 3)));
     state.tell(generation, scores);
+    if (state.anchorNote) {
+      log(state.anchorNote);
+      state.anchorNote = "";
+    }
     if ((state.mutationBoost || 1) > (generation.boost || 1)) {
       const pct = Math.round((state.mutationFraction || 0) * 100);
       const share = pct > 0 ? ' ' + pct + '%' : '';

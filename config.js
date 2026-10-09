@@ -156,12 +156,14 @@ export const config = {
     explorationScale: 0.18, // Noise never drops below this.
     explorationFloor: 0.22, // Starting amplitude of the decaying noise. The used scale is the max of this decay and explorationScale.
     explorationHalfLifeGenerations: 6000, // Generations for the decaying noise to halve.
-    stagnationGenerations: 100, // Plateau length before the large noise starts. One new best removes this many generations from the count.
+    stagnationGenerations: 5, // Plateau length before the large noise starts. One new best removes this many generations from the count.
     stagnationBoost: 3, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
-    stagnationBoostCap: 128, // Large-noise ceiling. Limb noise at the cap is 0.4, still near the parent.
-    sigmaCap: 2.4, // One weight's noise never exceeds this. The plateau boost cannot blow up the goal and standing columns.
-    recordWindow: 20, // Generations in the ending average that sets a record.
+    stagnationBoostCap: 256, // Large-noise ceiling. Limb noise at the cap is 0.4, still near the parent.
+    sigmaCap: 12.4, // One weight's noise never exceeds this. The plateau boost cannot blow up the goal and standing columns.
+    recordWindow: 16, // Generations in the ending average that sets a record.
     recordMargin: 0.33, // That average must clear the previous record by this much.
+    bestEverPairs: 2, // Extra antithetic pairs copied from Best ever with the small noise. 0 turns them off. They are not scouts and they do not enter the Adam step.
+    bestEverAdoptMargin: 0.5, // During a plateau, a child replaces the parent when it beats its opposite twin and the parent average by this much. Same starts, so an easy pose does not count.
     stagnationMutateCap: 0.25, // Share of pairs that receive the large noise once a plateau starts. The rest keep the normal noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
     bodyExplorationScale: 0.02, // Noise on hidden weights. Small, so balance can shift without a rewrite.
@@ -174,8 +176,8 @@ export const config = {
     adamEpsilon: 1e-8, // Added under the Adam denominator.
     hiddenInitScale: 0.12, // Fresh hidden weights are a gaussian times this.
     outputInitScale: 0.04, // Fresh joint-output weights are a gaussian times this.
-    randomWeightAbsMin: 8, // Random-weights button: each weight is at least this far from zero.
-    randomWeightAbsMax: 20, // Random-weights button: each weight is at most this far from zero.
+    randomHiddenScale: 0.26, // Random-weights button. Gaussian scale of a trained hidden block.
+    randomOutputScale: 0.22, // Random-weights button. Gaussian scale of a trained joint-output block.
     goalCloseEnoughMeters: -1, // Elite replace also needs the best child at least this close to the marker.
     eliteMissingGapMeters: 9, // Gap assumed when a score has no marker distance.
     headImpactQuiet: 1.5, // A stand counts as quiet when the peak head-down speed is below this, in m/s.

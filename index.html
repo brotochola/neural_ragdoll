@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
+  <header>
     <h1>Neural ragdoll</h1>
     <p>One Elman network, trained in this tab. Hover any row or control for what it means.</p>
   </header>
@@ -29,10 +29,13 @@
     <div class="bar-row">
       <span class="group">Training</span>
       <button id="pause"
-        title="Starts the search. The doll on screen keeps moving. This choice is remembered when you reopen the page.">Start training</button>
+        title="Starts the search. The doll on screen keeps moving. This choice is remembered when you reopen the page.">Start
+        training</button>
       <button id="restart"
         title="Throws away this session, including saved networks, and starts from random weights.">Restart from
-        scratch</button>
+        scratch</button> <button id="randomWeights"
+        title="Replaces the parent with random weights at the scale of a trained network and shows that network. Training continues from it.">Random
+        weights</button>
       <label class="ctrl"
         title="What this run is practicing. Stand, get up, or walk. By phases runs that list in config.js, in order, for many hours.">Task
         <select id="trainPhase">
@@ -71,8 +74,7 @@
       </label>
       <button id="reset"
         title="Puts the doll back at the start of a new episode, with the weights you are watching.">Reset pose</button>
-      <button id="randomWeights"
-        title="Replaces every saved network with extreme random weights and shows that network. Training continues from it.">Random weights</button>
+
       <label class="ctrl" title="How the next reset pose begins. Workers ignore this.">Start
         <select id="startPose">
           <option value="up">Standing</option>
@@ -83,16 +85,19 @@
       <button id="loadNetwork"
         title="Loads a saved network JSON. Training stays paused until you press Start training.">Load network</button>
       <input id="loadNetworkFile" type="file" accept=".json,application/json" hidden>
-      <button id="saveFolder"
-        title="Pick a folder once. New backups are written there until you reload.">Save folder</button>
+      <button id="saveFolder" title="Pick a folder once. New backups are written there until you reload.">Save
+        folder</button>
       <button id="log" title="Opens a list of what happened in this visit.">Log</button>
-      <button id="graphBtn" title="Opens a graph of every unit and connection in the network the doll is using.">Network graph</button>
-      <label class="ctrl" title="Draws the face rays. Green is clear, orange is within 35 cm, red is touching. A miss runs 2 m along the face normal.">
+      <button id="graphBtn" title="Opens a graph of every unit and connection in the network the doll is using.">Network
+        graph</button>
+      <label class="ctrl"
+        title="Draws the face rays. Green is clear, orange is within 35 cm, red is touching. A miss runs 2 m along the face normal.">
         <input id="viewRays" type="checkbox"> View raycasts
       </label>
     </div>
     <div class="bar-row" id="hintRow">
-      <span class="group" title="Forces one joint's output to its upper or lower stop. The doll on screen follows it. The last quarter of each generation's pairs do too, both children the same way, and a child that already wanted that direction scores a little higher.">Hint</span>
+      <span class="group"
+        title="Forces one joint's output to its upper or lower stop. The doll on screen follows it. The last quarter of each generation's pairs do too, both children the same way, and a child that already wanted that direction scores a little higher.">Hint</span>
     </div>
     <div class="bar-row">
       <span class="group">Throw</span>
