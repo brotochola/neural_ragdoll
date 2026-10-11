@@ -328,22 +328,28 @@ export class EvolutionSearch {
     this.mutationFraction = mutationFraction(this.flatGens);
   }
 
-  // En el plateau, el hijo que le gana a su gemelo y al promedio del padre pasa a ser el padre. El récord no se toca.
+  // En el plateau, un hijo de ruido chico pasa a ser el padre si le gana a su gemelo y al promedio.
+  // Una copia de Best ever entra aunque empate con su gemelo. Un scout no entra. El récord no se toca.
   adoptAnchor(generation, values, thetaChildren) {
     this.anchorNote = "";
     if (!((this.flatGens || 0) >= search.stagnationGenerations)) return;
     const margin = search.bestEverAdoptMargin;
     if (!(margin > 0) || !values.length) return;
     const parentMean = thetaChildren ? values.slice(0, thetaChildren).reduce((sum, value) => sum + value, 0) / thetaChildren : 0;
+    const boosts = generation.pairBoosts || [];
     let bestIndex = -1;
     let bestValue = -Infinity;
     const pairCount = Math.floor(values.length / 2);
     for (let pair = 0; pair < pairCount; pair++) {
+      const boost = boosts[pair] > 0 ? boosts[pair] : 1;
+      if (boost > 1) continue;
       const left = pair * 2;
       const right = left + 1;
       const winner = values[left] >= values[right] ? left : right;
       const loserValue = values[winner === left ? right : left];
-      if (!(values[winner] > loserValue + margin && values[winner] > parentMean + margin)) continue;
+      const fromBestEver = left >= thetaChildren;
+      if (!(values[winner] > parentMean + margin)) continue;
+      if (!fromBestEver && !(values[winner] > loserValue + margin)) continue;
       if (values[winner] > bestValue) {
         bestValue = values[winner];
         bestIndex = winner;

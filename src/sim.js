@@ -62,7 +62,7 @@ function buildObservationLabels() {
   for (const spec of faceRaySpecs) {
     labels.push({
       name: "ray " + facePartName[spec.part] + " " + spec.name,
-      tip: "Hit fraction out of the " + spec.name + " face. 1 is clear, 0 is a hit at the face.",
+      tip: "Hit fraction out of the " + spec.name + " face. 1 is clear, 0 is a hit at the face. The floor, the platform, and thrown boxes and balls all count.",
     });
   }
   labels.push(
@@ -187,6 +187,7 @@ export function createSim(box) {
     return {
       worldId, parts, joints, groundId: ground.bodyId, platformId: platform.bodyId,
       floorShapes: [firstShape(platform.bodyId), firstShape(ground.bodyId)],
+      thrownIds: [], thrownShapes: [],
     };
   }
 
@@ -196,14 +197,13 @@ export function createSim(box) {
     return shapes[0];
   }
 
-  // ponytail: two shapes, not b2World_CastRay. That cast keeps the first fixture and hides the platform. Upgrade path: a category bit if the floor becomes dynamic.
-  function rayFraction(world, originX, originY, dirX, dirY) {
+  // ponytail: listed shapes, not b2World_CastRay. That cast keeps the first fixture and hides the platform. Upgrade path: a category bit if the floor becomes dynamic.
+  function rayFraction(shapes, originX, originY, dirX, dirY) {
     rayOrigin.x = originX;
     rayOrigin.y = originY;
     rayDelta.x = dirX;
     rayDelta.y = dirY;
     let fraction = 1;
-    const shapes = world.floorShapes;
     for (let i = 0; i < shapes.length; i++) {
       const cast = b2Shape_RayCast(shapes[i], rayOrigin, rayDelta);
       if (cast.hit && cast.fraction >= 0 && cast.fraction < fraction) fraction = cast.fraction;
@@ -302,10 +302,20 @@ export function createSim(box) {
       const castX = faceX - dirX * faceRayPull;
       const castY = faceY - dirY * faceRayPull;
       const reach = faceRayMeters + faceRayPull;
-      const fraction = rayFraction(world, castX, castY, dirX * reach, dirY * reach);
-      const distance = fraction >= 1 ? faceRayMeters : Math.max(0, fraction * reach - faceRayPull);
+      const dirReachX = dirX * reach;
+      const dirReachY = dirY * reach;
+      const floorFraction = rayFraction(world.floorShapes, castX, castY, dirReachX, dirReachY);
+      const thrown = world.thrownShapes;
+      const fraction = thrown.length
+        ? Math.min(floorFraction, rayFraction(thrown, castX, castY, dirReachX, dirReachY))
+        : floorFraction;
+      const along = (hit) => hit >= 1 ? faceRayMeters : Math.max(0, hit * reach - faceRayPull);
+      const floorDistance = along(floorFraction);
+      const distance = along(fraction);
       face[i] = Math.min(1, distance / faceRayMeters);
-      if (distance < measure.clearance[spec.index]) measure.clearance[spec.index] = distance;
+      if (floorDistance < measure.clearance[spec.index]) measure.clearance[spec.index] = floorDistance;
+      if (i === soleRayIndex.footLeft) measure.sole[0] = floorDistance;
+      else if (i === soleRayIndex.footRight) measure.sole[1] = floorDistance;
       if (rays) rays.push({
         x0: faceX, y0: faceY,
         x1: faceX + dirX * distance, y1: faceY + dirY * distance,
@@ -338,8 +348,11 @@ export function createSim(box) {
     measure.headCos = partCos[head];
     measure.torsoSpin = measure.partSpin[torso];
     measure.stanceWidth = Math.abs(measure.footXLeft - measure.footXRight);
-    measure.sole[0] = face[soleRayIndex.footLeft] * faceRayMeters;
-    measure.sole[1] = face[soleRayIndex.footRight] * faceRayMeters;
+    let elbow = 0;
+    for (const joint of world.joints) {
+      if (joint.mark !== "elbow") continue;
+      measure.elbowY[elbow++] = partY[joint.a] + partSin[joint.a] * joint.ax + partCos[joint.a] * joint.ay;
+    }
     measure.handOn = !!(measure.touch[config.partIndex.handLeft] || measure.touch[config.partIndex.handRight]);
     measure.bodyOn = false;
     for (let i = 0; i < count; i++) {
@@ -436,6 +449,7 @@ export function createSim(box) {
         clearance: new Array(world.parts.length),
         touch: new Array(world.parts.length),
         sole: new Float32Array(2),
+        elbowY: new Float32Array(2),
         faceRay: new Float32Array(faceRaySpecs.length),
         partVelocityX: new Float32Array(world.parts.length),
         partVelocityY: new Float32Array(world.parts.length),
@@ -449,7 +463,7 @@ export function createSim(box) {
       fillMeasure(world, this.measure);
     }
     cleanup() {
-      for (const id of this.objects) b2DestroyBody(id);
+      for (const id of this.objects) destroyThrown(this.world, id);
       this.objects = [];
     }
     // Read the body into this.input and write a new action. Does not score.
@@ -706,12 +720,24 @@ export function createSim(box) {
     const created = kind.box
       ? CreateBoxPolygon({ worldId: world.worldId, type: dynamicBody, position, size: vector(kind.half, kind.half), density: kind.density, friction: 0.6, restitution: 0.2 })
       : CreateCircle({ worldId: world.worldId, type: dynamicBody, position, radius: kind.radius, density: kind.density, friction: 0.6, restitution: 0.3 });
-    b2Body_SetLinearVelocity(created.bodyId, vector(vx, vy));
-    return created.bodyId;
+    const id = created.bodyId;
+    b2Body_SetLinearVelocity(id, vector(vx, vy));
+    world.thrownIds.push(id);
+    world.thrownShapes.push(firstShape(id));
+    return id;
+  }
+
+  function destroyThrown(world, id) {
+    const index = world.thrownIds.indexOf(id);
+    if (index >= 0) {
+      world.thrownIds.splice(index, 1);
+      world.thrownShapes.splice(index, 1);
+    }
+    b2DestroyBody(id);
   }
 
   return {
-    build, Episode, situation, varyStart, trainingStarts, poseScore, spawnThrown, resetPose,
+    build, Episode, situation, varyStart, trainingStarts, poseScore, spawnThrown, destroyThrown, resetPose,
     platformHalfWidth: config.body.platformHalfWidth,
     platformHalfThickness: config.body.platformHalfThickness,
     setRandom(seed) { random = makeSeededRandom(seed); },

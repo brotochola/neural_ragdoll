@@ -1,4 +1,4 @@
-import { CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2DestroyBody, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Vec2 } from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
+import { CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Vec2 } from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
 import * as Box2D from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
 import { config, setTrainingPhase, setTrainingByPhases, activeTrainingPhase } from "./config.js";
 import { scoreDecision, isStanding } from "./src/reward.js";
@@ -659,7 +659,7 @@ export class NeuralRagDollWorld {
       ["Best ever", everText, "The 20-generation average fitness, at the last time it reached a new high. The fitness is the ending minus any drop from the start. Network → Best ever plays the parent from that generation. A single lucky child does not set this."],
       ["Watching", watching.value, watching.tip],
       ["Plateau", flat + " gens", "Generations since the 20-generation average fitness last reached a new high. The fitness is the ending minus any drop from the start. At " + every + ", mutation becomes x" + config.search.stagnationBoost + " for " + Math.round(config.search.stagnationMutateCap * 100) + "% of pairs, and that factor multiplies again every " + every + " generations. One new Best ever removes " + every + " from this count."],
-      ["Mutation", "x" + boost + (pct > 0 ? " · " + pct + "%" : "") + anchorText, "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting. The factor follows the plateau: at " + every + " generations it becomes x" + config.search.stagnationBoost + ". When a Best ever record exists, the extra pairs are light copies of that network. A child that beats its opposite twin and the parent average becomes the parent."],
+      ["Mutation", "x" + boost + (pct > 0 ? " · " + pct + "%" : "") + anchorText, "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting. The factor follows the plateau: at " + every + " generations it becomes x" + config.search.stagnationBoost + ". Scout noise never passes " + config.search.sigmaCap + ". When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average. A scout never does."],
       ["Hint", this.hintLabel(), "The joint forced to its upper or lower stop. The doll on screen follows it and is not scored. The last " + Math.round(config.hint.pairFraction * 100) + "% of pairs in the next generation get the same force on both children and on all three poses. A child whose own output already pointed that way scores up to " + config.hint.matchWeight + " more. Neck and wrists can be forced, but their output weights are not searched."],
     ];
     this.$("status").innerHTML = rows.map((row) => {
@@ -852,7 +852,7 @@ export class NeuralRagDollWorld {
       const kind = thrownKinds[+this.$("objectKind").value];
       const id = this.sim.spawnThrown(this.world, kind, start.x, Math.max(start.y, 0.2), vx, vy);
       this.objects.push({ id, kind });
-      if (this.objects.length > 15) b2DestroyBody(this.objects.shift().id);
+      if (this.objects.length > 15) this.sim.destroyThrown(this.world, this.objects.shift().id);
       this.aim = null;
     }
   }

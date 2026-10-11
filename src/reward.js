@@ -76,6 +76,12 @@ export function scoreDecision(measure) {
     value: -(weight.handOnFloor + weight.handPark * park) * handRight,
   });
 
+  // El codo en el piso resta más que la mano, también con el torso tumbado.
+  const elbowTip = "Subtracts while that elbow is within 15 cm of the floor. Costs more than a hand, even before the torso is upright.";
+  const elbowClose = (height) => 1 - clamp((height ?? 1) / config.body.handClearMeters, 0, 1);
+  rows.push({ name: "Left elbow", tip: elbowTip, value: -weight.elbowOnFloor * elbowClose(measure.elbowY?.[0]) });
+  rows.push({ name: "Right elbow", tip: elbowTip, value: -weight.elbowOnFloor * elbowClose(measure.elbowY?.[1]) });
+
   // El muslo cerca del piso resta. La pantorrilla no entra en esta fila.
   const thighTip = "Subtracts while the thigh is within 35 cm of the floor. The shin is not in this row.";
   const thighClear = (index) => 1 - clamp((measure.clearance?.[index] ?? 1) / config.body.thighClearMeters, 0, 1);
@@ -92,16 +98,17 @@ export function scoreDecision(measure) {
     sineOf(part.thighLeft) * cosineOf(part.thighRight) - cosineOf(part.thighLeft) * sineOf(part.thighRight),
     cosineOf(part.thighLeft) * cosineOf(part.thighRight) + sineOf(part.thighLeft) * sineOf(part.thighRight),
   ));
+  const wideSpan = Math.PI / 2 - config.body.thighSpreadMaxRadians;
   const spreadPenalty = spread < config.body.thighSpreadMinRadians
-    ? (config.body.thighSpreadMinRadians - spread) / config.body.thighSpreadMinRadians
+    ? upright * (config.body.thighSpreadMinRadians - spread) / config.body.thighSpreadMinRadians
     : spread > config.body.thighSpreadMaxRadians
-      ? (spread - config.body.thighSpreadMaxRadians) / (Math.PI - config.body.thighSpreadMaxRadians)
+      ? rise * clamp((spread - config.body.thighSpreadMaxRadians) / wideSpan, 0, 1)
       : 0;
-  // La apertura solo resta con el torso erguido. En el piso las piernas pueden moverse para levantarse.
+  // Abrirse de más resta aunque el torso siga inclinado. Juntarse solo resta erguido, para poder levantarse.
   rows.push({
     name: "Thigh spread",
-    tip: "Angle between the thighs. Subtracts below 10° and above 40° only while the torso is upright. On the floor the legs can move. A step in between adds nothing.",
-    value: -weight.thighSpread * upright * clamp(spreadPenalty, 0, 1),
+    tip: "Angle between the thighs. Below 10° it subtracts only while the torso is upright. Above 40° it subtracts as the torso turns up, and a right angle between the thighs spends the whole weight. A step in between adds nothing.",
+    value: -weight.thighSpread * clamp(spreadPenalty, 0, 1),
   });
 
   // Pie en el aire solo resta si el torso ya está erguido. Apoyado, esta fila vale cero.

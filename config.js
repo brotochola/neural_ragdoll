@@ -3,7 +3,7 @@
 const physicsHz = 60;
 const partCount = 14;
 const sensedInputCount = 80; // 26 joint, 4 sin/cos, 2 heights, 4 mass, 40 face rays, goal x/y, standing, head contact.
-const rewardRowCount = 27;
+const rewardRowCount = 29;
 const partSpeedInputCount = partCount * 3;
 const rewardTotalNow = false;
 const rewardTotalPrevious = false;
@@ -20,9 +20,9 @@ export const config = {
     solverSubsteps: 3, // Box2D solver iterations per step. 4 was stiffer; 2 is faster.
   },
   cadence: {
-    actionEveryNFrames: 4, // Frames an action is held before the net picks a new one. 5 = 12 decisions/s (was 10 = 6/s, slow for balance).
+    actionEveryNFrames: 6, // Frames an action is held before the net picks a new one. 5 = 12 decisions/s (was 10 = 6/s, slow for balance).
     rewardEveryNFrames: 2, // Frames between score samples.
-    rewardFrameOffset: 0, // Sample the score this many frames after a new action, not on the action frame.
+    rewardFrameOffset: 1, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
     hidden1Ratio: 50 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
@@ -75,13 +75,14 @@ export const config = {
     torsoHeight: 1.8, // Torso-height weight. Same shape as the head height.
     handOnFloor: 0.05, // Penalty weight while a hand is near the floor.
     handPark: 1.5, // Extra hand penalty once the torso is already upright.
+    elbowOnFloor: 2, // Per elbow, within the hand clearance. More than a hand: a hand is 0.05, or 1.55 once the torso is upright.
     thighOnFloor: 0.5, // Penalty weight while a thigh is near the floor.
     tailOnFloor: 1.5, // Penalty weight while the tail is near the floor. Not gated by an upright torso.
-    thighSpread: 2, // Penalty weight for a thigh angle outside the standing band, only while upright.
+    thighSpread: 4, // Wide thigh opening. A right angle between the thighs spends all of this, even before the torso is upright. Closer than the minimum still waits for an upright torso.
     footInAir: 1.5, // Penalty weight per foot off the floor, only while upright.
     balance: 1.6, // Weight of the center of mass against the midpoint of the feet.
     headImpact: 16.8, // Penalty weight while the head is touching and moving down. A fast hit can add up to twice this again. A corner counts.
-    headOnFloor: 5, // Penalty while the head touches anything.
+    headOnFloor: 10, // Penalty while the head touches anything.
     headPark: 2, // Added on top of headOnFloor once the torso is upright. Same gate as the hands.
     standing: 5, // Standing bonus, split across flat soles, a clear body, an upright torso, and a high head.
     standingFlag: 3, // Extra bonus when isStanding is true: both feet, nothing else down, upright, high head, a real stance, and quiet.
@@ -158,12 +159,12 @@ export const config = {
     explorationHalfLifeGenerations: 6000, // Generations for the decaying noise to halve.
     stagnationGenerations: 5, // Plateau length before the large noise starts. One new best removes this many generations from the count.
     stagnationBoost: 3, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
-    stagnationBoostCap: 256, // Large-noise ceiling. Limb noise at the cap is 0.4, still near the parent.
-    sigmaCap: 12.4, // One weight's noise never exceeds this. The plateau boost cannot blow up the goal and standing columns.
+    stagnationBoostCap: 64, // Large-noise ceiling. Limb noise at the cap is 0.4, still near the parent.
+    sigmaCap: 0.4, // One weight's noise never exceeds this. At the plateau cap every scout stops here, near a trained weight.
     recordWindow: 16, // Generations in the ending average that sets a record.
     recordMargin: 0.33, // That average must clear the previous record by this much.
     bestEverPairs: 2, // Extra antithetic pairs copied from Best ever with the small noise. 0 turns them off. They are not scouts and they do not enter the Adam step.
-    bestEverAdoptMargin: 0.5, // During a plateau, a child replaces the parent when it beats its opposite twin and the parent average by this much. Same starts, so an easy pose does not count.
+    bestEverAdoptMargin: 0.5, // During a plateau, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. Scouts never become the parent.
     stagnationMutateCap: 0.25, // Share of pairs that receive the large noise once a plateau starts. The rest keep the normal noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
     bodyExplorationScale: 0.02, // Noise on hidden weights. Small, so balance can shift without a rewrite.
@@ -184,7 +185,7 @@ export const config = {
   },
   episode: {
     frames: 960, // Length of one scored episode.
-    startWindowSeconds: 0.5, // Mean reward over the first this many seconds. A drop from here to the ending is subtracted from the fitness.
+    startWindowSeconds: 0.25, // Mean reward over the first this many seconds. A drop from here to the ending is subtracted from the fitness.
     endWindowSeconds: 3, // Mean reward over the last this many seconds. The fitness is this, minus any drop from the start window.
     startTiltJitterRadians: 0.12, // Extra tilt added on top of a situation.
     startShiftMeters: 0.4, // Extra horizontal shift of a situation.
