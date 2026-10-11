@@ -1,9 +1,25 @@
 // Every tuning number lives on this object. The sim, the reward, and the trainer read these names.
 
 const physicsHz = 60;
-const partCount = 14;
-const sensedInputCount = 80; // 26 joint, 4 sin/cos, 2 heights, 4 mass, 40 face rays, goal x/y, standing, head contact.
-const rewardRowCount = 29;
+const partCount = 15; // Lower torso, chest, head, and the limbs. The tail is extra.
+const jointSenseCount = 28; // 14 joint angles and 14 joint rates. The extra joint is the waist.
+const bodyRayCount = 38; // Short rays from every face except the head. Chest adds two.
+const headRadius = 0.12;
+const headAxis = 0.024;
+const neckY = 1.56;
+const headCenterY = neckY + headRadius + headAxis;
+const headForwardRayCount = 4; // Most head rays look forward.
+const headBackRayCount = 2; // A few look behind the head.
+const headRayCount = headForwardRayCount + headBackRayCount; // Observation width of the head fan. Changing this needs a fresh network.
+const headRayMeters = 2; // No head ray looks farther than this.
+const episodeSeconds = 6; // One scored individual, unless the head hits first.
+const targetCount = 5; // Head, handR, handL, footR, footL.
+const targetStride = 5; // use, dx, dy, sin of the angle error, cos of the angle error. Each is its own input.
+const targetInputCount = targetCount * targetStride;
+const sensedBeforeRays = jointSenseCount + 4 + 2 + 4; // Joints, torso/head sin/cos, two heights, four mass values.
+const targetInputIndex = sensedBeforeRays + bodyRayCount + headRayCount;
+const sensedInputCount = targetInputIndex + targetInputCount + 1; // The last column is head contact.
+const rewardRowCount = targetCount * 2; // Position and rotation for each target.
 const partSpeedInputCount = partCount * 3;
 const rewardTotalNow = false;
 const rewardTotalPrevious = false;
@@ -17,81 +33,68 @@ export const config = {
   physics: {
     hz: physicsHz, // Steps per simulated second.
     timeStep: 1 / physicsHz, // Seconds advanced by one physics step.
-    solverSubsteps: 3, // Box2D solver iterations per step. 4 was stiffer; 2 is faster.
+    solverSubsteps: 2, // Box2D solver iterations per step. 3 was steadier; 2 is the fast setting.
   },
   cadence: {
     actionEveryNFrames: 6, // Frames an action is held before the net picks a new one. 5 = 12 decisions/s (was 10 = 6/s, slow for balance).
-    rewardEveryNFrames: 2, // Frames between score samples.
+    rewardEveryNFrames: 10, // Frames between score samples. At 60 Hz this is 6 samples a second.
     rewardFrameOffset: 1, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
-    hidden1Ratio: 50 / 149, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
-    hidden2Ratio: 50 / 149, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
-    feedbackUnits: 8, // Nonlinear summary of the previous action. It enters the recurrent layer only.
-    jointCount: 13, // Motor joints, and the width of the action vector.
-    sensedInputCount, // Observation length before part speeds. Goal x is 76, goal y is 77, standing is 78, head contact is 79.
-    goalInputIndex: 76, // Index of the goal-x observation. Goal y is the next index.
-    standingInputIndex: 78, // Index of the binary standing observation.
-    headContactInputIndex: 79, // Index of the head-contact observation. 1 when Box2D says the head is touching.
-    partCount, // Dynamic body parts, including the hip.
+    hidden1Ratio: 0.5, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
+    hidden2Ratio: 0.25, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
+    feedbackUnits: 0, // Nonlinear summary of the previous action. It enters the recurrent layer only.
+    jointCount: 14, // Motor joints, and the width of the action vector. Waist, neck, and six joints on each side.
+    sensedInputCount, // Observation length before part speeds.
+    targetInputIndex, // First of the target columns. Five targets, five numbers each: use, dx, dy, error sin, error cos.
+    targetInputCount,
+    targetCount,
+    headContactInputIndex: sensedInputCount - 1, // 1 when Box2D says the head is touching.
+    partCount, // Dynamic body parts whose speed is an input. The tail is not one of them.
     partSpeedInputCount, // Three numbers per part: vx, vy, spin.
     rewardRowCount, // Score rows shown on screen. They are not copied into the observation.
     rewardTotalNow, // Append the reward total from this decision.
     rewardTotalPrevious, // Append the reward total from the previous decision, one action interval ago.
     rewardTotalNext, // Append the reward total estimated one physics frame ahead.
     inputCount: sensedInputCount + partSpeedInputCount + rewardTotalInputCount, // Full observation length.
-    freshInputExplorationScale: 0.04, // Noise on the part-speed columns. Less than the goal columns.
+    freshInputExplorationScale: 0.04, // Noise on the part-speed columns. Less than the target columns.
     hiddenLeak: 0.6, // Fraction of the previous hidden state kept each step.
   },
   body: {
-    platformHalfWidth: 20, // Half the platform length, in meters.
-    platformHalfThickness: 0.1, // Half the platform thickness, in meters.
-    platformPeriodSeconds: 8, // Period of a tilting platform, when one is enabled.
+    platformPeriodSeconds: 8, // Kept on the task header. The floor does not tilt.
     touchGapMeters: 0.005, // Clearance below this counts as touching the floor.
-    comfortableStanceMeters: 0.29, // Stance width that scores the full stance comfort.
     standingHeadMeters: 1.45, // Head height required to count as standing.
     standingTorsoAngleRadians: (15 * Math.PI) / 180, // Max absolute torso tilt that still counts as standing.
     standingStanceMinMeters: 0.05, // Narrowest stance that still counts as standing.
     standingStanceMaxMeters: 0.9, // Widest stance that still counts as standing.
-    headHeightMeters: 1.68, // Head height of the standing blueprint. The height reward and the head-height input use this.
-    torsoHeightMeters: 1.26, // Torso height of the standing blueprint.
-    handClearMeters: 0.15, // A hand this close to the floor is fully "on the floor" for the hand penalty.
-    thighClearMeters: 0.35, // A thigh this close to the floor is fully "on the floor" for the thigh penalty.
-    thighSpreadMinRadians: (10 * Math.PI) / 180, // Thighs closer than this are penalized once the torso is upright.
-    thighSpreadMaxRadians: (40 * Math.PI) / 180, // Thighs wider than this are penalized once the torso is upright.
-    balanceSpanMeters: 0.4, // Center-of-mass offset from the feet that spends the whole balance range.
-    goalSpanMeters: 2.5, // Marker distance at which the goal-distance reward reaches zero.
-    goalWalkSpeed: 0.5, // Horizontal speed, m/s, that scores the full goal-speed reward.
+    headRadius, // Head capsule radius.
+    headAxis, // Half the distance between the head capsule's circle centers.
+    headHeightMeters: headCenterY, // Head center of the standing blueprint. The head-height input uses this.
+    torsoHeightMeters: 1.14, // Lower-torso center of the standing blueprint.
+    waistForwardRadians: (35 * Math.PI) / 180, // Chest flexes this far toward the toes.
+    waistBackRadians: (20 * Math.PI) / 180, // Chest extends this far backward. Less than the forward bend.
+    bodyRayMeters: 0.35, // Short rays from the body. 1 means nothing is within this distance of that face.
+    targetSpanMeters: 2, // Target distance at which the position reward reaches its floor.
   },
+  vision: {
+    headRayMeters, // Cap on every head ray, in meters.
+    headForwardCount: headForwardRayCount, // Rays across the face. Local +X is forward.
+    headForwardArcRadians: Math.PI, // That fan covers the front half, centered on the face.
+    headBackCount: headBackRayCount, // Rays behind the head.
+    headBackArcRadians: Math.PI / 2, // Those cover a narrower arc, centered on the back of the head.
+  },
+  // Standing blueprint. Head starts on. The other four start off, at the part they belong to.
+  targets: [
+    { id: "head", part: "head", on: true, x: 0, y: headCenterY, angle: 0 },
+    { id: "handR", part: "handRight", on: false, x: 0, y: 0.91, angle: 0 },
+    { id: "handL", part: "handLeft", on: false, x: 0, y: 0.91, angle: 0 },
+    { id: "footR", part: "footRight", on: false, x: 0.06, y: 0.04, angle: 0 },
+    { id: "footL", part: "footLeft", on: false, x: 0.06, y: 0.04, angle: 0 },
+  ],
   reward: {
-    torsoAngle: 1, // Weight of the torso cosine. +1 of this when upright, -1 when upside down.
-    headAngle: 0.75, // Weight of the head cosine.
-    upperArmAngle: 0.12, // Weight of each upper-arm cosine. +1 when that arm is vertical.
-    forearmAngle: 0.15, // Weight of each forearm cosine.
-    thighAngle: 1.5, // Weight of each thigh cosine.
-    shinAngle: 0.25, // Weight of each shin cosine.
-    kneeBend: 2, // Per knee. Cost is this times (1 - cos of the bend) times how far the torso has turned up. Straight is free. A small bend is almost free. A right angle spends the whole weight.
-    headHeight: 4, // Head-height weight. The floor value is -this; a full upright reach is +this.
-    torsoHeight: 1.8, // Torso-height weight. Same shape as the head height.
-    handOnFloor: 0.05, // Penalty weight while a hand is near the floor.
-    handPark: 1.5, // Extra hand penalty once the torso is already upright.
-    elbowOnFloor: 2, // Per elbow, within the hand clearance. More than a hand: a hand is 0.05, or 1.55 once the torso is upright.
-    thighOnFloor: 0.5, // Penalty weight while a thigh is near the floor.
-    tailOnFloor: 1.5, // Penalty weight while the tail is near the floor. Not gated by an upright torso.
-    thighSpread: 4, // Wide thigh opening. A right angle between the thighs spends all of this, even before the torso is upright. Closer than the minimum still waits for an upright torso.
-    footInAir: 1.5, // Penalty weight per foot off the floor, only while upright.
-    balance: 1.6, // Weight of the center of mass against the midpoint of the feet.
-    headImpact: 16.8, // Penalty weight while the head is touching and moving down. A fast hit can add up to twice this again. A corner counts.
-    headOnFloor: 10, // Penalty while the head touches anything.
-    headPark: 2, // Added on top of headOnFloor once the torso is upright. Same gate as the hands.
-    standing: 5, // Standing bonus, split across flat soles, a clear body, an upright torso, and a high head.
-    standingFlag: 3, // Extra bonus when isStanding is true: both feet, nothing else down, upright, high head, a real stance, and quiet.
-    stanceComfort: 2, // Bonus for a stance near the comfortable width, scaled by how flat the soles are. A very wide stance subtracts.
-    goalDistanceUp: 0, // Marker-closeness weight while on the feet. Phase 3 replaces this.
-    goalDistanceDown: 0, // Marker-closeness weight while not on the feet.
-    goalSpeedUp: 0, // Toward-marker speed weight while on the feet. Phase 3 replaces this.
-    goalSpeedDown: 0, // Toward-marker speed weight while not on the feet.
-    motion: 2, // Penalty weight for part speed and spin while the torso is upright.
+    targetPosition: 1, // +this on the target, -this at targetSpanMeters. Only while that target is on.
+    targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on.
+    headReject: -100, // Fitness of a training episode whose head touched anything. Worse than any target score.
   },
   curriculum: {
     // Rows the Train menu and the headless run walk through. Each row lasts `generations`.
@@ -127,16 +130,11 @@ export const config = {
     ],
     phase: 1, // Active phase id. setTrainingPhase writes this.
     byPhases: false, // When true, a run stays on each phase for its generation budget, then advances.
-    phase3GoalDistanceUp: 2, // Marker-closeness weight while on the feet, used only when the active phase has a goal.
-    phase3GoalDistanceDown: 0.7, // Marker-closeness weight while down, in a goal phase.
-    phase3GoalSpeedUp: 1.2, // Toward-marker speed weight while on the feet, in a goal phase.
-    phase3GoalSpeedDown: 0.4, // Toward-marker speed weight while down, in a goal phase.
   },
   scale: {
     partSpeed: 3, // Part linear speed is divided by this before it enters the net.
     partSpin: 6, // Part angular speed is divided by this before it enters the net.
     rewardInput: 8, // A reward row is divided by this before it enters the net.
-    motionFull: 12, // Sum of part speeds and spins that spends the whole motion penalty.
   },
   start: {
     fallDropChance: 0.25, // Chance an upright start is instead dropped from height, when the phase allows falls.
@@ -171,7 +169,7 @@ export const config = {
     learningRate: 0.01, // Adam step size at generation 0. Was 0.025, 2.5x the hidden-weight noise.
     learningRateFloor: 0.003, // Adam step size never drops below this.
     learningRateHalfLifeGenerations: 8000, // Generations for the Adam step size to halve.
-    trainableJointIndexes: [1, 2, 4, 5, 6, 7, 8, 10, 11, 12], // Output joints that receive limb noise. Neck and wrists stay put.
+    trainableJointIndexes: [0, 2, 3, 5, 6, 7, 8, 9, 11, 12, 13], // Waist, shoulders, elbows, hips, knees, ankles. Neck and wrists stay put.
     adamBeta1: 0.9, // Adam first-moment decay.
     adamBeta2: 0.999, // Adam second-moment decay.
     adamEpsilon: 1e-8, // Added under the Adam denominator.
@@ -184,7 +182,8 @@ export const config = {
     headImpactQuiet: 1.5, // A stand counts as quiet when the peak head-down speed is below this, in m/s.
   },
   episode: {
-    frames: 960, // Length of one scored episode.
+    seconds: episodeSeconds, // How long one scored individual runs. A head hit still ends it sooner.
+    frames: episodeSeconds * physicsHz, // Physics steps in that run. 6 s at 60 Hz is 360. The doll on screen is not cut by this.
     startWindowSeconds: 0.25, // Mean reward over the first this many seconds. A drop from here to the ending is subtracted from the fitness.
     endWindowSeconds: 3, // Mean reward over the last this many seconds. The fitness is this, minus any drop from the start window.
     startTiltJitterRadians: 0.12, // Extra tilt added on top of a situation.
@@ -194,10 +193,6 @@ export const config = {
     motorSpeedLimit: 10, // Max joint motor speed, radians per second.
     goalNearMeters: 1.2, // Closest random marker distance.
     goalFarExtraMeters: 1, // Extra meters added at random past the closest marker.
-  },
-  hint: {
-    pairFraction: 0.25, // Share of antithetic pairs whose joint output is forced while a hint button is on. The last pairs, so they are not also the large-noise scouts.
-    matchWeight: 1, // Added to fitness when the network's own output already matches the forced sign. A perfect match adds this.
   },
   workers: {
     browserMin: 1, // Fewest browser workers.
@@ -209,6 +204,9 @@ export const config = {
     headlessWorkerMin: 2, // Fewest headless workers.
     headlessWorkerMax: 12, // Most headless workers.
     headlessWorkerReserve: 2, // CPU cores left unused when sizing the headless pool.
+  },
+  session: {
+    everyGenerations: 20, // Browser weights are written to IndexedDB this often, and also on pause, hide, and restart.
   },
   eval: {
     headlessN: 40, // Held-out episodes per kind for an official headless eval.
@@ -233,21 +231,22 @@ export const config = {
   },
   partIndex: {
     // Body part indexes. Same order the sim builds them.
-    torso: 0,
-    head: 1,
-    upperArmLeft: 2,
-    forearmLeft: 3,
-    handLeft: 4,
-    thighLeft: 5,
-    shinLeft: 6,
-    footLeft: 7,
-    upperArmRight: 8,
-    forearmRight: 9,
-    handRight: 10,
-    thighRight: 11,
-    shinRight: 12,
-    footRight: 13,
-    hip: 14, // Tail circle welded under the torso. Not one of the 14 speed inputs.
+    torso: 0, // Lower torso, the pelvis.
+    chest: 1,
+    head: 2,
+    upperArmLeft: 3,
+    forearmLeft: 4,
+    handLeft: 5,
+    thighLeft: 6,
+    shinLeft: 7,
+    footLeft: 8,
+    upperArmRight: 9,
+    forearmRight: 10,
+    handRight: 11,
+    thighRight: 12,
+    shinRight: 13,
+    footRight: 14,
+    hip: 15, // Tail circle welded under the pelvis. Not one of the speed inputs.
   },
 };
 

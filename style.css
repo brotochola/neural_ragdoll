@@ -161,12 +161,24 @@ section h2 {
   line-height: 1;
 }
 
-#readout section {
-  padding: 6px 8px;
+#readout .fold {
+  padding-bottom: 6px;
 }
 
-#readout section h2 {
-  margin: 0 0 4px;
+#readout #status,
+#readout #total,
+#readout #terms {
+  padding: 0 8px;
+}
+
+#readout .fold-note {
+  padding: 0 8px 6px;
+}
+
+h2.sub {
+  margin: 0 8px 4px;
+  font-size: 12px;
+  letter-spacing: .02em;
 }
 
 #terms .row {
@@ -209,6 +221,63 @@ section h2 {
   flex-direction: column;
 }
 
+details.fold {
+  border-top: 1px solid var(--line);
+  background: #12162a;
+}
+
+details.fold > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 12px 2px;
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+details.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.fold > summary::before {
+  content: "▸";
+  color: var(--muted);
+  font-size: 11px;
+}
+
+details.fold[open] > summary::before {
+  content: "▾";
+}
+
+details.fold > summary small {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.fold-note {
+  margin: 0;
+  padding: 0 12px 6px 28px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+#readout details.fold {
+  background: var(--panel);
+  border-top: 0;
+  border-radius: 12px;
+}
+
+#readout details.fold > summary {
+  padding: 8px 8px 2px;
+}
+
 .bar-row {
   display: flex;
   flex-wrap: wrap;
@@ -236,16 +305,6 @@ select {
   cursor: pointer;
 }
 
-button.hint-pos {
-  background: var(--good);
-  color: #102018;
-}
-
-button.hint-neg {
-  background: var(--bad);
-  color: white;
-}
-
 select {
   background: var(--panel);
 }
@@ -256,6 +315,13 @@ label.ctrl {
   gap: 6px;
   align-items: center;
   cursor: help;
+}
+
+label.target-toggle {
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
 }
 
 #hint {

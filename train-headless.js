@@ -1,4 +1,5 @@
 // One headless loop: same sim, net, reward, and config as the page.
+// Training fitness is the target score. A head touch on a training episode is config.reward.headReject.
 // Pass/fail is the search center (theta) on a fixed held-out set, not the training batch.
 // Stand and drop need isStanding, head above config.body.standingHeadMeters, and headImpact < config.search.headImpactQuiet.
 // Ball needs isStanding at the end. Get-up needs isStanding at the end.
@@ -43,17 +44,20 @@ async function runWorker() {
   });
 }
 
+let workerEpisode = null;
+
 function runEpisode(sim, world, job, isStanding) {
   const options = job.options || {};
   const weights = job.weights instanceof Float32Array ? job.weights : Float32Array.from(job.weights);
-  const episode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
-  const startGap = options.goalX == null ? null : Math.abs(options.goalX - (episode.measure.centerX || 0));
-  while (!episode.step());
-  const stats = episode.stats;
-  const measure = episode.measure;
+  if (!workerEpisode) workerEpisode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
+  else workerEpisode.reset(weights, options.tilt || 0, options.drop || 0, options);
+  const startGap = options.goalX == null ? null : Math.abs(options.goalX - (workerEpisode.measure.centerX || 0));
+  while (!workerEpisode.step());
+  const stats = workerEpisode.stats;
+  const measure = workerEpisode.measure;
   const standing = isStanding(measure);
   const headHeight = measure.headHeight || 0;
-  episode.cleanup();
+  workerEpisode.cleanup();
   return {
     index: job.index,
     kind: job.kind,
@@ -439,8 +443,11 @@ async function runMain() {
     if (raw.length !== jobs.length || raw.some((score) => !score || !Number.isFinite(score.fitness))) {
       throw new Error('training returned an empty score');
     }
+    const poseCount = trios[0].length;
     const scores = [];
-    for (let child = 0; child < generation.weights.length; child++) scores.push(sim.poseScore(raw.slice(child * 3, child * 3 + 3)));
+    for (let child = 0; child < generation.weights.length; child++) {
+      scores.push(sim.poseScore(raw, child * poseCount, poseCount, {}));
+    }
     state.tell(generation, scores);
     if (state.anchorNote) {
       log(state.anchorNote);

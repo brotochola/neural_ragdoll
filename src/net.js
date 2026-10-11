@@ -12,37 +12,44 @@ function unitsFromRatio(ratio) {
   return Math.round(net.inputCount * ratio);
 }
 
+function buildLayout() {
+  const inputCount = net.inputCount;
+  const first = Math.max(1, unitsFromRatio(net.hidden1Ratio));
+  const second = unitsFromRatio(net.hidden2Ratio);
+  const feedforward = second > 0 ? first : 0;
+  const recurrent = second > 0 ? second : first;
+  const feedback = net.feedbackUnits > 0 ? net.feedbackUnits : 0;
+  const feedforwardStride = 1 + inputCount;
+  const feedbackStride = 1 + net.jointCount;
+  const recurrentStride = 1 + (feedforward || inputCount) + feedback + recurrent;
+  const feedforwardBlock = feedforward * feedforwardStride;
+  const feedbackBlock = feedback * feedbackStride;
+  const recurrentBlock = recurrent * recurrentStride;
+  const feedbackBase = feedforwardBlock;
+  const recurrentBase = feedforwardBlock + feedbackBlock;
+  return {
+    inputCount,
+    feedforward,
+    feedback,
+    recurrent,
+    feedforwardStride,
+    feedbackStride,
+    recurrentStride,
+    feedforwardBlock,
+    feedbackBlock,
+    feedbackBase,
+    recurrentBase,
+    outputBase: recurrentBase + recurrentBlock,
+  };
+}
+
+// Un solo objeto. ask() y tell() lo leen una vez por peso.
+const layout = buildLayout();
+
 export class ElmanNetwork {
   // Una capa: la primera es la Elman, con memoria. Dos capas: la primera comprime sin memoria y la segunda es la única que recuerda.
   static get layout() {
-    const inputCount = net.inputCount;
-    const first = Math.max(1, unitsFromRatio(net.hidden1Ratio));
-    const second = unitsFromRatio(net.hidden2Ratio);
-    const feedforward = second > 0 ? first : 0;
-    const recurrent = second > 0 ? second : first;
-    const feedback = net.feedbackUnits > 0 ? net.feedbackUnits : 0;
-    const feedforwardStride = 1 + inputCount;
-    const feedbackStride = 1 + net.jointCount;
-    const recurrentStride = 1 + (feedforward || inputCount) + feedback + recurrent;
-    const feedforwardBlock = feedforward * feedforwardStride;
-    const feedbackBlock = feedback * feedbackStride;
-    const recurrentBlock = recurrent * recurrentStride;
-    const feedbackBase = feedforwardBlock;
-    const recurrentBase = feedforwardBlock + feedbackBlock;
-    return {
-      inputCount,
-      feedforward,
-      feedback,
-      recurrent,
-      feedforwardStride,
-      feedbackStride,
-      recurrentStride,
-      feedforwardBlock,
-      feedbackBlock,
-      feedbackBase,
-      recurrentBase,
-      outputBase: recurrentBase + recurrentBlock,
-    };
+    return layout;
   }
 
   // Pesos de la red actual. Con una sola capa es el mismo empaquetado de antes.
@@ -112,12 +119,18 @@ export class ElmanNetwork {
   }
 }
 
-// Cuánto ruido le toca a cada peso. El cuerpo casi no se mueve; los miembros y el goal, sí.
-// El ruido grande del goal, de standing y del contacto de la cabeza solo cae en los pesos que multiplican esa entrada.
+// 1 si esa articulación de salida se entrena. Cuello y muñecas quedan en 0. Se arma una vez.
+const limbJoint = new Uint8Array(net.jointCount);
+for (let jointIndex = 0; jointIndex < search.trainableJointIndexes.length; jointIndex++) {
+  const joint = search.trainableJointIndexes[jointIndex];
+  if (joint >= 0 && joint < limbJoint.length) limbJoint[joint] = 1;
+}
+
+// Cuánto ruido le toca a cada peso. El cuerpo casi no se mueve; los miembros y los targets, sí.
+// El ruido grande de los targets y del contacto de la cabeza solo cae en los pesos que multiplican esa entrada.
 // `boost` agranda ese ruido cuando el puntaje no mejora. sigmaCap lo corta. Cuello y muñecas siguen en 0.
 function explorationOf(index, scale, boost) {
   const extra = boost > 0 ? boost : 1;
-  const layout = ElmanNetwork.layout;
   let sigma = search.bodyExplorationScale * extra;
   if (index < layout.outputBase) {
     const inFeedback = index >= layout.feedbackBase && index < layout.feedbackBase + layout.feedbackBlock;
@@ -126,12 +139,14 @@ function explorationOf(index, scale, boost) {
       const stride = layout.feedforward ? layout.feedforwardStride : layout.recurrentStride;
       const origin = layout.feedforward ? 0 : layout.recurrentBase;
       const local = (index - origin) % stride;
-      if (local === net.goalInputIndex + 1 || local === net.goalInputIndex + 2 || local === net.standingInputIndex + 1 || local === net.headContactInputIndex + 1) sigma = scale * extra;
+      const targetLocal = net.targetInputIndex + 1;
+      if (local >= targetLocal && local < targetLocal + net.targetInputCount) sigma = scale * extra;
+      else if (local === net.headContactInputIndex + 1) sigma = scale * extra;
       else if (local > net.sensedInputCount && local <= net.inputCount) sigma = net.freshInputExplorationScale * extra;
     }
   } else {
     const joint = Math.floor((index - layout.outputBase) / (layout.recurrent + 1));
-    sigma = search.trainableJointIndexes.includes(joint) ? search.limbExplorationScale * extra : 0;
+    sigma = limbJoint[joint] ? search.limbExplorationScale * extra : 0;
   }
   const cap = search.sigmaCap;
   return sigma > 0 && cap > 0 ? Math.min(cap, sigma) : sigma;
@@ -178,6 +193,69 @@ export class EvolutionSearch {
     this.mutationBoost = 1;
     this.mutationFraction = 0;
     this.anchorNote = "";
+    const length = ElmanNetwork.weightCount;
+    this.sigmaQuiet = new Float32Array(length);
+    this.sigmaHot = new Float32Array(length);
+    this.gradient = new Float32Array(length);
+    this.noiseStore = [];
+    this.childStore = [];
+    this.noiseRefs = [];
+    this.weightRefs = [];
+    this.pairBoosts = [];
+    this.phases = [];
+    this.values = [];
+    this.order = [];
+    this.rank = [];
+    this.generation = {
+      situation: null,
+      noise: this.noiseRefs,
+      weights: this.weightRefs,
+      phases: this.phases,
+      count: 0,
+      scale: 0,
+      boost: 1,
+      fraction: 0,
+      pairBoosts: this.pairBoosts,
+      anchorPairs: 0,
+      sigmaQuiet: this.sigmaQuiet,
+      sigmaHot: this.sigmaHot,
+    };
+    const self = this;
+    this.compareFitness = (a, b) => self.values[a] - self.values[b];
+  }
+
+  // Agranda el pool solo si esta generación tiene más pares que la anterior.
+  growFloat(store, count, length) {
+    for (let i = store.length; i < count; i++) store.push(new Float32Array(length));
+  }
+
+  fillSigma(out, scale, boost) {
+    for (let i = 0; i < out.length; i++) out[i] = explorationOf(i, scale, boost);
+  }
+
+  // Escribe un par antitético en buffers que ya existen.
+  writePair(pairIndex, parent, sigma, randomNormal) {
+    const length = parent.length;
+    const direction = this.noiseStore[pairIndex];
+    const plus = this.childStore[pairIndex * 2];
+    const minus = this.childStore[pairIndex * 2 + 1];
+    for (let i = 0; i < length; i++) {
+      direction[i] = randomNormal();
+      const step = sigma[i] * direction[i];
+      plus[i] = parent[i] + step;
+      minus[i] = parent[i] - step;
+    }
+    this.noiseRefs[pairIndex] = direction;
+    this.weightRefs[pairIndex * 2] = plus;
+    this.weightRefs[pairIndex * 2 + 1] = minus;
+    this.phases[pairIndex * 2] = pairIndex * 2;
+    this.phases[pairIndex * 2 + 1] = pairIndex * 2 + 1;
+  }
+
+  zeroMoments() {
+    this.m.fill(0);
+    this.v.fill(0);
+    this.k = 0;
   }
 
   // Pares extra copiados de Best ever. Cero hasta que el récord existe y el vector coincide.
@@ -197,6 +275,7 @@ export class EvolutionSearch {
   }
 
   // Una situación para toda la generación. Cada individuo decide en un frame distinto.
+  // Devuelve el mismo objeto cada vez. Vale hasta el próximo ask.
   ask(situation, count, randomNormal) {
     const parent = this.theta;
     const length = parent.length;
@@ -206,65 +285,71 @@ export class EvolutionSearch {
     this.mutationBoost = boost;
     this.mutationFraction = fraction;
     const hot = fraction > 0 ? Math.min(count, Math.max(1, Math.round(count * fraction))) : 0;
-    const noise = [];
-    const weights = [];
-    const phases = [];
-    const pairBoosts = [];
+    const anchor = this.anchorPairCount();
+    const pairTotal = count + anchor;
+    this.growFloat(this.noiseStore, pairTotal, length);
+    this.growFloat(this.childStore, pairTotal * 2, length);
+    this.fillSigma(this.sigmaQuiet, scale, 1);
+    this.fillSigma(this.sigmaHot, scale, boost);
+    this.pairBoosts.length = pairTotal;
+    this.noiseRefs.length = pairTotal;
+    this.weightRefs.length = pairTotal * 2;
+    this.phases.length = pairTotal * 2;
     for (let individual = 0; individual < count; individual++) {
       const pairBoost = individual < hot ? boost : 1;
-      pairBoosts.push(pairBoost);
-      const direction = new Float32Array(length);
-      for (let i = 0; i < length; i++) direction[i] = randomNormal();
-      noise.push(direction);
-      for (const sign of [1, -1]) {
-        const child = new Float32Array(length);
-        for (let i = 0; i < length; i++) child[i] = parent[i] + sign * explorationOf(i, scale, pairBoost) * direction[i];
-        weights.push(child);
-        phases.push(weights.length - 1);
-      }
+      this.pairBoosts[individual] = pairBoost;
+      this.writePair(individual, parent, pairBoost > 1 ? this.sigmaHot : this.sigmaQuiet, randomNormal);
     }
-    // Copias leves de Best ever, al final. count sigue siendo solo los pares del padre, así el hint no les cae encima.
-    const anchor = this.anchorPairCount();
+    // Copias leves de Best ever, al final. count sigue siendo solo los pares del padre.
     const anchorParent = this.bestEverTheta;
     for (let individual = 0; individual < anchor; individual++) {
-      pairBoosts.push(1);
-      const direction = new Float32Array(length);
-      for (let i = 0; i < length; i++) direction[i] = randomNormal();
-      noise.push(direction);
-      for (const sign of [1, -1]) {
-        const child = new Float32Array(length);
-        for (let i = 0; i < length; i++) child[i] = anchorParent[i] + sign * explorationOf(i, scale, 1) * direction[i];
-        weights.push(child);
-        phases.push(weights.length - 1);
-      }
+      const pairIndex = count + individual;
+      this.pairBoosts[pairIndex] = 1;
+      this.writePair(pairIndex, anchorParent, this.sigmaQuiet, randomNormal);
     }
-    return { situation, noise, weights, phases, count, scale, boost, fraction, pairBoosts, anchorPairs: anchor };
+    const generation = this.generation;
+    generation.situation = situation;
+    generation.count = count;
+    generation.scale = scale;
+    generation.boost = boost;
+    generation.fraction = fraction;
+    generation.anchorPairs = anchor;
+    return generation;
   }
 
   tell(generation, scores) {
     const count = generation.count;
-    const values = scores.map((score) => score.fitness);
+    const values = this.values;
+    values.length = scores.length;
+    for (let i = 0; i < scores.length; i++) values[i] = scores[i].fitness;
     const length = this.theta.length;
     const thetaChildren = count * 2;
     if (!this.m || this.m.length !== length) this.m = new Float32Array(length);
     if (!this.v || this.v.length !== length) this.v = new Float32Array(length);
     this.k = this.k || 0;
-    const parentValues = values.slice(0, thetaChildren);
-    const order = parentValues.map((_, index) => index).sort((a, b) => parentValues[a] - parentValues[b]);
-    const rank = new Array(thetaChildren);
+    const order = this.order;
+    order.length = thetaChildren;
+    for (let i = 0; i < thetaChildren; i++) order[i] = i;
+    order.sort(this.compareFitness);
+    const rank = this.rank;
+    rank.length = thetaChildren;
     const span = Math.max(1, thetaChildren - 1);
-    order.forEach((index, place) => { rank[index] = place / span - 0.5; });
-    const gradient = new Float32Array(length);
-    const scale = generation.scale || search.explorationScale;
-    const boost = generation.boost || 1;
+    for (let place = 0; place < order.length; place++) rank[order[place]] = place / span - 0.5;
+    const gradient = this.gradient;
+    gradient.fill(0);
+    const sigmaQuiet = generation.sigmaQuiet || this.sigmaQuiet;
+    const sigmaHot = generation.sigmaHot || this.sigmaHot;
     const pairBoosts = generation.pairBoosts;
+    const boost = generation.boost || 1;
     for (let pair = 0; pair < count; pair++) {
       const pairBoost = pairBoosts && pairBoosts[pair] > 0 ? pairBoosts[pair] : boost;
+      const sigma = pairBoost > 1 ? sigmaHot : sigmaQuiet;
       const difference = rank[2 * pair] - rank[2 * pair + 1];
+      const direction = generation.noise[pair];
       for (let i = 0; i < length; i++) {
-        const sigma = explorationOf(i, scale, pairBoost);
-        if (!sigma) continue;
-        gradient[i] += difference * generation.noise[pair][i] / sigma;
+        const scale = sigma[i];
+        if (!scale) continue;
+        gradient[i] += difference * direction[i] / scale;
       }
     }
     const stepIndex = ++this.k;
@@ -274,7 +359,7 @@ export class EvolutionSearch {
     const secondFix = 1 - Math.pow(secondMoment, stepIndex);
     const stepSize = Math.max(search.learningRateFloor, search.learningRate * Math.pow(0.5, (this.gen || 0) / search.learningRateHalfLifeGenerations));
     for (let i = 0; i < length; i++) {
-      if (!explorationOf(i, scale, 1)) continue;
+      if (!sigmaQuiet[i]) continue;
       const estimate = gradient[i] / count;
       this.m[i] = firstMoment * this.m[i] + (1 - firstMoment) * estimate;
       this.v[i] = secondMoment * this.v[i] + (1 - secondMoment) * estimate * estimate;
@@ -282,25 +367,28 @@ export class EvolutionSearch {
     }
     let bestIndex = 0;
     for (let i = 1; i < values.length; i++) if (values[i] > values[bestIndex]) bestIndex = i;
-    this.bestGenTheta = Float32Array.from(generation.weights[bestIndex]);
+    this.bestGenTheta.set(generation.weights[bestIndex]);
     this.bestGenScore = values[bestIndex];
     // El padre solo se reemplaza si un hijo suyo llegó al marcador. Las copias de Best ever no entran acá.
     const parentBestIndex = order.length ? order[order.length - 1] : -1;
-    if (parentBestIndex >= 0 && parentValues[parentBestIndex] > (this.eliteScore ?? -1e9) && (scores[parentBestIndex].gap ?? search.eliteMissingGapMeters) < search.goalCloseEnoughMeters) {
+    if (parentBestIndex >= 0 && values[parentBestIndex] > (this.eliteScore ?? -1e9) && (scores[parentBestIndex].gap ?? search.eliteMissingGapMeters) < search.goalCloseEnoughMeters) {
       this.theta.set(generation.weights[parentBestIndex]);
-      this.eliteScore = parentValues[parentBestIndex];
-      this.m = new Float32Array(length);
-      this.v = new Float32Array(length);
-      this.k = 0;
+      this.eliteScore = values[parentBestIndex];
+      this.zeroMoments();
     }
     this.gen++;
-    const parentScores = scores.slice(0, thetaChildren);
-    const stood = parentScores.filter((score) => score.stoodUp && (score.headImpact || 0) < search.headImpactQuiet).length / (parentScores.length || 1);
+    let stoodCount = 0;
     let startSum = 0;
     let startCount = 0;
     let endSum = 0;
     let endCount = 0;
-    for (const score of parentScores) {
+    let gapSum = 0;
+    let parentSum = 0;
+    for (let i = 0; i < thetaChildren; i++) {
+      const score = scores[i];
+      parentSum += values[i];
+      gapSum += score.gap || 0;
+      if (score.stoodUp && (score.headImpact || 0) < search.headImpactQuiet) stoodCount++;
       if (Number.isFinite(score.start)) {
         startSum += score.start;
         startCount++;
@@ -310,18 +398,20 @@ export class EvolutionSearch {
         endCount++;
       }
     }
-    const parentMean = parentValues.length ? parentValues.reduce((sum, value) => sum + value, 0) / parentValues.length : 0;
+    const parentMean = thetaChildren ? parentSum / thetaChildren : 0;
+    let bestValue = parentMean;
+    for (let i = 0; i < values.length; i++) if (values[i] > bestValue) bestValue = values[i];
     this.hist.push({
       mean: parentMean,
-      best: values.length ? Math.max(...values) : parentMean,
+      best: values.length ? bestValue : parentMean,
       start: startCount ? startSum / startCount : null,
       end: endCount ? endSum / endCount : null,
-      stood,
-      gap: parentScores.reduce((sum, score) => sum + (score.gap || 0), 0) / (parentScores.length || 1),
+      stood: stoodCount / (thetaChildren || 1),
+      gap: gapSum / (thetaChildren || 1),
       boost,
       fraction: generation.fraction || 0,
     });
-    if (this.hist.length > 400) this.hist = this.hist.slice(-400);
+    if (this.hist.length > 400) this.hist.shift();
     this.noteSmoothRecord();
     this.adoptAnchor(generation, values, thetaChildren);
     this.mutationBoost = explorationBoost(this.flatGens);
@@ -335,7 +425,9 @@ export class EvolutionSearch {
     if (!((this.flatGens || 0) >= search.stagnationGenerations)) return;
     const margin = search.bestEverAdoptMargin;
     if (!(margin > 0) || !values.length) return;
-    const parentMean = thetaChildren ? values.slice(0, thetaChildren).reduce((sum, value) => sum + value, 0) / thetaChildren : 0;
+    let parentSum = 0;
+    for (let i = 0; i < thetaChildren; i++) parentSum += values[i];
+    const parentMean = thetaChildren ? parentSum / thetaChildren : 0;
     const boosts = generation.pairBoosts || [];
     let bestIndex = -1;
     let bestValue = -Infinity;
@@ -357,9 +449,7 @@ export class EvolutionSearch {
     }
     if (bestIndex < 0) return;
     this.theta.set(generation.weights[bestIndex]);
-    this.m = new Float32Array(this.theta.length);
-    this.v = new Float32Array(this.theta.length);
-    this.k = 0;
+    this.zeroMoments();
     const source = bestIndex >= thetaChildren ? "best ever child " : "child ";
     this.anchorNote = source + bestValue.toFixed(2) + " became the parent";
   }
@@ -369,10 +459,13 @@ export class EvolutionSearch {
   noteSmoothRecord() {
     const window = search.recordWindow;
     if (!(window > 0) || this.hist.length < window) return;
-    const tail = this.hist.slice(-window);
-    if (tail.some((row) => !Number.isFinite(row.start))) return;
+    const start = this.hist.length - window;
     let sum = 0;
-    for (const row of tail) sum += row.mean;
+    for (let i = start; i < this.hist.length; i++) {
+      const row = this.hist[i];
+      if (!Number.isFinite(row.start)) return;
+      sum += row.mean;
+    }
     const smooth = sum / window;
     if (!Number.isFinite(this.bestSmooth)) {
       this.bestSmooth = smooth;

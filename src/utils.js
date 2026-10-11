@@ -25,3 +25,20 @@ export function randomNormalSample(uniform) {
 export function randomNormalFrom(uniform) {
   return () => randomNormalSample(uniform);
 }
+
+// Copia los pesos redondeados a 4 decimales. Solo para el JSON de un archivo. No es el camino de cada generación.
+export function quantizeWeights(weights) {
+  if (!weights) return null;
+  const out = new Array(weights.length);
+  for (let i = 0; i < weights.length; i++) out[i] = +(+weights[i]).toFixed(4);
+  return out;
+}
+
+// Gira (x, y) con el coseno y el seno de la parte. Escribe en `out`, que ya existe.
+export function rotate(x, y, cos, sin, out) {
+  const turnedX = cos * x - sin * y;
+  const turnedY = sin * x + cos * y;
+  out.x = turnedX;
+  out.y = turnedY;
+  return out;
+}

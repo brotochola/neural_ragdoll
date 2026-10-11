@@ -1,47 +1,21 @@
 // Ragdoll body, sensing, and one episode. The network and the reward live in their own files.
 import { config, activeTrainingPhase } from "../config.js";
-import { scoreDecision, isStanding } from "./reward.js";
+import { scoreDecision, scoreTotal, isStanding } from "./reward.js";
 import { ElmanNetwork } from "./net.js";
 import { clamp, makeSeededRandom, randomNormalSample } from "./utils.js";
+import { RagDoll2D, faceRaySpecs, facePartName } from "./ragdoll.js";
 
 export const jointNames = [
-  "Neck", "Shoulder L", "Elbow L", "Wrist L", "Hip L", "Knee L", "Ankle L",
+  "Waist", "Neck", "Shoulder L", "Elbow L", "Wrist L", "Hip L", "Knee L", "Ankle L",
   "Shoulder R", "Elbow R", "Wrist R", "Hip R", "Knee R", "Ankle R",
 ];
 
-// Same order as the observation vector filled in Episode.act.
-// Local +X is the torso's front when standing. Local +Y is up. Each ray leaves the center of that face.
-const faceRayMeters = 2;
-const faceRayPull = 0.25;
-const faceRaySpecs = [
-  ["torso", "front", 1, 0], ["torso", "back", -1, 0],
-  ["head", "front", 1, 0], ["head", "back", -1, 0], ["head", "top", 0, 1], ["head", "chin", 0, -1],
-  ["upperArmLeft", "front", 1, 0], ["upperArmLeft", "back", -1, 0],
-  ["upperArmRight", "front", 1, 0], ["upperArmRight", "back", -1, 0],
-  ["forearmLeft", "front", 1, 0], ["forearmLeft", "back", -1, 0],
-  ["forearmRight", "front", 1, 0], ["forearmRight", "back", -1, 0],
-  ["handLeft", "front", 1, 0], ["handLeft", "back", -1, 0], ["handLeft", "tip", 0, -1], ["handLeft", "base", 0, 1],
-  ["handRight", "front", 1, 0], ["handRight", "back", -1, 0], ["handRight", "tip", 0, -1], ["handRight", "base", 0, 1],
-  ["thighLeft", "front", 1, 0], ["thighLeft", "back", -1, 0],
-  ["thighRight", "front", 1, 0], ["thighRight", "back", -1, 0],
-  ["shinLeft", "front", 1, 0], ["shinLeft", "back", -1, 0],
-  ["shinRight", "front", 1, 0], ["shinRight", "back", -1, 0],
-  ["footLeft", "sole", 0, -1], ["footLeft", "top", 0, 1], ["footLeft", "toe", 1, 0],
-  ["footRight", "sole", 0, -1], ["footRight", "top", 0, 1], ["footRight", "toe", 1, 0],
-  ["hip", "front", 1, 0], ["hip", "back", -1, 0], ["hip", "up", 0, 1], ["hip", "down", 0, -1],
-].map(([part, name, x, y]) => ({ part, name, x, y, index: config.partIndex[part] }));
-const soleRayIndex = { footLeft: -1, footRight: -1 };
-faceRaySpecs.forEach((spec, index) => {
-  if (spec.name === "sole") soleRayIndex[spec.part] = index;
-});
-const facePartName = {
-  torso: "torso", head: "head", upperArmLeft: "arm L", upperArmRight: "arm R",
-  forearmLeft: "elbow L", forearmRight: "elbow R", handLeft: "hand L", handRight: "hand R",
-  thighLeft: "thigh L", thighRight: "thigh R", shinLeft: "shin L", shinRight: "shin R",
-  footLeft: "foot L", footRight: "foot R", hip: "tail",
-};
-
 export const observationLabels = buildObservationLabels();
+
+function episodeTargets(options) {
+  const source = options && options.targets;
+  return source && source.length === config.targets.length ? source : config.targets;
+}
 
 function buildObservationLabels() {
   const labels = [];
@@ -60,16 +34,25 @@ function buildObservationLabels() {
     { name: "mass vy", tip: "Vertical speed of the center of mass." },
   );
   for (const spec of faceRaySpecs) {
+    const reach = spec.vision ? spec.reach : config.body.bodyRayMeters;
     labels.push({
       name: "ray " + facePartName[spec.part] + " " + spec.name,
-      tip: "Hit fraction out of the " + spec.name + " face. 1 is clear, 0 is a hit at the face. The floor, the platform, and thrown boxes and balls all count.",
+      tip: spec.vision
+        ? "Head view. 1 is clear out to " + reach + " m, 0 is a hit on the head. The floor and thrown boxes and balls all count."
+        : "Hit fraction out of the " + spec.name + " face, within " + reach + " m. 1 is clear, 0 is a hit at the face.",
     });
   }
+  for (const spec of config.targets) {
+    labels.push(
+      { name: "use " + spec.id, tip: "1 when the " + spec.id + " target is on, 0 when it is off. Its own input. Not packed with the other targets." },
+      { name: spec.id + " dx", tip: "Horizontal distance from the " + spec.id + " to its target, divided by the target span. 0 while that target is off." },
+      { name: spec.id + " dy", tip: "Vertical distance from the " + spec.id + " to its target, divided by the target span. 0 while that target is off." },
+      { name: spec.id + " esin", tip: "Sine of the angle error of the " + spec.id + ". 0 while that target is off, and 0 when it already faces the target." },
+      { name: spec.id + " ecos", tip: "Cosine of the angle error of the " + spec.id + ". 1 when it faces the target. 0 while that target is off." },
+    );
+  }
   labels.push(
-    { name: "goal x", tip: "Horizontal distance to the marker, relative to the body. 0 means arrived." },
-    { name: "goal y", tip: "Height of the marker above the floor. 0 while the marker is on the floor." },
-    { name: "standing", tip: "1 when the body is truly standing: both feet, nothing else down, upright, high head, a real stance, and quiet. Otherwise 0." },
-    { name: "head contact", tip: "1 when the head is touching the floor, the platform, or a thrown object. A corner counts. Otherwise 0." },
+    { name: "head contact", tip: "1 when the head is touching the floor or a thrown object. A corner counts. Otherwise 0." },
   );
   for (const [name, index] of Object.entries(config.partIndex)) {
     if (index >= config.net.partCount) continue;
@@ -92,123 +75,56 @@ export const thrownKinds = [
 
 export function createSim(box) {
   const {
-    CreateWorld, CreateBoxPolygon, CreateRevoluteJoint, b2Vec2, b2BodyType, b2World_Step,
-    b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Body_SetTransform, b2MakeRot,
-    b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake, b2Body_GetLinearVelocity,
-    b2Body_GetAngularVelocity, b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed,
-    CreateCircle, b2DestroyBody, b2Shape_RayCast, b2Body_GetShapes,
+    CreateBoxPolygon, b2Vec2, b2BodyType, b2World_Step,
+    b2Body_SetTransform, b2MakeRot,
+    b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake,
+    b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed,
+    CreateCircle, b2DestroyBody,
     b2Body_GetContactCapacity, b2Body_GetContactData,
   } = box;
   const dynamicBody = b2BodyType.b2_dynamicBody;
-  const staticBody = b2BodyType.b2_staticBody;
-  const kinematicBody = b2BodyType.b2_kinematicBody;
   const vector = (x, y) => new b2Vec2(x, y);
-  const rayOrigin = vector(0, 0);
-  const rayDelta = vector(0, 0);
+  const placed = [];
+  // Box2D guarda el vector y la rotación que le pasamos. Uno solo compartido pega todas las partes juntas.
+  function partPose(part, x, y) {
+    let pos = part.pose;
+    if (!pos) {
+      pos = new b2Vec2(x, y);
+      part.pose = pos;
+    } else {
+      pos.x = x;
+      pos.y = y;
+    }
+    return pos;
+  }
+  function partRot(part, tilt) {
+    let rot = part.tiltRot;
+    if (!rot) {
+      rot = b2MakeRot(tilt);
+      part.tiltRot = rot;
+    } else {
+      rot.c = Math.cos(tilt);
+      rot.s = Math.sin(tilt);
+    }
+    return rot;
+  }
+  function partVel(part) {
+    let vel = part.vel;
+    if (!vel) {
+      vel = new b2Vec2(0, 0);
+      part.vel = vel;
+    } else {
+      vel.x = 0;
+      vel.y = 0;
+    }
+    return vel;
+  }
   let random = makeSeededRandom(7);
   // Lee `random` en cada llamada, así setRandom cambia la secuencia.
   const randomNormal = () => randomNormalSample(random);
 
-  function platformAngle(options, time) {
-    return options.amp * Math.sin((6.2831853 / options.period) * time + options.phaseShift);
-  }
-
   function build() {
-    const { worldId } = CreateWorld({});
-    const ground = CreateBoxPolygon({ worldId, type: staticBody, position: vector(0, -1), size: vector(800, 0.5), friction: 2 });
-    const platform = CreateBoxPolygon({
-      worldId, type: kinematicBody, position: vector(0, -config.body.platformHalfThickness),
-      size: vector(config.body.platformHalfWidth, config.body.platformHalfThickness), friction: 2,
-    });
-    const parts = [];
-    const joints = [];
-    const addBox = (centerX, centerY, halfX, halfY, density = 70) => {
-      const created = CreateBoxPolygon({
-        worldId, type: dynamicBody, position: vector(centerX, centerY), size: vector(halfX, halfY),
-        density, friction: 2, groupIndex: -1,
-      });
-      parts.push({
-        id: created.bodyId, cx: centerX, cy: centerY, hx: halfX, hy: halfY,
-        m: density * 4 * halfX * halfY, th: Math.max(halfX, halfY) + 0.04,
-      });
-      return parts.length - 1;
-    };
-    const addJoint = (partA, partB, worldX, worldY, lower, upper, torque) => {
-      const a = parts[partA];
-      const b = parts[partB];
-      const created = CreateRevoluteJoint({
-        worldId, bodyIdA: a.id, bodyIdB: b.id,
-        anchorA: vector(worldX - a.cx, worldY - a.cy), anchorB: vector(worldX - b.cx, worldY - b.cy),
-        lowerAngle: lower, upperAngle: upper, enableLimit: true, enableMotor: true, motorSpeed: 0, maxMotorTorque: torque,
-      });
-      joints.push({
-        id: created.jointId, lo: lower, hi: upper, n: Math.max(-lower, upper),
-        a: partA, ax: worldX - a.cx, ay: worldY - a.cy,
-        b: partB, bx: worldX - b.cx, by: worldY - b.cy, mark: "",
-      });
-    };
-    // Standing blueprint: torso, head, then left limbs, then right limbs. Indexes match config.partIndex.
-    addBox(0, 1.26, 0.13, 0.3);
-    addBox(0, 1.68, 0.11, 0.12, 40);
-    for (let side = 0; side < 2; side++) {
-      addBox(0, 1.34, 0.05, 0.14, 50);
-      addBox(0, 1.07, 0.045, 0.13, 50);
-      addBox(0, 0.88, 0.05, 0.06, 50);
-      addBox(0, 0.74, 0.07, 0.22);
-      addBox(0, 0.31, 0.06, 0.21);
-      addBox(0.06, 0.04, 0.12, 0.04, 90);
-    }
-    addJoint(0, 1, 0, 1.56, -0.5, 0.5, 20);
-    for (let side = 0; side < 2; side++) {
-      const base = 2 + 6 * side;
-      addJoint(0, base, 0, 1.48, -2, 2.5, 70);
-      addJoint(base, base + 1, 0, 1.2, 0, 2.4, 50);
-      addJoint(base + 1, base + 2, 0, 0.94, -1, 1, 25);
-      addJoint(0, base + 3, 0, 0.96, -0.7, 2.4, 140);
-      addJoint(base + 3, base + 4, 0, 0.52, -2.4, 0, 140);
-      addJoint(base + 4, base + 5, 0, 0.1, -0.6, 0.6, 60);
-      joints[joints.length - 5].mark = "elbow";
-      joints[joints.length - 3].mark = "hip";
-      joints[joints.length - 2].mark = "knee";
-    }
-    const hipRadius = 0.13 * 1.1;
-    const hip = CreateCircle({
-      worldId, type: dynamicBody, position: vector(0, 0.96), radius: hipRadius, density: 40, friction: 2, groupIndex: -1,
-    });
-    parts.push({
-      id: hip.bodyId, cx: 0, cy: 0.96, hx: hipRadius, hy: hipRadius, r: hipRadius, circle: true,
-      m: 40 * Math.PI * hipRadius * hipRadius, th: hipRadius + 0.04,
-    });
-    CreateRevoluteJoint({
-      worldId, bodyIdA: parts[0].id, bodyIdB: hip.bodyId,
-      anchorA: vector(0, 0.96 - parts[0].cy), anchorB: vector(0, 0),
-      lowerAngle: 0, upperAngle: 0, enableLimit: true, enableMotor: false, motorSpeed: 0, maxMotorTorque: 0,
-    });
-    return {
-      worldId, parts, joints, groundId: ground.bodyId, platformId: platform.bodyId,
-      floorShapes: [firstShape(platform.bodyId), firstShape(ground.bodyId)],
-      thrownIds: [], thrownShapes: [],
-    };
-  }
-
-  function firstShape(bodyId) {
-    const shapes = [];
-    b2Body_GetShapes(bodyId, shapes);
-    return shapes[0];
-  }
-
-  // ponytail: listed shapes, not b2World_CastRay. That cast keeps the first fixture and hides the platform. Upgrade path: a category bit if the floor becomes dynamic.
-  function rayFraction(shapes, originX, originY, dirX, dirY) {
-    rayOrigin.x = originX;
-    rayOrigin.y = originY;
-    rayDelta.x = dirX;
-    rayDelta.y = dirY;
-    let fraction = 1;
-    for (let i = 0; i < shapes.length; i++) {
-      const cast = b2Shape_RayCast(shapes[i], rayOrigin, rayDelta);
-      if (cast.hit && cast.fraction >= 0 && cast.fraction < fraction) fraction = cast.fraction;
-    }
-    return fraction;
+    return new RagDoll2D(box);
   }
 
   // Face rays miss a corner. Box2D's manifold has that point. Speculative contacts reach 2 cm with no load, so those do not count.
@@ -233,34 +149,45 @@ export function createSim(box) {
   function resetPose(world, tilt, drop, options) {
     const cosine = Math.cos(tilt);
     const sine = Math.sin(tilt);
-    b2Body_SetTransform(world.platformId, vector(0, -config.body.platformHalfThickness), b2MakeRot(platformAngle(options, 0)));
-    b2Body_SetLinearVelocity(world.platformId, vector(0, 0));
-    b2Body_SetAngularVelocity(world.platformId, 0);
+    const parts = world.parts;
+    const count = parts.length;
     let lowest = Infinity;
-    const placed = [];
-    for (const part of world.parts) {
-      const x = cosine * part.cx - sine * (part.cy - 0.04) + (options.shiftX || 0);
+    const shiftX = options.shiftX || 0;
+    for (let i = 0; i < count; i++) {
+      const part = parts[i];
+      let slot = placed[i];
+      if (!slot) {
+        slot = { part: null, x: 0, y: 0 };
+        placed[i] = slot;
+      }
+      const x = cosine * part.cx - sine * (part.cy - 0.04) + shiftX;
       const y = 0.04 + drop + sine * part.cx + cosine * (part.cy - 0.04);
-      placed.push({ part, x, y });
-      lowest = Math.min(lowest, y - Math.abs(sine) * part.hx - Math.abs(cosine) * part.hy);
+      slot.part = part;
+      slot.x = x;
+      slot.y = y;
+      world.support(part, -sine, -cosine);
+      lowest = Math.min(lowest, y + sine * world.skinX + cosine * world.skinY);
     }
     const lift = Math.max(0, 0.05 - lowest);
-    for (const place of placed) {
-      b2Body_SetTransform(place.part.id, vector(place.x, place.y + lift), b2MakeRot(tilt));
-      b2Body_SetLinearVelocity(place.part.id, vector(0, 0));
-      b2Body_SetAngularVelocity(place.part.id, 0);
-      b2Body_SetAwake(place.part.id, true);
+    for (let i = 0; i < count; i++) {
+      const slot = placed[i];
+      const part = slot.part;
+      b2Body_SetTransform(part.id, partPose(part, slot.x, slot.y + lift), partRot(part, tilt));
+      b2Body_SetLinearVelocity(part.id, partVel(part));
+      b2Body_SetAngularVelocity(part.id, 0);
+      b2Body_SetAwake(part.id, true);
     }
-    for (const joint of world.joints) b2RevoluteJoint_SetMotorSpeed(joint.id, 0);
+    const joints = world.joints;
+    for (let i = 0; i < joints.length; i++) b2RevoluteJoint_SetMotorSpeed(joints[i].id, 0);
   }
 
   function fillMeasure(world, measure) {
+    world.readPose();
     let mass = 0;
     let momentX = 0;
     let momentY = 0;
     let momentVx = 0;
     let momentVy = 0;
-    const rays = measure.recordRays ? (measure.rays = []) : null;
     const count = world.parts.length;
     const partX = measure.partX;
     const partY = measure.partY;
@@ -268,61 +195,12 @@ export function createSim(box) {
     const partSin = measure.partSin;
     for (let i = 0; i < count; i++) {
       const part = world.parts[i];
-      const position = b2Body_GetPosition(part.id);
-      const velocity = b2Body_GetLinearVelocity(part.id);
-      const rot = b2Body_GetRotation(part.id);
-      partX[i] = position.x;
-      partY[i] = position.y;
-      partCos[i] = rot.c;
-      partSin[i] = rot.s;
-      measure.partVelocityX[i] = velocity.x;
-      measure.partVelocityY[i] = velocity.y;
-      measure.partSpin[i] = b2Body_GetAngularVelocity(part.id);
-      measure.partHeight[i] = position.y;
-      measure.clearance[i] = faceRayMeters;
       mass += part.m;
-      momentX += part.m * position.x;
-      momentY += part.m * position.y;
-      momentVx += part.m * velocity.x;
-      momentVy += part.m * velocity.y;
+      momentX += part.m * partX[i];
+      momentY += part.m * partY[i];
+      momentVx += part.m * measure.partVelocityX[i];
+      momentVy += part.m * measure.partVelocityY[i];
     }
-    const face = measure.faceRay;
-    for (let i = 0; i < faceRaySpecs.length; i++) {
-      const spec = faceRaySpecs[i];
-      const part = world.parts[spec.index];
-      const cosine = partCos[spec.index];
-      const sine = partSin[spec.index];
-      const localX = spec.x * (part.circle ? part.r : part.hx);
-      const localY = spec.y * (part.circle ? part.r : part.hy);
-      const faceX = partX[spec.index] + cosine * localX - sine * localY;
-      const faceY = partY[spec.index] + sine * localX + cosine * localY;
-      const dirX = cosine * spec.x - sine * spec.y;
-      const dirY = sine * spec.x + cosine * spec.y;
-      // Start behind the face. A sole sunk into the platform would otherwise begin inside it and miss.
-      const castX = faceX - dirX * faceRayPull;
-      const castY = faceY - dirY * faceRayPull;
-      const reach = faceRayMeters + faceRayPull;
-      const dirReachX = dirX * reach;
-      const dirReachY = dirY * reach;
-      const floorFraction = rayFraction(world.floorShapes, castX, castY, dirReachX, dirReachY);
-      const thrown = world.thrownShapes;
-      const fraction = thrown.length
-        ? Math.min(floorFraction, rayFraction(thrown, castX, castY, dirReachX, dirReachY))
-        : floorFraction;
-      const along = (hit) => hit >= 1 ? faceRayMeters : Math.max(0, hit * reach - faceRayPull);
-      const floorDistance = along(floorFraction);
-      const distance = along(fraction);
-      face[i] = Math.min(1, distance / faceRayMeters);
-      if (floorDistance < measure.clearance[spec.index]) measure.clearance[spec.index] = floorDistance;
-      if (i === soleRayIndex.footLeft) measure.sole[0] = floorDistance;
-      else if (i === soleRayIndex.footRight) measure.sole[1] = floorDistance;
-      if (rays) rays.push({
-        x0: faceX, y0: faceY,
-        x1: faceX + dirX * distance, y1: faceY + dirY * distance,
-        hit: distance < faceRayMeters, gap: distance,
-      });
-    }
-    for (let i = 0; i < count; i++) measure.touch[i] = measure.clearance[i] < config.body.touchGapMeters;
     const torso = config.partIndex.torso;
     const head = config.partIndex.head;
     const headTouch = bodyTouching(world.parts[head].id);
@@ -359,6 +237,16 @@ export function createSim(box) {
       if (i !== footLeft && i !== footRight && measure.touch[i]) measure.bodyOn = true;
     }
     return measure;
+  }
+
+  // Rayos solo en el frame de la acción. El contacto de la cabeza, ya medido, no se pisa.
+  function castMeasureRays(world, measure) {
+    const count = world.parts.length;
+    for (let i = 0; i < count; i++) measure.clearance[i] = config.body.bodyRayMeters;
+    world.throwRays(measure);
+    const gap = config.body.touchGapMeters;
+    for (let i = 0; i < count; i++) measure.touch[i] = measure.clearance[i] < gap;
+    measure.touch[config.partIndex.head] = measure.headContact !== 0;
   }
 
   // Pose one physics frame ahead if every part keeps its current speed. No collision, motor, or joint.
@@ -406,76 +294,115 @@ export function createSim(box) {
     predicted.stanceWidth = Math.abs(predicted.footXLeft - predicted.footXRight);
     predicted.sole[0] = Math.max(0, (measure.sole[0] || 0) + (measure.partVelocityY[footLeft] || 0) * dt);
     predicted.sole[1] = Math.max(0, (measure.sole[1] || 0) + (measure.partVelocityY[footRight] || 0) * dt);
-    if (measure.goalDistanceMeters != null) {
-      predicted.goalDistanceMeters = measure.goalDistanceMeters - (predicted.centerX - measure.centerX);
-    }
     return predicted;
   }
 
   class Episode {
     constructor(world, weights, tilt, drop, options = {}) {
-      this.options = Object.assign({
-        push: 0, amp: 0, period: config.body.platformPeriodSeconds, phaseShift: 0, projectiles: [],
-        frames: config.episode.frames, task: "stand", phase: 0,
-      }, options);
       this.free = false;
       this.world = world;
       this.network = new ElmanNetwork(weights);
-      this.frame = 0;
       this.startSamples = rewardSamples(config.episode.startWindowSeconds);
-      this.startSum = 0;
-      this.startCount = 0;
       this.endRing = new Float32Array(rewardSamples(config.episode.endWindowSeconds));
-      this.endCursor = 0;
-      this.endFilled = 0;
       this.input = new Float32Array(config.net.inputCount);
       this.previousJointAngle = new Float32Array(config.net.jointCount);
+      this.objects = [];
+      this.measure = {
+        partX: world.px,
+        partY: world.py,
+        partCos: world.c,
+        partSin: world.s,
+        partHeight: world.py,
+        clearance: new Array(world.parts.length),
+        touch: new Array(world.parts.length),
+        sole: new Float32Array(2),
+        elbowY: new Float32Array(2),
+        faceRay: world.faceRay,
+        partVelocityX: world.vx,
+        partVelocityY: world.vy,
+        partSpin: world.spin,
+      };
+      this.reset(weights, tilt, drop, options);
+    }
+    bindOptions(options) {
+      if (options && options.frames != null && options.period != null) {
+        this.options = options;
+        return;
+      }
+      if (!this.optionScratch) {
+        this.optionScratch = {
+          push: 0, amp: 0, period: config.body.platformPeriodSeconds, phaseShift: 0, projectiles: [],
+          frames: config.episode.frames, task: "stand", phase: 0,
+        };
+      }
+      const scratch = this.optionScratch;
+      scratch.push = 0;
+      scratch.amp = 0;
+      scratch.period = config.body.platformPeriodSeconds;
+      scratch.phaseShift = 0;
+      scratch.frames = config.episode.frames;
+      scratch.task = "stand";
+      scratch.phase = 0;
+      scratch.failOnHead = false;
+      scratch.settle = 0;
+      scratch.shiftX = 0;
+      scratch.tilt = 0;
+      scratch.drop = 0;
+      scratch.ballFrame = null;
+      scratch.targets = null;
+      if (options) {
+        const keys = Object.keys(options);
+        for (let i = 0; i < keys.length; i++) scratch[keys[i]] = options[keys[i]];
+      }
+      this.options = scratch;
+    }
+    // Mismo cuerpo y mismos buffers. Cambia los pesos y vuelve a la pose inicial.
+    reset(weights, tilt, drop, options) {
+      this.bindOptions(options || {});
+      const network = this.network;
+      network.weights = weights;
+      network.hidden.fill(0);
+      network.nextHidden.fill(0);
+      if (network.compressed.length) network.compressed.fill(0);
+      if (network.feedback.length) network.feedback.fill(0);
+      network.action.fill(0);
+      this.frame = 0;
+      this.startSum = 0;
+      this.startCount = 0;
+      this.endCursor = 0;
+      this.endFilled = 0;
       this.fallen = false;
       this.upStreak = 0;
       this.stoodFrames = 0;
       this.sensedFrames = 0;
       this.heightSum = 0;
       this.headImpact = 0;
-      this.hintMatchSum = 0;
-      this.hintMatchCount = 0;
+      this.headHit = false;
       this.previousRewardTotal = 0;
-      this.objects = [];
-      this.measure = {
-        partX: new Float32Array(world.parts.length),
-        partY: new Float32Array(world.parts.length),
-        partCos: new Float32Array(world.parts.length),
-        partSin: new Float32Array(world.parts.length),
-        partHeight: new Float32Array(world.parts.length),
-        clearance: new Array(world.parts.length),
-        touch: new Array(world.parts.length),
-        sole: new Float32Array(2),
-        elbowY: new Float32Array(2),
-        faceRay: new Float32Array(faceRaySpecs.length),
-        partVelocityX: new Float32Array(world.parts.length),
-        partVelocityY: new Float32Array(world.parts.length),
-        partSpin: new Float32Array(world.parts.length),
-      };
       this.ballThrown = false;
+      this.endedUp = false;
+      this.previousJointAngle.fill(0);
+      this.cleanup();
+      const world = this.world;
       resetPose(world, tilt, drop, this.options);
       const settleFrames = this.options.settle != null ? this.options.settle : 0;
       for (let i = 0; i < settleFrames; i++) b2World_Step(world.worldId, config.physics.timeStep, config.physics.solverSubsteps);
       for (let i = 0; i < world.joints.length; i++) this.previousJointAngle[i] = b2RevoluteJoint_GetAngle(world.joints[i].id);
+      this.measure.targets = episodeTargets(this.options);
       fillMeasure(world, this.measure);
+      castMeasureRays(world, this.measure);
     }
     cleanup() {
-      for (const id of this.objects) destroyThrown(this.world, id);
-      this.objects = [];
+      const objects = this.objects;
+      for (let i = 0; i < objects.length; i++) destroyThrown(this.world, objects[i]);
+      objects.length = 0;
     }
     // Read the body into this.input and write a new action. Does not score.
     act() {
       const world = this.world;
-      const measure = fillMeasure(world, this.measure);
+      this.measure.targets = episodeTargets(this.options);
+      const measure = this.measure;
       const footMid = (measure.footXLeft + measure.footXRight) / 2;
-      if (this.options.goalX != null) {
-        measure.goalDistanceMeters = this.options.goalX - measure.centerX;
-        measure.goalDx = clamp(measure.goalDistanceMeters / 4, -1, 1);
-        measure.goalDy = clamp((this.options.goalY || 0) / 2, -1, 1);
-      }
       const input = this.input;
       let cursor = 0;
       for (let i = 0; i < config.net.jointCount; i++) {
@@ -498,9 +425,30 @@ export function createSim(box) {
       input[cursor++] = measure.centerVelocityY / 2;
       const face = measure.faceRay;
       for (let i = 0; i < face.length; i++) input[cursor++] = face[i];
-      input[cursor++] = measure.goalDx || 0;
-      input[cursor++] = measure.goalDy || 0;
-      input[cursor++] = isStanding(measure) ? 1 : 0;
+      const targets = measure.targets;
+      for (let t = 0; t < config.targets.length; t++) {
+        const spec = config.targets[t];
+        const target = targets[t];
+        const index = config.partIndex[spec.part];
+        const on = target.on ? 1 : 0;
+        input[cursor++] = on;
+        if (!on) {
+          input[cursor++] = 0;
+          input[cursor++] = 0;
+          input[cursor++] = 0;
+          input[cursor++] = 0;
+          continue;
+        }
+        const span = config.body.targetSpanMeters;
+        input[cursor++] = clamp(((target.x || 0) - measure.partX[index]) / span, -1, 1);
+        input[cursor++] = clamp(((target.y || 0) - measure.partY[index]) / span, -1, 1);
+        const targetSin = Math.sin(target.angle || 0);
+        const targetCos = Math.cos(target.angle || 0);
+        const partSin = measure.partSin[index];
+        const partCos = measure.partCos[index];
+        input[cursor++] = targetSin * partCos - targetCos * partSin;
+        input[cursor++] = targetCos * partCos + targetSin * partSin;
+      }
       input[cursor++] = measure.headContact || 0;
       if (cursor !== config.net.sensedInputCount) throw new Error("base observation " + cursor);
       for (let i = 0; i < config.net.partCount; i++) {
@@ -521,24 +469,9 @@ export function createSim(box) {
       }
       if (cursor !== config.net.inputCount) throw new Error("observation length " + cursor);
       this.network.forward(input);
-      this.applyHint();
-    }
-    // The forced sign is what the motor and the next decision's feedback see. The raw output is kept for the match bonus.
-    applyHint() {
-      const hint = this.options.hint;
-      if (!hint || (hint.sign !== 1 && hint.sign !== -1)) return;
-      const joint = hint.joint;
-      if (joint < 0 || joint >= config.net.jointCount) return;
-      this.hintMatchSum += this.action[joint] * hint.sign;
-      this.hintMatchCount++;
-      this.action[joint] = hint.sign;
     }
     evaluate() {
-      const measure = this.measure;
-      if (this.options.goalX != null) measure.goalDistanceMeters = this.options.goalX - measure.centerX;
-      const scored = scoreDecision(measure);
-      this.lastScore = scored;
-      const total = scored.total;
+      const total = scoreTotal(this.measure);
       if (this.startCount < this.startSamples) {
         this.startSum += total;
         this.startCount++;
@@ -565,29 +498,35 @@ export function createSim(box) {
       this.sensedFrames++;
       this.heightSum += measure.headHeight;
       if (measure.touch[config.partIndex.head]) {
+        this.headHit = true;
         this.headImpact = Math.max(this.headImpact || 0, -(measure.headVelocityY || 0));
       }
     }
     step() {
       const frame = this.frame + (this.options.phase || 0);
+      const acting = frame % config.cadence.actionEveryNFrames === 0;
+      this.measure.targets = episodeTargets(this.options);
       fillMeasure(this.world, this.measure);
-      if (this.options.goalX != null) {
-        this.measure.goalDistanceMeters = this.options.goalX - this.measure.centerX;
-        this.measure.goalDx = clamp(this.measure.goalDistanceMeters / 4, -1, 1);
-        this.measure.goalDy = clamp((this.options.goalY || 0) / 2, -1, 1);
-      }
       this.notePose();
+      if (this.headHit && this.options.failOnHead && !this.free) {
+        this.evaluate();
+        this.endedUp = false;
+        this.frame++;
+        return true;
+      }
       if (this.options.ballFrame != null && this.frame === this.options.ballFrame && !this.ballThrown) {
         this.ballThrown = true;
-        const torso = this.world.parts[config.partIndex.torso];
-        const position = b2Body_GetPosition(torso.id);
-        const x = position.x;
-        const y = position.y;
+        const torso = config.partIndex.torso;
+        const x = this.measure.partX[torso];
+        const y = this.measure.partY[torso];
         const side = this.options.ballSide || 1;
         const id = spawnThrown(this.world, thrownKinds[0], x + side * config.start.ballStartMeters, Math.max(y, 0.6), -side * (this.options.ballSpeed || config.start.ballSpeed), 0.4);
         this.objects.push(id);
       }
-      if (frame % config.cadence.actionEveryNFrames === 0) this.act();
+      if (acting) {
+        castMeasureRays(this.world, this.measure);
+        this.act();
+      }
       if (!this.quiet && frame % config.cadence.rewardEveryNFrames === config.cadence.rewardFrameOffset) this.evaluate();
       this.applyMotors();
       this.stepPhysics();
@@ -608,20 +547,13 @@ export function createSim(box) {
       }
     }
     stepPhysics() {
-      const options = this.options;
-      const time = this.frame / physicsHz();
-      const wave = 6.2831853 / options.period;
-      const desired = options.amp * wave * Math.cos(wave * time + options.phaseShift);
-      const current = b2Rot_GetAngle(b2Body_GetRotation(this.world.platformId));
-      b2Body_SetAngularVelocity(this.world.platformId, desired + 6 * (platformAngle(options, time) - current));
       b2World_Step(this.world.worldId, config.physics.timeStep, config.physics.solverSubsteps);
     }
     get fitnessValue() {
+      if (this.options.failOnHead && this.headHit) return config.reward.headReject;
       const end = this.windowMean(true);
       const start = this.windowMean(false);
-      const pose = end - Math.max(0, start - end);
-      if (!this.hintMatchCount) return pose;
-      return pose + config.hint.matchWeight * (this.hintMatchSum / this.hintMatchCount);
+      return end - Math.max(0, start - end);
     }
     get stats() {
       const end = this.windowMean(true);
@@ -680,11 +612,31 @@ export function createSim(box) {
     return started;
   }
 
-  function trainingStarts(randomSource) {
-    return ["up", "supine", "prone"].map((pose) => varyStart(situation(randomSource, pose), randomSource));
+  function fillTrainingStart(out, randomSource) {
+    out.push = 0;
+    out.amp = 0;
+    out.period = config.body.platformPeriodSeconds;
+    out.phaseShift = 0;
+    out.frames = config.episode.frames;
+    out.task = "live";
+    out.pose = "up";
+    out.failOnHead = true;
+    out.settle = 0;
+    out.ballFrame = null;
+    out.goalX = null;
+    out.tilt = (randomSource() * 2 - 1) * config.start.uprightTiltRadians;
+    out.drop = config.start.uprightDropMeters;
+    out.tilt += (randomSource() * 2 - 1) * config.episode.startTiltJitterRadians;
+    out.drop += randomSource() * config.episode.startDropJitterMeters;
+    out.shiftX = (randomSource() * 2 - 1) * config.episode.startShiftMeters;
+    return out;
   }
 
-  function poseScore(rows) {
+  function trainingStarts(randomSource) {
+    return [fillTrainingStart({}, randomSource)];
+  }
+
+  function poseScore(rows, offset, count, out) {
     let fitness = 0;
     let start = 0;
     let end = 0;
@@ -692,7 +644,8 @@ export function createSim(box) {
     let stance = 0;
     let headImpact = 0;
     let stoodUp = true;
-    for (let i = 0; i < rows.length; i++) {
+    const last = offset + count;
+    for (let i = offset; i < last; i++) {
       const row = rows[i];
       fitness += row.fitness;
       start += row.start || 0;
@@ -702,9 +655,18 @@ export function createSim(box) {
       if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
       if (!row.stoodUp) stoodUp = false;
     }
-    const n = rows.length || 1;
+    const n = count || 1;
     const mean = fitness / n;
-    return { fitness: mean, f: mean, start: start / n, end: end / n, gap: gap / n, stance: stance / n, headImpact, stoodUp, up: stoodUp };
+    out.fitness = mean;
+    out.f = mean;
+    out.start = start / n;
+    out.end = end / n;
+    out.gap = gap / n;
+    out.stance = stance / n;
+    out.headImpact = headImpact;
+    out.stoodUp = stoodUp;
+    out.up = stoodUp;
+    return out;
   }
 
   function varyStart(base, randomSource) {
@@ -723,7 +685,7 @@ export function createSim(box) {
     const id = created.bodyId;
     b2Body_SetLinearVelocity(id, vector(vx, vy));
     world.thrownIds.push(id);
-    world.thrownShapes.push(firstShape(id));
+    world.thrownShapes.push(world.shapeOf(id));
     return id;
   }
 
@@ -737,9 +699,7 @@ export function createSim(box) {
   }
 
   return {
-    build, Episode, situation, varyStart, trainingStarts, poseScore, spawnThrown, destroyThrown, resetPose,
-    platformHalfWidth: config.body.platformHalfWidth,
-    platformHalfThickness: config.body.platformHalfThickness,
+    build, Episode, situation, varyStart, trainingStarts, fillTrainingStart, poseScore, spawnThrown, destroyThrown, resetPose,
     setRandom(seed) { random = makeSeededRandom(seed); },
     randomNormal,
   };
