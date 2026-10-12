@@ -73,6 +73,59 @@ export const thrownKinds = [
   { name: "Weight 25 kg", radius: 0.16, density: 310, color: 0x9aa3b8 },
 ];
 
+export function fillTrainingStart(out, randomSource) {
+  out.push = 0;
+  out.amp = 0;
+  out.period = config.body.platformPeriodSeconds;
+  out.phaseShift = 0;
+  out.frames = config.episode.frames;
+  out.task = "live";
+  out.pose = "up";
+  out.failOnHead = true;
+  out.settle = 0;
+  out.ballFrame = null;
+  out.goalX = null;
+  out.tilt = (randomSource() * 2 - 1) * config.start.uprightTiltRadians;
+  out.drop = config.start.uprightDropMeters;
+  out.tilt += (randomSource() * 2 - 1) * config.episode.startTiltJitterRadians;
+  out.drop += randomSource() * config.episode.startDropJitterMeters;
+  out.shiftX = (randomSource() * 2 - 1) * config.episode.startShiftMeters;
+  return out;
+}
+
+export function poseScore(rows, offset, count, out) {
+  let fitness = 0;
+  let start = 0;
+  let end = 0;
+  let gap = 0;
+  let stance = 0;
+  let headImpact = 0;
+  let stoodUp = true;
+  const last = offset + count;
+  for (let i = offset; i < last; i++) {
+    const row = rows[i];
+    fitness += row.fitness;
+    start += row.start || 0;
+    end += row.end || 0;
+    gap += row.gap || 0;
+    stance += row.stance || 0;
+    if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
+    if (!row.stoodUp) stoodUp = false;
+  }
+  const n = count || 1;
+  const mean = fitness / n;
+  out.fitness = mean;
+  out.f = mean;
+  out.start = start / n;
+  out.end = end / n;
+  out.gap = gap / n;
+  out.stance = stance / n;
+  out.headImpact = headImpact;
+  out.stoodUp = stoodUp;
+  out.up = stoodUp;
+  return out;
+}
+
 export function createSim(box) {
   const {
     CreateBoxPolygon, b2Vec2, b2BodyType, b2World_Step,
@@ -612,61 +665,8 @@ export function createSim(box) {
     return started;
   }
 
-  function fillTrainingStart(out, randomSource) {
-    out.push = 0;
-    out.amp = 0;
-    out.period = config.body.platformPeriodSeconds;
-    out.phaseShift = 0;
-    out.frames = config.episode.frames;
-    out.task = "live";
-    out.pose = "up";
-    out.failOnHead = true;
-    out.settle = 0;
-    out.ballFrame = null;
-    out.goalX = null;
-    out.tilt = (randomSource() * 2 - 1) * config.start.uprightTiltRadians;
-    out.drop = config.start.uprightDropMeters;
-    out.tilt += (randomSource() * 2 - 1) * config.episode.startTiltJitterRadians;
-    out.drop += randomSource() * config.episode.startDropJitterMeters;
-    out.shiftX = (randomSource() * 2 - 1) * config.episode.startShiftMeters;
-    return out;
-  }
-
   function trainingStarts(randomSource) {
     return [fillTrainingStart({}, randomSource)];
-  }
-
-  function poseScore(rows, offset, count, out) {
-    let fitness = 0;
-    let start = 0;
-    let end = 0;
-    let gap = 0;
-    let stance = 0;
-    let headImpact = 0;
-    let stoodUp = true;
-    const last = offset + count;
-    for (let i = offset; i < last; i++) {
-      const row = rows[i];
-      fitness += row.fitness;
-      start += row.start || 0;
-      end += row.end || 0;
-      gap += row.gap || 0;
-      stance += row.stance || 0;
-      if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
-      if (!row.stoodUp) stoodUp = false;
-    }
-    const n = count || 1;
-    const mean = fitness / n;
-    out.fitness = mean;
-    out.f = mean;
-    out.start = start / n;
-    out.end = end / n;
-    out.gap = gap / n;
-    out.stance = stance / n;
-    out.headImpact = headImpact;
-    out.stoodUp = stoodUp;
-    out.up = stoodUp;
-    return out;
   }
 
   function varyStart(base, randomSource) {

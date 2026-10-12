@@ -6,7 +6,6 @@ import { ElmanNetwork, EvolutionSearch } from "./src/net.js";
 import { clamp, makeSeededRandom, randomNormalSample, rotate, quantizeWeights } from "./src/utils.js";
 import { createSim, observationLabels, jointNames, thrownKinds } from "./src/sim.js";
 import { RagDoll2D } from "./src/ragdoll.js";
-import { bytesFor, writeTasks, readScore, resultIndex } from "./src/task-buffer.js";
 import { openStore, loadStored, putSession, syncSnapshots, storeReady } from "./src/session-store.js";
 
 const QUAD_X = [-1, 1, 1, -1];
@@ -35,8 +34,6 @@ export class NeuralRagDollWorld {
     this.pick = { x: 0, y: 0 };
     this.rotated = { x: 0, y: 0 };
     this.boxPoly = [0, 0, 0, 0, 0, 0, 0, 0];
-    this.scorePool = [];
-    this.orderedScores = [];
 
     for (let i = 0; i < thrownKinds.length; i++) {
       const option = document.createElement("option");
@@ -51,7 +48,6 @@ export class NeuralRagDollWorld {
     this.fillTargetToggles();
     this.restoreUi();
 
-    this.pool = { workers: [], slots: [], ready: false };
     this.doll = new RagDoll2D(Box2D, config);
     this.world = this.doll;
     this.episode = undefined;
@@ -65,6 +61,7 @@ export class NeuralRagDollWorld {
       this.paintPause();
       this.saveUi();
       this.saveSession();
+      this.postOrchestrator({ type: "pause", paused: this.paused });
       this.logEvent(this.paused ? "training paused" : "training started");
     };
     window.addEventListener("pagehide", () => { this.saveSession(); this.saveUi(); });
@@ -84,6 +81,7 @@ export class NeuralRagDollWorld {
       this.fillSavedList();
       this.clearSnapshots();
       this.saveSession();
+      this.pushSearch();
       this.resetEpisode();
       this.logEvent("restart");
     };
@@ -146,6 +144,7 @@ export class NeuralRagDollWorld {
       this.$("watchGeneration").checked = false;
       this.$("watchEver").checked = false;
       this.resetEpisode();
+      this.pushSearch();
       this.saveUi();
       this.logEvent("JSON load succeeded");
     };
@@ -168,6 +167,7 @@ export class NeuralRagDollWorld {
       this.fillSavedList();
       this.clearSnapshots();
       this.saveSession();
+      this.pushSearch();
       this.resetEpisode();
       this.logEvent("random weights");
     };
@@ -439,156 +439,118 @@ export class NeuralRagDollWorld {
     }
   }
 
-  bootWorkers() {
-    const count = Math.max(config.workers.browserMin, Math.min(config.workers.browserMax, (navigator.hardwareConcurrency || config.workers.browserHardwareFallback) - config.workers.browserReserve));
-    return Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
-      const worker = new Worker("./src/browser-worker.js", { type: "module" });
-      const slot = { worker, buffers: [null, null], next: 0, list: [] };
-      const timer = setTimeout(() => reject(new Error("A worker did not answer in 15 s")), 15000);
-      worker.onmessage = (event) => { if (event.data === "ready") { clearTimeout(timer); resolve(); } };
-      worker.onerror = () => { clearTimeout(timer); reject(new Error("Could not start a worker")); };
-      this.pool.workers.push(worker);
-      this.pool.slots.push(slot);
-    }))).then(() => { this.pool.ready = true; });
+  trainLoop() {
+    const worker = new Worker("./src/orchestrator.js", { type: "module" });
+    this.orchestrator = worker;
+    this.epoch = 0;
+    worker.onmessage = (event) => this.onOrchestrator(event.data);
+    worker.onerror = () => { this.$("error").textContent = "Could not start training"; };
+    this.pushSearch();
   }
 
-  scoreRow(index) {
-    let row = this.scorePool[index];
-    if (row) return row;
-    row = { index: 0, fitness: 0, f: 0, start: 0, end: 0, stoodUp: false, up: false, hy: 0, headImpact: 0, gap: 0, stance: 0 };
-    this.scorePool[index] = row;
-    return row;
+  postOrchestrator(message, transfer) {
+    if (!this.orchestrator) return;
+    if (transfer) this.orchestrator.postMessage(message, transfer);
+    else this.orchestrator.postMessage(message);
   }
 
-  evaluatePopulation(items) {
-    const slots = this.pool.slots;
-    for (let workerIndex = 0; workerIndex < slots.length; workerIndex++) {
-      const slot = slots[workerIndex];
-      if (!slot.bucket) slot.bucket = [];
-      slot.bucket.length = 0;
+  targetPacket() {
+    const out = [];
+    const list = this.targets || [];
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      out.push({ on: !!item.on, x: item.x, y: item.y, angle: item.angle });
     }
-    for (let index = 0; index < items.length; index++) slots[index % slots.length].bucket.push(items[index]);
-    const weightCount = items.length ? items[0].weights.length : 0;
-    const sendStart = performance.now();
-    const pending = slots.map((slot, workerIndex) => {
-      const bucket = slot.bucket;
-      if (!bucket.length) return Promise.resolve(null);
-      const bytes = bytesFor(bucket.length, weightCount);
-      const sent = slot.next;
-      let buffer = slot.buffers[sent];
-      if (!buffer || buffer.byteLength < bytes) {
-        buffer = new ArrayBuffer(bytes);
-        slot.buffers[sent] = buffer;
-      }
-      writeTasks(buffer, bucket, weightCount);
-      slot.next ^= 1;
-      const sentAt = performance.now();
-      return new Promise((resolve, reject) => {
-        const worker = slot.worker;
-        worker.onmessage = (event) => {
-          const arrived = performance.now();
-          try {
-            const data = event.data;
-            if (!data || !data.buffer) throw new Error("Worker returned no buffer");
-            slot.buffers[sent] = data.buffer;
-            const f32 = new Float32Array(data.buffer);
-            const list = slot.list;
-            list.length = 0;
-            for (let i = 0; i < bucket.length; i++) {
-              const taskIndex = f32[resultIndex(bucket.length, weightCount, i)];
-              list.push(readScore(f32, bucket.length, weightCount, i, this.scoreRow(taskIndex)));
-            }
-            resolve({
-              results: list,
-              ms: data.ms,
-              steps: data.steps,
-              handoff: Math.max(0, arrived - sentAt - data.ms),
-              count: bucket.length,
-            });
-          } catch (error) { reject(error); }
-        };
-        worker.onerror = () => reject(new Error("Worker failed"));
-        worker.postMessage({ buffer, trainingPhase: config.curriculum.phase }, [buffer]);
-      });
-    });
-    this.sendMs = performance.now() - sendStart;
-    return Promise.all(pending).then((groups) => {
-      const timings = [];
-      const ordered = this.orderedScores;
-      ordered.length = items.length;
-      for (let i = 0; i < ordered.length; i++) ordered[i] = undefined;
-      for (let g = 0; g < groups.length; g++) {
-        const group = groups[g];
-        if (!group) continue;
-        timings.push({ ms: group.ms, steps: group.steps, handoff: group.handoff, count: group.count });
-        const results = group.results;
-        for (let i = 0; i < results.length; i++) ordered[results[i].index] = results[i];
-      }
-      this.workerTiming = timings;
-      return ordered;
-    });
+    return out;
   }
 
-  async trainLoop() {
-    try { await this.bootWorkers(); }
-    catch (error) { this.$("error").textContent = error.message; return; }
-    while (this.pool.ready) {
-      if (this.paused) { await new Promise((resolve) => setTimeout(resolve, 150)); continue; }
-      const generationState = this.state;
-      try {
-        const generation = generationState.ask(null, Math.max(config.workers.browserPairMin, this.pool.workers.length), this.randomNormal);
-        const childCount = generation.weights.length;
-        const pairCount = childCount >> 1;
-        const taskPool = this.taskPool || (this.taskPool = []);
-        const startPool = this.startPool || (this.startPool = []);
-        const posePool = this.posePool || (this.posePool = []);
-        const tasks = this.liveTasks || (this.liveTasks = []);
-        const scores = this.liveScores || (this.liveScores = []);
-        while (taskPool.length < childCount) taskPool.push({ index: 0, weights: null, phase: 0, options: null });
-        while (startPool.length < pairCount) startPool.push({});
-        while (posePool.length < childCount) posePool.push({ fitness: 0, f: 0, start: 0, end: 0, gap: 0, stance: 0, headImpact: 0, stoodUp: false, up: false });
-        tasks.length = childCount;
-        for (let child = 0; child < childCount; child++) {
-          const pair = child >> 1;
-          if ((child & 1) === 0) {
-            this.sim.fillTrainingStart(startPool[pair], this.random);
-            startPool[pair].targets = this.targets;
-          }
-          const task = taskPool[child];
-          task.index = child;
-          task.weights = generation.weights[child];
-          task.phase = child % config.cadence.actionEveryNFrames;
-          task.options = startPool[pair];
-          tasks[child] = task;
-        }
-        const rows = await this.evaluatePopulation(tasks);
-        if (this.state !== generationState) continue;
-        for (let i = 0; i < rows.length; i++) {
-          if (!rows[i] || !Number.isFinite(rows[i].fitness)) throw new Error("A worker returned an empty score");
-        }
-        scores.length = childCount;
-        for (let child = 0; child < childCount; child++) scores[child] = this.sim.poseScore(rows, child, 1, posePool[child]);
-        const tellStart = performance.now();
-        this.state.tell(generation, scores);
-        this.tellMs = performance.now() - tellStart;
-        if (this.state.anchorNote) {
-          this.logEvent(this.state.anchorNote);
-          this.state.anchorNote = "";
-        }
-        await this.rememberBest();
-        if (this.state.gen % config.session.everyGenerations === 0) this.saveSession();
-        this.visit.trained = true;
-        const finished = this.state.hist[this.state.hist.length - 1];
-        if (finished) {
-          const mut = this.mutationStatus(", ");
-          const began = Number.isFinite(finished.start) ? finished.start.toFixed(2) + " → " : "";
-          this.logEvent("generation finished (gen " + this.state.gen + ", " + began + finished.mean.toFixed(2) + ", gen best " + finished.best.toFixed(2) + mut + ")");
-        }
-      } catch (error) {
-        this.$("error").textContent = error.message;
-        this.pool.ready = false;
-      }
+  postTargets() {
+    this.postOrchestrator({ type: "targets", targets: this.targetPacket() });
+  }
+
+  searchPacket() {
+    const state = this.state;
+    const theta = state.theta.slice();
+    const bestGenTheta = state.bestGenTheta.slice();
+    const bestEverTheta = state.bestEverTheta.slice();
+    const m = state.m.slice();
+    const v = state.v.slice();
+    return {
+      packet: {
+        theta,
+        bestGenTheta,
+        bestEverTheta,
+        m,
+        v,
+        k: state.k || 0,
+        gen: state.gen || 0,
+        flatGens: state.flatGens || 0,
+        bestEverScore: state.bestEverScore,
+        bestGenScore: state.bestGenScore,
+        bestSmooth: state.bestSmooth,
+        eliteScore: state.eliteScore,
+        hist: state.hist || [],
+      },
+      transfer: [theta.buffer, bestGenTheta.buffer, bestEverTheta.buffer, m.buffer, v.buffer],
+    };
+  }
+
+  pushSearch() {
+    if (!this.orchestrator || !this.state) return;
+    this.epoch = (this.epoch || 0) + 1;
+    const sent = this.searchPacket();
+    this.postOrchestrator({
+      type: "replace",
+      epoch: this.epoch,
+      paused: this.paused,
+      phase: config.curriculum.phase,
+      targets: this.targetPacket(),
+      state: sent.packet,
+    }, sent.transfer);
+  }
+
+  onOrchestrator(data) {
+    if (!data) return;
+    if (data.type === "error") {
+      this.$("error").textContent = data.message || "Training stopped";
+      this.paused = true;
+      this.paintPause();
+      return;
     }
+    if (data.type !== "generation" || data.epoch !== this.epoch) return;
+    const state = this.state;
+    if (!state || data.theta.length !== state.theta.length) return;
+    state.theta.set(data.theta);
+    state.bestGenTheta.set(data.bestGenTheta);
+    state.bestEverTheta.set(data.bestEverTheta);
+    if (data.m && data.m.length === state.m.length) state.m.set(data.m);
+    if (data.v && data.v.length === state.v.length) state.v.set(data.v);
+    state.gen = data.gen || 0;
+    state.k = data.k || 0;
+    state.flatGens = data.flatGens || 0;
+    state.mutationBoost = data.mutationBoost || 1;
+    state.mutationFraction = data.mutationFraction || 0;
+    state.bestEverScore = data.bestEverScore;
+    state.bestGenScore = data.bestGenScore;
+    state.bestSmooth = data.bestSmooth;
+    state.eliteScore = data.eliteScore;
+    if (data.row) {
+      state.hist.push(data.row);
+      if (state.hist.length > 400) state.hist.shift();
+    }
+    this.sendMs = data.sendMs;
+    this.tellMs = data.tellMs;
+    this.workerTiming = data.timings || [];
+    if (data.anchorNote) this.logEvent(data.anchorNote);
+    this.visit.trained = true;
+    const finished = state.hist[state.hist.length - 1];
+    if (finished) {
+      const mut = this.mutationStatus(", ");
+      const began = Number.isFinite(finished.start) ? finished.start.toFixed(2) + " → " : "";
+      this.logEvent("generation finished (gen " + state.gen + ", " + began + finished.mean.toFixed(2) + ", gen best " + finished.best.toFixed(2) + mut + ")");
+    }
+    this.rememberBest();
+    if (state.gen % config.session.everyGenerations === 0) this.saveSession();
   }
 
   savedSnapshot() {
@@ -674,7 +636,7 @@ export class NeuralRagDollWorld {
       ["Frame gap", "Milliseconds between frames on the main thread. This is the wait you feel. Step and Render are only the work inside the frame."],
       ["Send", "Milliseconds to copy the weight buffers and hand them to the workers. The workers have not started yet."],
       ["Handoff", "Milliseconds from the handoff until the scores come back, minus the time the worker spent simulating. Waiting and copying, not physics."],
-      ["Tell", "Milliseconds to fold the scores into the parent, on the main thread, after the workers finish."],
+      ["Tell", "Milliseconds to fold the scores into the parent, on the training worker, after the sim workers finish."],
       ["Save", "Milliseconds to hand the session to IndexedDB. The weights are copied as binary, not as text."],
       ["Training targets", "Every child starts standing. Training scores only the checked groups: head, then feet, then hands. The marks are where those targets sit."],
       ["Generation", "How many generations have finished. Each generation is a batch of children of the parent, scored on one episode each."],
@@ -799,6 +761,7 @@ export class NeuralRagDollWorld {
       }
     });
     this.paintTargetToggles();
+    this.postTargets();
     this.paintTraining();
   }
 
@@ -870,6 +833,7 @@ export class NeuralRagDollWorld {
           target.placed = true;
         }
         this.syncTrainBoxes();
+        this.postTargets();
         this.saveUi();
       };
       label.append(input, document.createTextNode(" " + spec.id));
@@ -1146,6 +1110,7 @@ export class NeuralRagDollWorld {
   release() {
     if (this.targetDrag) {
       this.targetDrag = null;
+      this.postTargets();
       this.saveUi();
       return;
     }
