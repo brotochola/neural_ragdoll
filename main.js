@@ -29,6 +29,12 @@ export class NeuralRagDollWorld {
     this.backupDir = null;
     this.backedBestScore = this.state.bestEverScore ?? -1e9;
     this.visit = { log: [], parentName: "", loadedLabel: "", trained: false };
+    if (this.discardedNetwork) {
+      this.saveSession();
+      this.clearSnapshots();
+      this.toast("Saved network doesn't match this layout. Starting from scratch.");
+      this.logEvent("stale network discarded");
+    }
     this.point = new b2Vec2(0, 0);
     this.cursor = { x: 0, y: 0 };
     this.pick = { x: 0, y: 0 };
@@ -70,19 +76,7 @@ export class NeuralRagDollWorld {
     });
     this.paintPause();
     this.$("restart").onclick = () => {
-      this.random = makeSeededRandom(Date.now() & 0xffff);
-      this.sim.setRandom(Date.now() & 0xffff);
-      this.state = new EvolutionSearch(this.randomNormal);
-      this.state.snapshots = [];
-      this.backedBestScore = this.state.bestEverScore ?? -1e9;
-      this.visit.parentName = "";
-      this.visit.loadedLabel = "";
-      this.visit.trained = false;
-      this.fillSavedList();
-      this.clearSnapshots();
-      this.saveSession();
-      this.pushSearch();
-      this.resetEpisode();
+      this.freshSearch();
       this.logEvent("restart");
     };
     this.$("reset").onclick = () => this.resetEpisode();
@@ -118,7 +112,10 @@ export class NeuralRagDollWorld {
       }
       const revived = this.networkFromJson(data);
       if (!revived) {
-        this.$("error").textContent = "That file is not a network this page can load.";
+        this.freshSearch();
+        this.paused = true;
+        this.paintPause();
+        this.toast("That file doesn't match this network. Starting from scratch.");
         this.logEvent("JSON load failed");
         return;
       }
@@ -226,16 +223,11 @@ export class NeuralRagDollWorld {
     this.graphics = new PIXI.Graphics();
     this.throws = new PIXI.Graphics();
     this.colliders = new PIXI.Graphics();
-    this.chart = new PIXI.Graphics();
-    const chartStyle = (fill) => ({ fill, fontSize: 11, fontFamily: "system-ui,sans-serif" });
-    this.chartMean = new PIXI.Text({ text: "avg", style: chartStyle(0x6f95ff) });
-    this.chartBest = new PIXI.Text({ text: "gen best", style: chartStyle(0x43d9ad) });
-    this.chartScale = new PIXI.Text({ text: "", style: chartStyle(0xb7bdd4) });
     this.dollView = new PIXI.Container();
     this.dollView.sortableChildren = true;
     this.label = new PIXI.Text({ text: "", style: { fill: 0xdfe4ff, fontSize: 13, fontFamily: "system-ui,sans-serif", lineHeight: 18 } });
     this.label.position.set(12, 10);
-    this.app.stage.addChild(this.graphics, this.dollView, this.throws, this.colliders, this.chart, this.chartMean, this.chartBest, this.chartScale, this.label);
+    this.app.stage.addChild(this.graphics, this.dollView, this.throws, this.colliders, this.label);
     this.doll.attachView(this.dollView);
     this.prepareColliderDraw();
     this.resetEpisode();
@@ -567,43 +559,6 @@ export class NeuralRagDollWorld {
     return this.state.theta;
   }
 
-  trainMaskLabel() {
-    const names = [];
-    if (this.$("trainHead").checked) names.push("head");
-    if (this.$("trainFeet").checked) names.push("feet");
-    if (this.$("trainHands").checked) names.push("hands");
-    return {
-      value: names.length ? names.join(" + ") : "none",
-      tip: "Every child starts standing. Training scores only the checked groups: head, then feet, then hands. The marks are where those targets sit.",
-    };
-  }
-
-  watchingStat() {
-    const saved = this.savedSnapshot();
-    if (saved) {
-      return {
-        value: saved.name || ("gen " + saved.gen),
-        tip: "The doll is using a saved network from this session, not the parent being trained.",
-      };
-    }
-    if (this.$("watchEver").checked) {
-      return {
-        value: "Best ever",
-        tip: "The doll is using the parent from when the 20-generation average ending last reached a new high.",
-      };
-    }
-    if (this.$("watchGeneration").checked) {
-      return {
-        value: "Best this generation",
-        tip: "The doll is using the child that scored highest in the last generation (the green line). The next generation replaces it.",
-      };
-    }
-    return {
-      value: "Parent",
-      tip: "The doll is using the parent: the weights that get a small step every generation. Children are copies of this plus noise. It is not the child with the highest score.",
-    };
-  }
-
   formatMs(value) {
     return Number.isFinite(value) ? value.toFixed(2) + " ms" : "–";
   }
@@ -613,6 +568,11 @@ export class NeuralRagDollWorld {
     const a = low.toFixed(digits);
     const b = high.toFixed(digits);
     return a === b ? a : a + "–" + b;
+  }
+
+  setPerf(index, text) {
+    const node = this.perfValues[index];
+    if (node.textContent !== text) node.textContent = text;
   }
 
   setStatus(index, text) {
@@ -625,37 +585,14 @@ export class NeuralRagDollWorld {
     if (row.title !== tip) row.title = tip;
   }
 
-  ensureStatus() {
-    if (this.statusValues) return;
-    const root = this.$("status");
+  fillStats(root, specs) {
+    const values = [];
+    const tips = [];
     root.textContent = "";
-    const every = config.search.stagnationGenerations;
-    const specs = [
-      ["Step", "Milliseconds for one physics step of the doll on screen. This is the main thread, not a worker."],
-      ["Render", "Milliseconds to draw the frame on the main thread, after the physics step. Does not include rewriting this panel."],
-      ["Frame gap", "Milliseconds between frames on the main thread. This is the wait you feel. Step and Render are only the work inside the frame."],
-      ["Send", "Milliseconds to copy the weight buffers and hand them to the workers. The workers have not started yet."],
-      ["Handoff", "Milliseconds from the handoff until the scores come back, minus the time the worker spent simulating. Waiting and copying, not physics."],
-      ["Tell", "Milliseconds to fold the scores into the parent, on the training worker, after the sim workers finish."],
-      ["Save", "Milliseconds to hand the session to IndexedDB. The weights are copied as binary, not as text."],
-      ["Training targets", "Every child starts standing. Training scores only the checked groups: head, then feet, then hands. The marks are where those targets sit."],
-      ["Generation", "How many generations have finished. Each generation is a batch of children of the parent, scored on one episode each."],
-      ["Ragdolls per worker", "How many ragdolls each worker ran in the last generation. A pair is two ragdolls. They share a starting pose and try opposite small changes."],
-      ["Seconds per generation", "How long each worker took to finish every ragdoll it was given, one after another. The workers run at the same time, so a generation lasts about this long."],
-      ["Milliseconds per frame", "How long one physics frame takes while a ragdoll is moving. A frame is one small update of the body. The picture on screen aims for a frame every 16 milliseconds. The workers run faster than that and do not wait."],
-      ["Start → end", "Average reward of the parent's children in the first 0.5 s, then in the last 3 s. The light copies of Best ever are not in this average. The fitness is that ending, minus whatever was lost since the start. A child that ends where it began keeps the ending. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.", "avg"],
-      ["Generation best", "Highest fitness among the children, including the light copies of Best ever: the last 3 s, minus whatever that child lost since its first 0.5 s. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.", "best"],
-      ["Best ever", "The 20-generation average fitness, at the last time it reached a new high. The fitness is the ending minus any drop from the start. Network → Best ever plays the parent from that generation. A single lucky child does not set this."],
-      ["Watching", "The doll is using the parent: the weights that get a small step every generation."],
-      ["Plateau", "Generations since the 20-generation average fitness last reached a new high. At " + every + ", mutation becomes x" + config.search.stagnationBoost + " for " + Math.round(config.search.stagnationMutateCap * 100) + "% of pairs, and that factor multiplies again every " + every + " generations. One new Best ever removes " + every + " from this count."],
-      ["Mutation", "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting. The factor follows the plateau: at " + every + " generations it becomes x" + config.search.stagnationBoost + ". Scout noise never passes " + config.search.sigmaCap + ". When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average. A scout never does."],
-    ];
-    this.statusValues = [];
-    this.statusTips = [];
     for (let i = 0; i < specs.length; i++) {
       const spec = specs[i];
       const row = document.createElement("div");
-      row.className = "stat";
+      row.className = spec[3] ? "stat " + spec[3] : "stat";
       row.title = spec[1];
       const label = document.createElement("span");
       if (spec[2]) {
@@ -667,23 +604,52 @@ export class NeuralRagDollWorld {
       const value = document.createElement("b");
       row.append(label, value);
       root.appendChild(row);
-      this.statusValues.push(value);
-      this.statusTips.push(row);
+      values.push(value);
+      tips.push(row);
     }
+    return { values, tips };
+  }
+
+  ensureStatus() {
+    if (this.statusValues) return;
+    const every = config.search.stagnationGenerations;
+    const perf = this.fillStats(this.$("perf"), [
+      ["Step", "Milliseconds for one physics step of the doll on screen. This is the main thread, not a worker."],
+      ["Render", "Milliseconds to draw the frame on the main thread, after the physics step. Does not include rewriting this panel."],
+      ["Frame gap", "Milliseconds between frames on the main thread. This is the wait you feel. Step and Render are only the work inside the frame."],
+    ]);
+    this.perfValues = perf.values;
+    const status = this.fillStats(this.$("status"), [
+      ["Generation", "How many generations have finished. Each generation is a batch of children of the parent, scored on one episode each."],
+      ["Start → end", "Average reward of the parent's children in the first 0.5 s, then in the last 3 s. The light copies of Best ever are not in this average. The fitness is that ending, minus whatever was lost since the start, minus " + config.reward.headTouch + " if the head touched, minus " + config.reward.motion + " times how hard the joints were moving. A child that ends where it began keeps the ending. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.", "avg"],
+      ["Generation best", "Highest fitness among the children, including the light copies of Best ever. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.", "best"],
+      ["Best ever", "The 20-generation average fitness, at the last time it reached a new high. The fitness is the ending, minus any drop from the start, minus " + config.reward.headTouch + " if the head touched, minus " + config.reward.motion + " times how hard the joints were moving. Network → Best ever plays the parent from that generation. A single lucky child does not set this."],
+      ["Plateau", "Generations since the 20-generation average fitness last reached a new high. " + (config.search.stagnationMutateCap > 0 ? "At " + every + ", mutation becomes x" + config.search.stagnationBoost + " for " + Math.round(config.search.stagnationMutateCap * 100) + "% of pairs, and that factor multiplies again every " + every + " generations. " : "Scout noise is off. ") + "One new Best ever removes " + every + " from this count. After " + config.search.revertAfterGenerations + " generations the parent is put back on Best ever and Adam's memory is cleared."],
+      ["Mutation", config.search.stagnationMutateCap > 0
+        ? "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting. The factor follows the plateau: at " + every + " generations it becomes x" + config.search.stagnationBoost + ". Scout noise never passes " + config.search.sigmaCap + ". When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average. A scout never does."
+        : "Scout noise is off, so every pair keeps the small noise. Neck and wrists never change. x1 means nobody is scouting. When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average."],
+      ["Send", "Milliseconds to copy the weight buffers and hand them to the workers. The workers have not started yet.", null, "split"],
+      ["Handoff", "Milliseconds from the handoff until the scores come back, minus the time the worker spent simulating. Waiting and copying, not physics."],
+      ["Tell", "Milliseconds to fold the scores into the parent, on the training worker, after the sim workers finish."],
+      ["Save", "Milliseconds to hand the session to IndexedDB. The weights are copied as binary, not as text."],
+      ["Ragdolls per worker", "How many ragdolls each worker ran in the last generation. A pair is two ragdolls. They share a starting pose and try opposite small changes."],
+      ["Seconds per generation", "How long each worker took to finish every ragdoll it was given, one after another. The workers run at the same time, so a generation lasts about this long."],
+      ["Milliseconds per frame", "How long one physics frame takes while a ragdoll is moving. A frame is one small update of the body. The picture on screen aims for a frame every 16 milliseconds. The workers run faster than that and do not wait."],
+    ]);
+    this.statusValues = status.values;
+    this.statusTips = status.tips;
   }
 
   paintTraining() {
     this.ensureStatus();
     const last = this.state.hist[this.state.hist.length - 1];
-    const phase = this.trainMaskLabel();
-    const watching = this.watchingStat();
     const ever = this.state.bestEverScore;
     const everText = Number.isFinite(ever) && ever > -1e8 ? ever.toFixed(2) : "–";
     const every = config.search.stagnationGenerations;
     const flat = this.state.flatGens || 0;
     const steps = every > 0 && flat >= every ? Math.floor(flat / every) : 0;
-    const boost = steps > 0 ? Math.min(config.search.stagnationBoostCap, Math.pow(config.search.stagnationBoost, steps)) : 1;
-    const pct = steps > 0 ? Math.round(Math.min(1, config.search.stagnationMutateCap) * 100) : 0;
+    const pct = steps > 0 && config.search.stagnationMutateCap > 0 ? Math.round(Math.min(1, config.search.stagnationMutateCap) * 100) : 0;
+    const boost = pct > 0 ? Math.min(config.search.stagnationBoostCap, Math.pow(config.search.stagnationBoost, steps)) : 1;
     const anchor = this.state.anchorPairCount ? this.state.anchorPairCount() : 0;
     const anchorText = anchor > 0 ? " · best ever ×" + anchor : "";
     const ending = last && Number.isFinite(last.end) ? last.end : last ? last.mean : null;
@@ -722,27 +688,23 @@ export class NeuralRagDollWorld {
     }
     const handoffText = !handoffCount ? "–" : this.formatRange(handoffLow, handoffHigh, 1) + " ms";
     const pending = "–";
-    this.setStatus(0, this.formatMs(this.stepMs));
-    this.setStatus(1, this.formatMs(this.renderMs));
-    this.setStatus(2, this.formatMs(this.frameGapShow));
-    this.setStatus(3, this.formatMs(this.sendMs));
-    this.setStatus(4, handoffText);
-    this.setStatus(5, this.formatMs(this.tellMs));
-    this.setStatus(6, this.formatMs(this.saveMs));
-    this.setStatus(7, phase.value);
-    this.setStatusTip(7, phase.tip);
-    this.setStatus(8, String(this.state.gen || 0));
-    this.setStatus(9, ragCount ? this.formatRange(ragLow, ragHigh, 0) : pending);
-    this.setStatus(10, ragCount ? this.formatRange(secLow, secHigh, 1) : pending);
-    this.setStatus(11, ragCount ? this.formatRange(frameLow, frameHigh, 2) : pending);
-    if (ragCount) this.setStatusTip(9, "How many ragdolls each worker ran in the last generation. There were " + ragTotal + " ragdolls in total, split across " + ragCount + " workers. A pair is two ragdolls. They share a starting pose and try opposite small changes. More pairs means more ragdolls here.");
-    this.setStatus(12, arrow);
-    this.setStatus(13, last ? last.best.toFixed(2) : "–");
-    this.setStatus(14, everText);
-    this.setStatus(15, watching.value);
-    this.setStatusTip(15, watching.tip);
-    this.setStatus(16, flat + " gens");
-    this.setStatus(17, "x" + boost + (pct > 0 ? " · " + pct + "%" : "") + anchorText);
+    this.setPerf(0, this.formatMs(this.stepMs));
+    this.setPerf(1, this.formatMs(this.renderMs));
+    this.setPerf(2, this.formatMs(this.frameGapShow));
+    this.setStatus(0, String(this.state.gen || 0));
+    this.setStatus(1, arrow);
+    this.setStatus(2, last ? last.best.toFixed(2) : "–");
+    this.setStatus(3, everText);
+    this.setStatus(4, flat + " gens");
+    this.setStatus(5, "x" + boost + (pct > 0 ? " · " + pct + "%" : "") + anchorText);
+    this.setStatus(6, this.formatMs(this.sendMs));
+    this.setStatus(7, handoffText);
+    this.setStatus(8, this.formatMs(this.tellMs));
+    this.setStatus(9, this.formatMs(this.saveMs));
+    this.setStatus(10, ragCount ? this.formatRange(ragLow, ragHigh, 0) : pending);
+    this.setStatus(11, ragCount ? this.formatRange(secLow, secHigh, 1) : pending);
+    this.setStatus(12, ragCount ? this.formatRange(frameLow, frameHigh, 2) : pending);
+    if (ragCount) this.setStatusTip(10, "How many ragdolls each worker ran in the last generation. There were " + ragTotal + " ragdolls in total, split across " + ragCount + " workers. A pair is two ragdolls. They share a starting pose and try opposite small changes. More pairs means more ragdolls here.");
   }
   applyTrainGroup(id) {
     const on = this.$(id).checked;
@@ -817,7 +779,7 @@ export class NeuralRagDollWorld {
     config.targets.forEach((spec, index) => {
       const label = document.createElement("label");
       label.className = "ctrl target-toggle";
-      label.title = "Sandbox mark for " + spec.id + ". On, the doll on screen is scored, and training scores it too. Drag the mark to move it and its tip to rotate it. Off, that part adds nothing.";
+      label.title = "Sandbox mark for " + spec.id + ". This is only the doll on screen. Drag the mark to move it and its tip to rotate it. Training places its own marks near where each part starts.";
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = this.targets[index].on;
@@ -1144,13 +1106,23 @@ export class NeuralRagDollWorld {
   }
 
   drawChart() {
-    this.chart.clear();
-    const width = Math.min(240, this.app.screen.width - 24);
-    const plot = 70;
-    const height = plot + 22;
-    const originX = this.app.screen.width - width - 12;
-    const originY = 12;
-    this.chart.roundRect(originX, originY, width, height, 6).fill({ color: 0x000000, alpha: 0.35 });
+    const canvas = this.$("trainChart");
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (width < 8 || height < 8) return;
+    const ratio = window.devicePixelRatio || 1;
+    const pixelsW = Math.floor(width * ratio);
+    const pixelsH = Math.floor(height * ratio);
+    if (canvas.width !== pixelsW || canvas.height !== pixelsH) {
+      canvas.width = pixelsW;
+      canvas.height = pixelsH;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#12162a";
+    ctx.fillRect(0, 0, width, height);
+    const plot = height - 22;
     const history = this.state.hist;
     let drawLow = Infinity;
     let drawHigh = -Infinity;
@@ -1194,36 +1166,37 @@ export class NeuralRagDollWorld {
       }
       smoothed[index] = n ? sum / n : NaN;
     }
+    const strokeLine = (color, yAt) => {
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      for (let index = 0; index < count; index++) {
+        const x = 4 + index / (count - 1) * (width - 8);
+        const y = this.chartY(yAt(index), 0, plot, drawLow, drawHigh, span);
+        if (index) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+      }
+      ctx.stroke();
+    };
     if (count >= 2) {
-      const denom = count - 1;
-      for (let index = 0; index < count; index++) {
-        const value = smoothed[index];
-        const x = originX + 4 + index / denom * (width - 8);
-        const y = this.chartY(Number.isFinite(value) ? value : drawLow, originY, plot, drawLow, drawHigh, span);
-        if (index) this.chart.lineTo(x, y);
-        else this.chart.moveTo(x, y);
-      }
-      this.chart.stroke({ width: 1.5, color: 0x6f95ff });
-      for (let index = 0; index < count; index++) {
-        const sample = history[index];
-        const x = originX + 4 + index / denom * (width - 8);
-        const y = this.chartY(Number.isFinite(sample.best) ? sample.best : drawLow, originY, plot, drawLow, drawHigh, span);
-        if (index) this.chart.lineTo(x, y);
-        else this.chart.moveTo(x, y);
-      }
-      this.chart.stroke({ width: 1.5, color: 0x43d9ad });
+      strokeLine("#6f95ff", (index) => Number.isFinite(smoothed[index]) ? smoothed[index] : drawLow);
+      strokeLine("#43d9ad", (index) => Number.isFinite(history[index].best) ? history[index].best : drawLow);
     }
-    this.chartScale.text = drawLow.toFixed(0) + "–" + drawHigh.toFixed(0);
-    this.chartScale.position.set(originX + width - 72, originY + 2);
     const last = history[history.length - 1];
     const lastSmooth = count ? smoothed[count - 1] : NaN;
-    const legendY = originY + plot + 4;
-    this.chart.rect(originX + 8, legendY + 2, 8, 8).fill(0x6f95ff);
-    this.chart.rect(originX + width / 2, legendY + 2, 8, 8).fill(0x43d9ad);
-    this.chartMean.position.set(originX + 20, legendY);
-    this.chartBest.position.set(originX + width / 2 + 12, legendY);
-    this.chartMean.text = "avg" + (Number.isFinite(lastSmooth) ? " " + lastSmooth.toFixed(2) : "");
-    this.chartBest.text = "gen best" + (last ? " " + last.best.toFixed(2) : "");
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#b7bdd4";
+    ctx.fillText(drawLow.toFixed(0) + "–" + drawHigh.toFixed(0), width - 6, 4);
+    const legendY = plot + 4;
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#6f95ff";
+    ctx.fillRect(8, legendY + 2, 8, 8);
+    ctx.fillText("avg" + (Number.isFinite(lastSmooth) ? " " + lastSmooth.toFixed(2) : ""), 20, legendY);
+    ctx.fillStyle = "#43d9ad";
+    ctx.fillRect(width / 2, legendY + 2, 8, 8);
+    ctx.fillText("gen best" + (last ? " " + last.best.toFixed(2) : ""), width / 2 + 12, legendY);
   }
 
   graphSlotY(index, count, top, bottom) {
@@ -1639,6 +1612,8 @@ drawNetworkGraph() {
     for (let i = start; i < hist.length; i++) kept.push(hist[i]);
     return {
       gen: state.gen,
+      inputCount: config.net.inputCount,
+      weightCount: ElmanNetwork.weightCount,
       theta: state.theta,
       bestGenTheta: state.bestGenTheta,
       bestEverTheta: state.bestEverTheta,
@@ -1699,6 +1674,7 @@ drawNetworkGraph() {
     if (stored && stored.session && stored.session.theta) {
       const revived = this.stateFromPacket(stored.session, stored.snapshots);
       if (revived) return revived;
+      this.discardedNetwork = true;
     }
     let legacy = null;
     try { legacy = JSON.parse(localStorage.getItem("ragdoll-panel") || "null"); }
@@ -1712,11 +1688,39 @@ drawNetworkGraph() {
         await this.syncSnapshotStore();
         return revived;
       }
+      this.discardedNetwork = true;
     }
     return new EvolutionSearch(this.randomNormal);
   }
 
-  takeWeights(source, length) {
+  toast(message) {
+    const el = this.$("toast");
+    if (!el) return;
+    el.hidden = false;
+    el.textContent = message;
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
+  }
+
+  freshSearch() {
+    this.random = makeSeededRandom(Date.now() & 0xffff);
+    this.sim.setRandom(Date.now() & 0xffff);
+    this.state = new EvolutionSearch(this.randomNormal);
+    this.state.snapshots = [];
+    this.backedBestScore = this.state.bestEverScore ?? -1e9;
+    this.visit.parentName = "";
+    this.visit.loadedLabel = "";
+    this.visit.trained = false;
+    this.fillSavedList();
+    this.clearSnapshots();
+    this.saveSession();
+    this.pushSearch();
+    this.resetEpisode();
+    this.saveUi();
+  }
+
+  takeWeights(source) {
+    const length = ElmanNetwork.weightCount;
     if (source instanceof Float32Array && source.length === length) return source;
     return ElmanNetwork.copy(source);
   }
@@ -1828,13 +1832,15 @@ drawNetworkGraph() {
 
   stateFromPacket(packet, snapshotSource) {
     if (!packet || !packet.theta) return null;
-    const parent = this.takeWeights(packet.theta, packet.theta.length);
+    if (packet.weightCount != null && +packet.weightCount !== ElmanNetwork.weightCount) return null;
+    if (packet.inputCount != null && +packet.inputCount !== config.net.inputCount) return null;
+    const parent = this.takeWeights(packet.theta);
     if (!parent) return null;
     const revived = new EvolutionSearch(this.randomNormal);
     revived.theta = parent;
     revived.gen = packet.gen || 0;
-    revived.bestGenTheta = this.takeWeights(packet.bestGenTheta, parent.length) || parent.slice();
-    revived.bestEverTheta = this.takeWeights(packet.bestEverTheta, parent.length) || parent.slice();
+    revived.bestGenTheta = this.takeWeights(packet.bestGenTheta) || parent.slice();
+    revived.bestEverTheta = this.takeWeights(packet.bestEverTheta) || parent.slice();
     revived.bestEverScore = packet.bestEverScore ?? -1e9;
     revived.bestEverName = typeof packet.bestEverName === "string" ? packet.bestEverName : "";
     if (packet.bestEverGen != null && Number.isFinite(+packet.bestEverGen)) revived.bestEverGen = Math.floor(+packet.bestEverGen);
@@ -1843,8 +1849,8 @@ drawNetworkGraph() {
     if (Number.isFinite(+packet.flatGens) && +packet.flatGens > 0) revived.flatGens = Math.floor(+packet.flatGens);
     if (Number.isFinite(+packet.bestSmooth)) revived.bestSmooth = +packet.bestSmooth;
     if (Number.isFinite(+packet.k) && +packet.k >= 0) revived.k = Math.floor(+packet.k);
-    const moments = this.takeWeights(packet.m, parent.length);
-    const second = this.takeWeights(packet.v, parent.length);
+    const moments = this.takeWeights(packet.m);
+    const second = this.takeWeights(packet.v);
     if (moments) revived.m = moments;
     if (second) revived.v = second;
     revived.refreshMutationBoost();
@@ -1854,7 +1860,7 @@ drawNetworkGraph() {
       gen: item.gen,
       score: item.score,
       name: item.name || "",
-      weights: item && this.takeWeights(item.weights, parent.length),
+      weights: item && this.takeWeights(item.weights),
     })).filter((item) => item.weights && Number.isFinite(+item.gen) && Number.isFinite(+item.score));
     revived.snapshots.sort((a, b) => a.gen - b.gen);
     return revived;

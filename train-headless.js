@@ -1,5 +1,5 @@
 // One headless loop: same sim, net, reward, and config as the page.
-// Training fitness is the target score. A head touch on a training episode is config.reward.headReject.
+// Training fitness is the target score for the whole episode. A head touch subtracts config.reward.headTouch.
 // Pass/fail is the search center (theta) on a fixed held-out set, not the training batch.
 // Stand and drop need isStanding, head above config.body.standingHeadMeters, and headImpact < config.search.headImpactQuiet.
 // Ball needs isStanding at the end. Get-up needs isStanding at the end.

@@ -48,9 +48,9 @@ export function writeTasks(buffer, tasks, weightCount) {
     for (let t = 0; t < 5; t++) {
       const target = targets[t] || {};
       f32[field++] = target.on ? 1 : 0;
-      f32[field++] = target.x || 0;
-      f32[field++] = target.y || 0;
-      f32[field++] = target.angle || 0;
+      f32[field++] = options.failOnHead ? (target.dx || 0) : (target.x || 0);
+      f32[field++] = options.failOnHead ? (target.dy || 0) : (target.y || 0);
+      f32[field++] = options.failOnHead ? (target.turn || 0) : (target.angle || 0);
     }
     f32.set(task.weights, cursor + TASK_HEADER);
     cursor += TASK_HEADER + weightCount;

@@ -6,29 +6,63 @@ import { clamp, makeSeededRandom, randomNormalSample } from "./utils.js";
 import { RagDoll2D, faceRaySpecs, facePartName } from "./ragdoll.js";
 
 export const jointNames = [
-  "Waist", "Neck", "Shoulder L", "Elbow L", "Wrist L", "Hip L", "Knee L", "Ankle L",
-  "Shoulder R", "Elbow R", "Wrist R", "Hip R", "Knee R", "Ankle R",
+  "Waist",
+  "Neck",
+  "Shoulder L",
+  "Elbow L",
+  "Wrist L",
+  "Hip L",
+  "Knee L",
+  "Ankle L",
+  "Shoulder R",
+  "Elbow R",
+  "Wrist R",
+  "Hip R",
+  "Knee R",
+  "Ankle R",
 ];
 
 export const observationLabels = buildObservationLabels();
 
 function episodeTargets(options) {
   const source = options && options.targets;
-  return source && source.length === config.targets.length ? source : config.targets;
+  return source && source.length === config.targets.length
+    ? source
+    : config.targets;
 }
 
 function buildObservationLabels() {
   const labels = [];
-  for (const name of jointNames) labels.push({ name: "angle " + name, tip: "Joint angle of " + name + ", scaled by its range." });
-  for (const name of jointNames) labels.push({ name: "rate " + name, tip: "How fast " + name + " is bending." });
+  for (const name of jointNames)
+    labels.push({
+      name: "angle " + name,
+      tip: "Joint angle of " + name + ", scaled by its range.",
+    });
+  for (const name of jointNames)
+    labels.push({
+      name: "rate " + name,
+      tip: "How fast " + name + " is bending.",
+    });
   labels.push(
-    { name: "torso sin", tip: "Sine of the torso angle. The sign is face up versus face down." },
-    { name: "torso cos", tip: "Cosine of the torso. +1 upright, 0 on its side, negative upside down." },
+    {
+      name: "torso sin",
+      tip: "Sine of the torso angle. The sign is face up versus face down.",
+    },
+    {
+      name: "torso cos",
+      tip: "Cosine of the torso. +1 upright, 0 on its side, negative upside down.",
+    },
     { name: "head sin", tip: "Sine of the head angle." },
     { name: "head cos", tip: "Cosine of the head. +1 is upright." },
     { name: "head height", tip: "Head height, scaled by a standing reach." },
-    { name: "torso height", tip: "Torso height, scaled by the standing blueprint." },
-    { name: "mass x", tip: "Center of mass relative to the midpoint of the feet." },
+    {
+      name: "torso height",
+      tip: "Torso height, scaled by the standing blueprint.",
+    },
+    {
+      name: "mass x",
+      tip: "Center of mass relative to the midpoint of the feet.",
+    },
     { name: "mass y", tip: "Height of the center of mass." },
     { name: "mass vx", tip: "Horizontal speed of the center of mass." },
     { name: "mass vy", tip: "Vertical speed of the center of mass." },
@@ -38,32 +72,76 @@ function buildObservationLabels() {
     labels.push({
       name: "ray " + facePartName[spec.part] + " " + spec.name,
       tip: spec.vision
-        ? "Head view. 1 is clear out to " + reach + " m, 0 is a hit on the head. The floor and thrown boxes and balls all count."
-        : "Hit fraction out of the " + spec.name + " face, within " + reach + " m. 1 is clear, 0 is a hit at the face.",
+        ? "Head view. 1 is clear out to " +
+          reach +
+          " m, 0 is a hit on the head. The floor and thrown boxes and balls all count."
+        : "Hit fraction out of the " +
+          spec.name +
+          " face, within " +
+          reach +
+          " m. 1 is clear, 0 is a hit at the face.",
     });
   }
   for (const spec of config.targets) {
     labels.push(
-      { name: "use " + spec.id, tip: "1 when the " + spec.id + " target is on, 0 when it is off. Its own input. Not packed with the other targets." },
-      { name: spec.id + " dx", tip: "Horizontal distance from the " + spec.id + " to its target, divided by the target span. 0 while that target is off." },
-      { name: spec.id + " dy", tip: "Vertical distance from the " + spec.id + " to its target, divided by the target span. 0 while that target is off." },
-      { name: spec.id + " esin", tip: "Sine of the angle error of the " + spec.id + ". 0 while that target is off, and 0 when it already faces the target." },
-      { name: spec.id + " ecos", tip: "Cosine of the angle error of the " + spec.id + ". 1 when it faces the target. 0 while that target is off." },
+      {
+        name: "use " + spec.id,
+        tip:
+          "1 when the " +
+          spec.id +
+          " target is on, 0 when it is off. Its own input. Not packed with the other targets.",
+      },
+      {
+        name: spec.id + " dx",
+        tip:
+          "Horizontal distance from the " +
+          spec.id +
+          " to its target, divided by the target span. 0 while that target is off.",
+      },
+      {
+        name: spec.id + " dy",
+        tip:
+          "Vertical distance from the " +
+          spec.id +
+          " to its target, divided by the target span. 0 while that target is off.",
+      },
+      {
+        name: spec.id + " esin",
+        tip:
+          "Sine of the angle error of the " +
+          spec.id +
+          ". 0 while that target is off, and 0 when it already faces the target.",
+      },
+      {
+        name: spec.id + " ecos",
+        tip:
+          "Cosine of the angle error of the " +
+          spec.id +
+          ". 1 when it faces the target. 0 while that target is off.",
+      },
     );
   }
-  labels.push(
-    { name: "head contact", tip: "1 when the head is touching the floor or a thrown object. A corner counts. Otherwise 0." },
-  );
-  for (const [name, index] of Object.entries(config.partIndex)) {
-    if (index >= config.net.partCount) continue;
-    labels.push({ name: "vx " + name, tip: "Horizontal speed of the " + name + "." });
-    labels.push({ name: "vy " + name, tip: "Vertical speed of the " + name + "." });
-    labels.push({ name: "spin " + name, tip: "How fast the " + name + " is rotating." });
-  }
-  if (config.net.rewardTotalNow) labels.push({ name: "reward total", tip: "Sum of the reward rows at this decision, scaled like the other reward inputs." });
-  if (config.net.rewardTotalPrevious) labels.push({ name: "reward total previous", tip: "Reward total from the previous decision, one action interval ago. Zero before the first decision." });
-  if (config.net.rewardTotalNext) labels.push({ name: "reward total next", tip: "Reward total if every part kept its current speed for one physics frame. No collision or motor." });
-  if (labels.length !== config.net.inputCount) throw new Error("observation labels " + labels.length);
+  labels.push({
+    name: "head contact",
+    tip: "1 when the head is touching the floor or a thrown object. A corner counts. Otherwise 0.",
+  });
+  if (config.net.rewardTotalNow)
+    labels.push({
+      name: "reward total",
+      tip: "Sum of the reward rows at this decision, scaled like the other reward inputs.",
+    });
+  if (config.net.rewardTotalPrevious)
+    labels.push({
+      name: "reward total previous",
+      tip: "Reward total from the previous decision, one action interval ago. Zero before the first decision.",
+    });
+  if (config.net.rewardTotalNext)
+    labels.push({
+      name: "reward total next",
+      tip: "Reward total if every part kept its current speed for one physics frame. No collision or motor.",
+    });
+  if (labels.length !== config.net.inputCount)
+    throw new Error("observation labels " + labels.length);
   return labels;
 }
 
@@ -90,7 +168,37 @@ export function fillTrainingStart(out, randomSource) {
   out.tilt += (randomSource() * 2 - 1) * config.episode.startTiltJitterRadians;
   out.drop += randomSource() * config.episode.startDropJitterMeters;
   out.shiftX = (randomSource() * 2 - 1) * config.episode.startShiftMeters;
+  // El sandbox no entra. Las cinco partes se premian cerca de donde nacen en este episodio.
+  const meters = config.start.targetJitterMeters;
+  const radians = config.start.targetJitterRadians;
+  let list = out.targets;
+  if (!list || list.length !== config.targets.length) {
+    list = [];
+    for (let i = 0; i < config.targets.length; i++) list.push({ on: true, x: 0, y: 0, angle: 0, dx: 0, dy: 0, turn: 0 });
+    out.targets = list;
+  }
+  for (let i = 0; i < config.targets.length; i++) {
+    const target = list[i];
+    target.on = true;
+    target.dx = (randomSource() * 2 - 1) * meters;
+    target.dy = (randomSource() * 2 - 1) * meters;
+    target.turn = (randomSource() * 2 - 1) * radians;
+  }
   return out;
+}
+
+// Escribe la marca del mundo: la parte ya colocada, más el corrimiento que sorteó el par.
+function stampTrainTargets(measure, options) {
+  const source = options && options.targets;
+  if (!source) return;
+  for (let i = 0; i < source.length && i < config.targets.length; i++) {
+    const target = source[i];
+    if (!target.on) continue;
+    const index = config.partIndex[config.targets[i].part];
+    target.x = (measure.partX[index] || 0) + (target.dx || 0);
+    target.y = (measure.partY[index] || 0) + (target.dy || 0);
+    target.angle = Math.atan2(measure.partSin[index] || 0, measure.partCos[index] || 0) + (target.turn || 0);
+  }
 }
 
 export function poseScore(rows, offset, count, out) {
@@ -128,12 +236,21 @@ export function poseScore(rows, offset, count, out) {
 
 export function createSim(box) {
   const {
-    CreateBoxPolygon, b2Vec2, b2BodyType, b2World_Step,
-    b2Body_SetTransform, b2MakeRot,
-    b2Body_SetLinearVelocity, b2Body_SetAngularVelocity, b2Body_SetAwake,
-    b2RevoluteJoint_GetAngle, b2RevoluteJoint_SetMotorSpeed,
-    CreateCircle, b2DestroyBody,
-    b2Body_GetContactCapacity, b2Body_GetContactData,
+    CreateBoxPolygon,
+    b2Vec2,
+    b2BodyType,
+    b2World_Step,
+    b2Body_SetTransform,
+    b2MakeRot,
+    b2Body_SetLinearVelocity,
+    b2Body_SetAngularVelocity,
+    b2Body_SetAwake,
+    b2RevoluteJoint_GetAngle,
+    b2RevoluteJoint_SetMotorSpeed,
+    CreateCircle,
+    b2DestroyBody,
+    b2Body_GetContactCapacity,
+    b2Body_GetContactData,
   } = box;
   const dynamicBody = b2BodyType.b2_dynamicBody;
   const vector = (x, y) => new b2Vec2(x, y);
@@ -225,13 +342,18 @@ export function createSim(box) {
     for (let i = 0; i < count; i++) {
       const slot = placed[i];
       const part = slot.part;
-      b2Body_SetTransform(part.id, partPose(part, slot.x, slot.y + lift), partRot(part, tilt));
+      b2Body_SetTransform(
+        part.id,
+        partPose(part, slot.x, slot.y + lift),
+        partRot(part, tilt),
+      );
       b2Body_SetLinearVelocity(part.id, partVel(part));
       b2Body_SetAngularVelocity(part.id, 0);
       b2Body_SetAwake(part.id, true);
     }
     const joints = world.joints;
-    for (let i = 0; i < joints.length; i++) b2RevoluteJoint_SetMotorSpeed(joints[i].id, 0);
+    for (let i = 0; i < joints.length; i++)
+      b2RevoluteJoint_SetMotorSpeed(joints[i].id, 0);
   }
 
   function fillMeasure(world, measure) {
@@ -282,12 +404,19 @@ export function createSim(box) {
     let elbow = 0;
     for (const joint of world.joints) {
       if (joint.mark !== "elbow") continue;
-      measure.elbowY[elbow++] = partY[joint.a] + partSin[joint.a] * joint.ax + partCos[joint.a] * joint.ay;
+      measure.elbowY[elbow++] =
+        partY[joint.a] +
+        partSin[joint.a] * joint.ax +
+        partCos[joint.a] * joint.ay;
     }
-    measure.handOn = !!(measure.touch[config.partIndex.handLeft] || measure.touch[config.partIndex.handRight]);
+    measure.handOn = !!(
+      measure.touch[config.partIndex.handLeft] ||
+      measure.touch[config.partIndex.handRight]
+    );
     measure.bodyOn = false;
     for (let i = 0; i < count; i++) {
-      if (i !== footLeft && i !== footRight && measure.touch[i]) measure.bodyOn = true;
+      if (i !== footLeft && i !== footRight && measure.touch[i])
+        measure.bodyOn = true;
     }
     return measure;
   }
@@ -295,10 +424,12 @@ export function createSim(box) {
   // Rayos solo en el frame de la acción. El contacto de la cabeza, ya medido, no se pisa.
   function castMeasureRays(world, measure) {
     const count = world.parts.length;
-    for (let i = 0; i < count; i++) measure.clearance[i] = config.body.bodyRayMeters;
+    for (let i = 0; i < count; i++)
+      measure.clearance[i] = config.body.bodyRayMeters;
     world.throwRays(measure);
     const gap = config.body.touchGapMeters;
-    for (let i = 0; i < count; i++) measure.touch[i] = measure.clearance[i] < gap;
+    for (let i = 0; i < count; i++)
+      measure.touch[i] = measure.clearance[i] < gap;
     measure.touch[config.partIndex.head] = measure.headContact !== 0;
   }
 
@@ -344,9 +475,17 @@ export function createSim(box) {
     predicted.headHeight = predicted.partHeight[config.partIndex.head];
     predicted.centerX = mass ? momentX / mass : 0;
     predicted.centerY = mass ? momentY / mass : 0;
-    predicted.stanceWidth = Math.abs(predicted.footXLeft - predicted.footXRight);
-    predicted.sole[0] = Math.max(0, (measure.sole[0] || 0) + (measure.partVelocityY[footLeft] || 0) * dt);
-    predicted.sole[1] = Math.max(0, (measure.sole[1] || 0) + (measure.partVelocityY[footRight] || 0) * dt);
+    predicted.stanceWidth = Math.abs(
+      predicted.footXLeft - predicted.footXRight,
+    );
+    predicted.sole[0] = Math.max(
+      0,
+      (measure.sole[0] || 0) + (measure.partVelocityY[footLeft] || 0) * dt,
+    );
+    predicted.sole[1] = Math.max(
+      0,
+      (measure.sole[1] || 0) + (measure.partVelocityY[footRight] || 0) * dt,
+    );
     return predicted;
   }
 
@@ -356,7 +495,9 @@ export function createSim(box) {
       this.world = world;
       this.network = new ElmanNetwork(weights);
       this.startSamples = rewardSamples(config.episode.startWindowSeconds);
-      this.endRing = new Float32Array(rewardSamples(config.episode.endWindowSeconds));
+      this.endRing = new Float32Array(
+        rewardSamples(config.episode.endWindowSeconds),
+      );
       this.input = new Float32Array(config.net.inputCount);
       this.previousJointAngle = new Float32Array(config.net.jointCount);
       this.objects = [];
@@ -384,8 +525,14 @@ export function createSim(box) {
       }
       if (!this.optionScratch) {
         this.optionScratch = {
-          push: 0, amp: 0, period: config.body.platformPeriodSeconds, phaseShift: 0, projectiles: [],
-          frames: config.episode.frames, task: "stand", phase: 0,
+          push: 0,
+          amp: 0,
+          period: config.body.platformPeriodSeconds,
+          phaseShift: 0,
+          projectiles: [],
+          frames: config.episode.frames,
+          task: "stand",
+          phase: 0,
         };
       }
       const scratch = this.optionScratch;
@@ -405,7 +552,8 @@ export function createSim(box) {
       scratch.targets = null;
       if (options) {
         const keys = Object.keys(options);
-        for (let i = 0; i < keys.length; i++) scratch[keys[i]] = options[keys[i]];
+        for (let i = 0; i < keys.length; i++)
+          scratch[keys[i]] = options[keys[i]];
       }
       this.options = scratch;
     }
@@ -431,6 +579,8 @@ export function createSim(box) {
       this.heightSum = 0;
       this.headImpact = 0;
       this.headHit = false;
+      this.motionSum = 0;
+      this.motionCount = 0;
       this.previousRewardTotal = 0;
       this.ballThrown = false;
       this.endedUp = false;
@@ -438,16 +588,27 @@ export function createSim(box) {
       this.cleanup();
       const world = this.world;
       resetPose(world, tilt, drop, this.options);
-      const settleFrames = this.options.settle != null ? this.options.settle : 0;
-      for (let i = 0; i < settleFrames; i++) b2World_Step(world.worldId, config.physics.timeStep, config.physics.solverSubsteps);
-      for (let i = 0; i < world.joints.length; i++) this.previousJointAngle[i] = b2RevoluteJoint_GetAngle(world.joints[i].id);
-      this.measure.targets = episodeTargets(this.options);
+      const settleFrames =
+        this.options.settle != null ? this.options.settle : 0;
+      for (let i = 0; i < settleFrames; i++)
+        b2World_Step(
+          world.worldId,
+          config.physics.timeStep,
+          config.physics.solverSubsteps,
+        );
+      for (let i = 0; i < world.joints.length; i++)
+        this.previousJointAngle[i] = b2RevoluteJoint_GetAngle(
+          world.joints[i].id,
+        );
       fillMeasure(world, this.measure);
+      if (this.options.failOnHead) stampTrainTargets(this.measure, this.options);
+      this.measure.targets = episodeTargets(this.options);
       castMeasureRays(world, this.measure);
     }
     cleanup() {
       const objects = this.objects;
-      for (let i = 0; i < objects.length; i++) destroyThrown(this.world, objects[i]);
+      for (let i = 0; i < objects.length; i++)
+        destroyThrown(this.world, objects[i]);
       objects.length = 0;
     }
     // Read the body into this.input and write a new action. Does not score.
@@ -462,7 +623,13 @@ export function createSim(box) {
         const joint = world.joints[i];
         const angle = b2RevoluteJoint_GetAngle(joint.id);
         input[cursor + i] = angle / joint.n;
-        input[cursor + config.net.jointCount + i] = clamp((angle - this.previousJointAngle[i]) / (config.cadence.actionEveryNFrames * config.physics.timeStep) / 6, -1, 1);
+        input[cursor + config.net.jointCount + i] = clamp(
+          (angle - this.previousJointAngle[i]) /
+            (config.cadence.actionEveryNFrames * config.physics.timeStep) /
+            6,
+          -1,
+          1,
+        );
         this.previousJointAngle[i] = angle;
       }
       cursor += 2 * config.net.jointCount;
@@ -493,8 +660,16 @@ export function createSim(box) {
           continue;
         }
         const span = config.body.targetSpanMeters;
-        input[cursor++] = clamp(((target.x || 0) - measure.partX[index]) / span, -1, 1);
-        input[cursor++] = clamp(((target.y || 0) - measure.partY[index]) / span, -1, 1);
+        input[cursor++] = clamp(
+          ((target.x || 0) - measure.partX[index]) / span,
+          -1,
+          1,
+        );
+        input[cursor++] = clamp(
+          ((target.y || 0) - measure.partY[index]) / span,
+          -1,
+          1,
+        );
         const targetSin = Math.sin(target.angle || 0);
         const targetCos = Math.cos(target.angle || 0);
         const partSin = measure.partSin[index];
@@ -503,24 +678,32 @@ export function createSim(box) {
         input[cursor++] = targetCos * partCos + targetSin * partSin;
       }
       input[cursor++] = measure.headContact || 0;
-      if (cursor !== config.net.sensedInputCount) throw new Error("base observation " + cursor);
-      for (let i = 0; i < config.net.partCount; i++) {
-        input[cursor++] = clamp((measure.partVelocityX[i] || 0) / config.scale.partSpeed, -2, 2);
-        input[cursor++] = clamp((measure.partVelocityY[i] || 0) / config.scale.partSpeed, -2, 2);
-        input[cursor++] = clamp((measure.partSpin[i] || 0) / config.scale.partSpin, -2, 2);
-      }
-      if (config.net.rewardTotalNow || config.net.rewardTotalPrevious || config.net.rewardTotalNext) {
+      if (cursor !== config.net.sensedInputCount)
+        throw new Error("base observation " + cursor);
+      if (
+        config.net.rewardTotalNow ||
+        config.net.rewardTotalPrevious ||
+        config.net.rewardTotalNext
+      ) {
         const scored = scoreDecision(measure);
-        const rewardColumn = (total) => clamp(total / config.scale.rewardInput, -2, 2);
-        if (config.net.rewardTotalNow) input[cursor++] = rewardColumn(scored.total);
-        if (config.net.rewardTotalPrevious) input[cursor++] = rewardColumn(this.previousRewardTotal);
+        const rewardColumn = (total) =>
+          clamp(total / config.scale.rewardInput, -2, 2);
+        if (config.net.rewardTotalNow)
+          input[cursor++] = rewardColumn(scored.total);
+        if (config.net.rewardTotalPrevious)
+          input[cursor++] = rewardColumn(this.previousRewardTotal);
         if (config.net.rewardTotalNext) {
-          const predicted = predictMeasure(world, measure, config.physics.timeStep);
+          const predicted = predictMeasure(
+            world,
+            measure,
+            config.physics.timeStep,
+          );
           input[cursor++] = rewardColumn(scoreDecision(predicted).total);
         }
         this.previousRewardTotal = scored.total;
       }
-      if (cursor !== config.net.inputCount) throw new Error("observation length " + cursor);
+      if (cursor !== config.net.inputCount)
+        throw new Error("observation length " + cursor);
       this.network.forward(input);
     }
     evaluate() {
@@ -535,7 +718,8 @@ export function createSim(box) {
       if (this.endFilled < this.endRing.length) this.endFilled++;
     }
     windowMean(fromEnd) {
-      if (!fromEnd) return this.startCount ? this.startSum / this.startCount : 0;
+      if (!fromEnd)
+        return this.startCount ? this.startSum / this.startCount : 0;
       const n = this.endFilled;
       if (!n) return 0;
       let sum = 0;
@@ -546,13 +730,18 @@ export function createSim(box) {
       const measure = this.measure;
       const standing = isStanding(measure);
       this.fallen = measure.bodyOn || measure.torsoCos < 0.25;
-      if (standing) { this.upStreak++; this.stoodFrames++; }
-      else this.upStreak = 0;
+      if (standing) {
+        this.upStreak++;
+        this.stoodFrames++;
+      } else this.upStreak = 0;
       this.sensedFrames++;
       this.heightSum += measure.headHeight;
       if (measure.touch[config.partIndex.head]) {
         this.headHit = true;
-        this.headImpact = Math.max(this.headImpact || 0, -(measure.headVelocityY || 0));
+        this.headImpact = Math.max(
+          this.headImpact || 0,
+          -(measure.headVelocityY || 0),
+        );
       }
     }
     step() {
@@ -561,52 +750,83 @@ export function createSim(box) {
       this.measure.targets = episodeTargets(this.options);
       fillMeasure(this.world, this.measure);
       this.notePose();
-      if (this.headHit && this.options.failOnHead && !this.free) {
-        this.evaluate();
-        this.endedUp = false;
-        this.frame++;
-        return true;
-      }
-      if (this.options.ballFrame != null && this.frame === this.options.ballFrame && !this.ballThrown) {
+      if (
+        this.options.ballFrame != null &&
+        this.frame === this.options.ballFrame &&
+        !this.ballThrown
+      ) {
         this.ballThrown = true;
         const torso = config.partIndex.torso;
         const x = this.measure.partX[torso];
         const y = this.measure.partY[torso];
         const side = this.options.ballSide || 1;
-        const id = spawnThrown(this.world, thrownKinds[0], x + side * config.start.ballStartMeters, Math.max(y, 0.6), -side * (this.options.ballSpeed || config.start.ballSpeed), 0.4);
+        const id = spawnThrown(
+          this.world,
+          thrownKinds[0],
+          x + side * config.start.ballStartMeters,
+          Math.max(y, 0.6),
+          -side * (this.options.ballSpeed || config.start.ballSpeed),
+          0.4,
+        );
         this.objects.push(id);
       }
       if (acting) {
         castMeasureRays(this.world, this.measure);
         this.act();
       }
-      if (!this.quiet && frame % config.cadence.rewardEveryNFrames === config.cadence.rewardFrameOffset) this.evaluate();
+      if (
+        !this.quiet &&
+        frame % config.cadence.rewardEveryNFrames ===
+          config.cadence.rewardFrameOffset
+      )
+        this.evaluate();
       this.applyMotors();
       this.stepPhysics();
       this.frame++;
-      if (this.frame >= (this.options.frames || config.episode.frames) && !this.free) {
+      if (
+        this.frame >= (this.options.frames || config.episode.frames) &&
+        !this.free
+      ) {
         this.endedUp = this.upStreak >= 15;
         return true;
       }
       return false;
     }
     applyMotors() {
+      const limit = config.episode.motorSpeedLimit || 1;
+      let speedSum = 0;
       for (let i = 0; i < config.net.jointCount; i++) {
         const joint = this.world.joints[i];
         const command = this.action[i];
         const target = command * (command >= 0 ? joint.hi : -joint.lo);
-        const speed = clamp(config.episode.motorGain * (target - b2RevoluteJoint_GetAngle(joint.id)), -config.episode.motorSpeedLimit, config.episode.motorSpeedLimit);
+        const speed = clamp(
+          config.episode.motorGain *
+            (target - b2RevoluteJoint_GetAngle(joint.id)),
+          -limit,
+          limit,
+        );
+        speedSum += Math.abs(speed);
         b2RevoluteJoint_SetMotorSpeed(joint.id, speed);
       }
+      this.motionSum += speedSum / (config.net.jointCount * limit);
+      this.motionCount++;
     }
     stepPhysics() {
-      b2World_Step(this.world.worldId, config.physics.timeStep, config.physics.solverSubsteps);
+      b2World_Step(
+        this.world.worldId,
+        config.physics.timeStep,
+        config.physics.solverSubsteps,
+      );
     }
     get fitnessValue() {
-      if (this.options.failOnHead && this.headHit) return config.reward.headReject;
       const end = this.windowMean(true);
       const start = this.windowMean(false);
-      return end - Math.max(0, start - end);
+      let fitness = end - Math.max(0, start - end);
+      if (!this.options.failOnHead) return fitness;
+      if (this.headHit) fitness -= config.reward.headTouch;
+      if (this.motionCount)
+        fitness -= config.reward.motion * (this.motionSum / this.motionCount);
+      return fitness;
     }
     get stats() {
       const end = this.windowMean(true);
@@ -620,43 +840,99 @@ export function createSim(box) {
         up: !!this.endedUp,
         hy: this.sensedFrames ? this.heightSum / this.sensedFrames : 0,
         headImpact: this.headImpact || 0,
-        gap: this.options.goalX == null ? 0 : Math.abs(this.options.goalX - (this.measure.centerX || 0)),
+        gap:
+          this.options.goalX == null
+            ? 0
+            : Math.abs(this.options.goalX - (this.measure.centerX || 0)),
       };
     }
-    get weights() { return this.network.weights; }
-    set weights(value) { this.network.weights = value; }
-    get hidden() { return this.network.hidden; }
-    get action() { return this.network.action; }
+    get weights() {
+      return this.network.weights;
+    }
+    set weights(value) {
+      this.network.weights = value;
+    }
+    get hidden() {
+      return this.network.hidden;
+    }
+    get action() {
+      return this.network.action;
+    }
   }
 
-  function physicsHz() { return 1 / config.physics.timeStep; }
+  function physicsHz() {
+    return 1 / config.physics.timeStep;
+  }
 
   function rewardSamples(seconds) {
-    return Math.max(1, Math.round(seconds * config.physics.hz / config.cadence.rewardEveryNFrames));
+    return Math.max(
+      1,
+      Math.round(
+        (seconds * config.physics.hz) / config.cadence.rewardEveryNFrames,
+      ),
+    );
   }
 
   function situation(randomSource, pose) {
     const side = randomSource() < 0.5 ? -1 : 1;
     const shared = {
-      push: 0, amp: 0, period: config.body.platformPeriodSeconds, phaseShift: 0, projectiles: [],
-      frames: config.episode.frames, task: "live",
-      goalX: side * (config.episode.goalNearMeters + randomSource() * config.episode.goalFarExtraMeters),
+      push: 0,
+      amp: 0,
+      period: config.body.platformPeriodSeconds,
+      phaseShift: 0,
+      projectiles: [],
+      frames: config.episode.frames,
+      task: "live",
+      goalX:
+        side *
+        (config.episode.goalNearMeters +
+          randomSource() * config.episode.goalFarExtraMeters),
       goalY: 0,
     };
     const phase = activeTrainingPhase();
     const explicit = pose === "up" || pose === "supine" || pose === "prone";
     let chosen = explicit ? pose : "mix";
-    if (!explicit && (config.curriculum.byPhases || chosen === "mix")) chosen = phase.start === "up" ? "up" : "random";
-    const falling = chosen === "up" && phase.falls && randomSource() < config.start.fallDropChance;
-    const uprightDrop = falling ? config.start.fallDropMinMeters + randomSource() * (config.start.fallDropMaxMeters - config.start.fallDropMinMeters) : config.start.uprightDropMeters;
-    const upright = () => Object.assign(shared, { tilt: (randomSource() * 2 - 1) * config.start.uprightTiltRadians, drop: uprightDrop, settle: 0, pose: "up" });
-    const down = (sign) => Object.assign(shared, {
-      tilt: sign * (config.start.downTiltMinRadians + randomSource() * config.start.downTiltSpanRadians), drop: config.start.downDropMeters, settle: config.start.downSettleFrames, pose: "down",
-    });
-    const randomPose = () => Object.assign(shared, {
-      tilt: (randomSource() * 2 - 1) * Math.PI, drop: randomSource() * config.start.fallDropMaxMeters, settle: 0, pose: "random",
-    });
-    const started = chosen === "up" ? upright() : chosen === "random" ? randomPose() : down(chosen === "prone" ? -1 : 1);
+    if (!explicit && (config.curriculum.byPhases || chosen === "mix"))
+      chosen = phase.start === "up" ? "up" : "random";
+    const falling =
+      chosen === "up" &&
+      phase.falls &&
+      randomSource() < config.start.fallDropChance;
+    const uprightDrop = falling
+      ? config.start.fallDropMinMeters +
+        randomSource() *
+          (config.start.fallDropMaxMeters - config.start.fallDropMinMeters)
+      : config.start.uprightDropMeters;
+    const upright = () =>
+      Object.assign(shared, {
+        tilt: (randomSource() * 2 - 1) * config.start.uprightTiltRadians,
+        drop: uprightDrop,
+        settle: 0,
+        pose: "up",
+      });
+    const down = (sign) =>
+      Object.assign(shared, {
+        tilt:
+          sign *
+          (config.start.downTiltMinRadians +
+            randomSource() * config.start.downTiltSpanRadians),
+        drop: config.start.downDropMeters,
+        settle: config.start.downSettleFrames,
+        pose: "down",
+      });
+    const randomPose = () =>
+      Object.assign(shared, {
+        tilt: (randomSource() * 2 - 1) * Math.PI,
+        drop: randomSource() * config.start.fallDropMaxMeters,
+        settle: 0,
+        pose: "random",
+      });
+    const started =
+      chosen === "up"
+        ? upright()
+        : chosen === "random"
+          ? randomPose()
+          : down(chosen === "prone" ? -1 : 1);
     if (phase.balls && randomSource() < config.start.ballChance) {
       started.ballFrame = config.start.ballThrowFrame;
       started.ballSide = randomSource() < 0.5 ? -1 : 1;
@@ -671,8 +947,12 @@ export function createSim(box) {
 
   function varyStart(base, randomSource) {
     return Object.assign({}, base, {
-      tilt: (base.tilt || 0) + (randomSource() * 2 - 1) * config.episode.startTiltJitterRadians,
-      drop: (base.drop || 0) + randomSource() * config.episode.startDropJitterMeters,
+      tilt:
+        (base.tilt || 0) +
+        (randomSource() * 2 - 1) * config.episode.startTiltJitterRadians,
+      drop:
+        (base.drop || 0) +
+        randomSource() * config.episode.startDropJitterMeters,
       shiftX: (randomSource() * 2 - 1) * config.episode.startShiftMeters,
     });
   }
@@ -680,8 +960,24 @@ export function createSim(box) {
   function spawnThrown(world, kind, x, y, vx, vy) {
     const position = vector(x, y);
     const created = kind.box
-      ? CreateBoxPolygon({ worldId: world.worldId, type: dynamicBody, position, size: vector(kind.half, kind.half), density: kind.density, friction: 0.6, restitution: 0.2 })
-      : CreateCircle({ worldId: world.worldId, type: dynamicBody, position, radius: kind.radius, density: kind.density, friction: 0.6, restitution: 0.3 });
+      ? CreateBoxPolygon({
+          worldId: world.worldId,
+          type: dynamicBody,
+          position,
+          size: vector(kind.half, kind.half),
+          density: kind.density,
+          friction: 0.6,
+          restitution: 0.2,
+        })
+      : CreateCircle({
+          worldId: world.worldId,
+          type: dynamicBody,
+          position,
+          radius: kind.radius,
+          density: kind.density,
+          friction: 0.6,
+          restitution: 0.3,
+        });
     const id = created.bodyId;
     b2Body_SetLinearVelocity(id, vector(vx, vy));
     world.thrownIds.push(id);
@@ -699,8 +995,19 @@ export function createSim(box) {
   }
 
   return {
-    build, Episode, situation, varyStart, trainingStarts, fillTrainingStart, poseScore, spawnThrown, destroyThrown, resetPose,
-    setRandom(seed) { random = makeSeededRandom(seed); },
+    build,
+    Episode,
+    situation,
+    varyStart,
+    trainingStarts,
+    fillTrainingStart,
+    poseScore,
+    spawnThrown,
+    destroyThrown,
+    resetPose,
+    setRandom(seed) {
+      random = makeSeededRandom(seed);
+    },
     randomNormal,
   };
 }

@@ -51,9 +51,18 @@ function readOptions(f32, cursor) {
   for (let t = 0; t < targets.length; t++) {
     const target = targets[t];
     target.on = f32[field++] !== 0;
-    target.x = f32[field++];
-    target.y = f32[field++];
-    target.angle = f32[field++];
+    const a = f32[field++];
+    const b = f32[field++];
+    const c = f32[field++];
+    if (options.failOnHead) {
+      target.dx = a;
+      target.dy = b;
+      target.turn = c;
+    } else {
+      target.x = a;
+      target.y = b;
+      target.angle = c;
+    }
   }
 }
 

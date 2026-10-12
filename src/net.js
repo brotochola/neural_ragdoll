@@ -66,7 +66,9 @@ export class ElmanNetwork {
 
   constructor(weights) {
     const layout = ElmanNetwork.layout;
-    this.weights = weights;
+    this.weights = weights && weights.length === ElmanNetwork.weightCount
+      ? weights
+      : new Float32Array(ElmanNetwork.weightCount);
     this.hidden = new Float32Array(layout.recurrent);
     this.nextHidden = new Float32Array(layout.recurrent);
     this.compressed = new Float32Array(layout.feedforward);
@@ -112,7 +114,7 @@ export class ElmanNetwork {
       for (let unit = 0; unit < layout.recurrent; unit++) sum += weights[cursor++] * this.nextHidden[unit];
       this.action[joint] = Math.tanh(sum);
     }
-    if (cursor !== weights.length) throw new Error("weight cursor " + cursor);
+    if (cursor !== weights.length) return;
     const previousHidden = this.hidden;
     this.hidden = this.nextHidden;
     this.nextHidden = previousHidden;
@@ -335,35 +337,48 @@ export class EvolutionSearch {
     rank.length = thetaChildren;
     const span = Math.max(1, thetaChildren - 1);
     for (let place = 0; place < order.length; place++) rank[order[place]] = place / span - 0.5;
-    const gradient = this.gradient;
-    gradient.fill(0);
-    const sigmaQuiet = generation.sigmaQuiet || this.sigmaQuiet;
-    const sigmaHot = generation.sigmaHot || this.sigmaHot;
-    const pairBoosts = generation.pairBoosts;
-    const boost = generation.boost || 1;
-    for (let pair = 0; pair < count; pair++) {
-      const pairBoost = pairBoosts && pairBoosts[pair] > 0 ? pairBoosts[pair] : boost;
-      const sigma = pairBoost > 1 ? sigmaHot : sigmaQuiet;
-      const difference = rank[2 * pair] - rank[2 * pair + 1];
-      const direction = generation.noise[pair];
-      for (let i = 0; i < length; i++) {
-        const scale = sigma[i];
-        if (!scale) continue;
-        gradient[i] += difference * direction[i] / scale;
-      }
+    let low = Infinity;
+    let high = -Infinity;
+    for (let i = 0; i < thetaChildren; i++) {
+      const value = values[i];
+      if (value < low) low = value;
+      if (value > high) high = value;
     }
-    const stepIndex = ++this.k;
-    const firstMoment = search.adamBeta1;
-    const secondMoment = search.adamBeta2;
-    const firstFix = 1 - Math.pow(firstMoment, stepIndex);
-    const secondFix = 1 - Math.pow(secondMoment, stepIndex);
-    const stepSize = Math.max(search.learningRateFloor, search.learningRate * Math.pow(0.5, (this.gen || 0) / search.learningRateHalfLifeGenerations));
-    for (let i = 0; i < length; i++) {
-      if (!sigmaQuiet[i]) continue;
-      const estimate = gradient[i] / count;
-      this.m[i] = firstMoment * this.m[i] + (1 - firstMoment) * estimate;
-      this.v[i] = secondMoment * this.v[i] + (1 - secondMoment) * estimate * estimate;
-      this.theta[i] += (stepSize * (this.m[i] / firstFix)) / (Math.sqrt(this.v[i] / secondFix) + search.adamEpsilon);
+    // Empate total: el rango no dice nada y Adam igual caminaría. No se toca al padre.
+    const boost = generation.boost || 1;
+    if (high > low) {
+      const gradient = this.gradient;
+      gradient.fill(0);
+      const sigmaQuiet = generation.sigmaQuiet || this.sigmaQuiet;
+      const sigmaHot = generation.sigmaHot || this.sigmaHot;
+      const pairBoosts = generation.pairBoosts;
+      for (let pair = 0; pair < count; pair++) {
+        const plus = values[2 * pair];
+        const minus = values[2 * pair + 1];
+        if (plus === minus) continue;
+        const pairBoost = pairBoosts && pairBoosts[pair] > 0 ? pairBoosts[pair] : boost;
+        const sigma = pairBoost > 1 ? sigmaHot : sigmaQuiet;
+        const difference = rank[2 * pair] - rank[2 * pair + 1];
+        const direction = generation.noise[pair];
+        for (let i = 0; i < length; i++) {
+          const scale = sigma[i];
+          if (!scale) continue;
+          gradient[i] += difference * direction[i] / scale;
+        }
+      }
+      const stepIndex = ++this.k;
+      const firstMoment = search.adamBeta1;
+      const secondMoment = search.adamBeta2;
+      const firstFix = 1 - Math.pow(firstMoment, stepIndex);
+      const secondFix = 1 - Math.pow(secondMoment, stepIndex);
+      const stepSize = Math.max(search.learningRateFloor, search.learningRate * Math.pow(0.5, (this.gen || 0) / search.learningRateHalfLifeGenerations));
+      for (let i = 0; i < length; i++) {
+        if (!sigmaQuiet[i]) continue;
+        const estimate = gradient[i] / count;
+        this.m[i] = firstMoment * this.m[i] + (1 - firstMoment) * estimate;
+        this.v[i] = secondMoment * this.v[i] + (1 - secondMoment) * estimate * estimate;
+        this.theta[i] += (stepSize * (this.m[i] / firstFix)) / (Math.sqrt(this.v[i] / secondFix) + search.adamEpsilon);
+      }
     }
     let bestIndex = 0;
     for (let i = 1; i < values.length; i++) if (values[i] > values[bestIndex]) bestIndex = i;
@@ -479,6 +494,13 @@ export class EvolutionSearch {
       this.flatGens = Math.max(0, (this.flatGens || 0) - search.stagnationGenerations);
     } else {
       this.flatGens = (this.flatGens || 0) + 1;
+      const after = search.revertAfterGenerations | 0;
+      const saved = this.bestEverTheta;
+      if (after > 0 && this.flatGens >= after && saved && saved.length === this.theta.length && this.bestEverScore > -1e8) {
+        this.theta.set(saved);
+        this.zeroMoments();
+        this.flatGens = 0;
+      }
     }
   }
 }

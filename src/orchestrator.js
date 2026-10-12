@@ -12,7 +12,6 @@ let paused = true;
 let epoch = 0;
 let phase = config.curriculum.phase;
 let state = null;
-let targets = [];
 const slots = [];
 const taskPool = [];
 const startPool = [];
@@ -31,15 +30,6 @@ function scoreRow(index) {
   row = { index: 0, fitness: 0, f: 0, start: 0, end: 0, stoodUp: false, up: false, hy: 0, headImpact: 0, gap: 0, stance: 0 };
   scorePool[index] = row;
   return row;
-}
-
-function setTargets(list) {
-  targets = [];
-  const source = list || [];
-  for (let i = 0; i < source.length; i++) {
-    const item = source[i] || {};
-    targets.push({ on: !!item.on, x: item.x || 0, y: item.y || 0, angle: item.angle || 0 });
-  }
 }
 
 function adopt(packet) {
@@ -156,7 +146,6 @@ async function oneGeneration(search, runEpoch) {
     const pair = child >> 1;
     if ((child & 1) === 0) {
       fillTrainingStart(startPool[pair], random);
-      startPool[pair].targets = targets;
     }
     const task = taskPool[child];
     task.index = child;
@@ -213,7 +202,7 @@ onmessage = (event) => {
   const data = event.data;
   if (!data) return;
   if (data.type === "pause") { paused = !!data.paused; return; }
-  if (data.type === "targets") { setTargets(data.targets); return; }
+  if (data.type === "targets") return;
   if (data.type === "phase") {
     phase = data.phase;
     setTrainingPhase(phase);
@@ -224,7 +213,6 @@ onmessage = (event) => {
     paused = !!data.paused;
     phase = data.phase;
     setTrainingPhase(phase);
-    setTargets(data.targets);
     state = adopt(data.state);
   }
 };

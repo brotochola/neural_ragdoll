@@ -9,100 +9,81 @@
 <body>
   <header>
     <h1>Neural ragdoll</h1>
-    <p>The picture is a sandbox. Training is a search that runs behind it. Hover any control for what it does.</p>
   </header>
   <div id="layout">
-    <div id="stage"></div>
-    <div id="readout">
-      <details class="fold" open>
-        <summary title="The score of the doll you see, using the network selected under Network on the doll.">Sandbox <small>what is on screen</small></summary>
-        <p class="fold-note">Reward of the pose in the picture, right now. Green adds, red subtracts. A target that is off scores nothing.</p>
-        <h2 class="sub" title="Sum of the rows below. The ceiling is every row at its best.">Reward this decision</h2>
+    <aside id="sandbox" class="card side">
+      <div id="error"></div>
+        <h2 title="The score of the doll you see, using the network selected below.">Sandbox <small>what is on screen</small></h2>
+        <h3 class="sub" title="Sum of the rows below. The ceiling is every row at its best.">Reward this decision</h3>
         <div id="total">–</div>
         <div id="terms"></div>
-      </details>
-      <details class="fold" open>
-        <summary title="The background search. These numbers are not the doll on screen.">Training <small>the search</small></summary>
-        <p class="fold-note">How the search is doing. It does not move the doll. Hover a row for what the number is.</p>
-        <div id="status">Starting…</div>
-      </details>
-    </div>
-  </div>
-  <div id="bars">
-    <details class="fold" open>
-      <summary title="The doll you see. Nothing here starts or stops the search.">Sandbox <small>the picture</small></summary>
-      <p class="fold-note">Drag a limb to pick it up. Drag empty space to aim a throw. Reset pose puts the doll back. Training ignores all of this.</p>
-      <div class="bar-row">
-        <span class="group" title="Put the doll back, or change how the next reset begins. The search does not use this pose.">Pose</span>
-        <button id="reset" title="Puts the doll back at the start of a new episode, with the network selected below. Does not change training.">Reset pose</button>
-        <label class="ctrl" title="How the next reset begins. Standing, on its back, or face down. Workers ignore this.">Start
-          <select id="startPose">
-            <option value="up">Standing</option>
-            <option value="supine">On its back</option>
-            <option value="prone">Face down</option>
-          </select>
-        </label>
-        <label class="ctrl" title="Draws the sense rays. Green is clear, orange is within 35 cm, red is touching.">
-          <input id="viewRays" type="checkbox"> View raycasts
-        </label>
-        <label class="ctrl" title="Draws every Box2D shape: capsules, the round tail, and the box limbs.">
-          <input id="viewColliders" type="checkbox"> View colliders
-        </label>
-      </div>
-      <div class="bar-row" id="targetRow">
-        <span class="group" title="Marks on the doll. On, that part is scored in the picture and in training. Drag a mark to move it. Drag its tip to rotate it.">Targets</span>
-      </div>
-      <div class="bar-row">
-        <span class="group" title="Throw something at the doll. Fire comes from the side. A drag on empty space throws where you aim.">Throw</span>
-        <label class="ctrl" title="What Fire throws, or what a drag on empty space throws.">Object
-          <select id="objectKind"></select>
-        </label>
-        <button id="fire" title="Throws the chosen object in from the side of the doll.">Fire</button>
-        <label class="ctrl" title="Speed of a thrown object, in meters per second.">Speed <input id="speed" type="range" min="3" max="25" value="8"> <span id="speedValue">8 m/s</span></label>
-      </div>
-    </details>
-    <details class="fold" open>
-      <summary title="Which brain the doll on screen is using. The search keeps training the parent either way.">Network on the doll <small>what the picture thinks with</small></summary>
-      <p class="fold-note">This only changes the doll you see. The search still steps the parent. A loaded file is the exception: it replaces the parent and pauses training.</p>
-      <div class="bar-row">
-        <span class="group" title="Which saved weights the doll uses until you pick another or press Reset pose.">Watching</span>
-        <div id="watch">
-          <label title="The doll uses the parent: the weights that get a small step every generation. This is not the child with the highest score. The pose stays until you press Reset pose."><input type="radio" name="watch" id="watchParent" checked> Parent</label>
-          <label title="The doll uses the child that scored highest in the last generation. That score is the green line. The next generation replaces it. This is not Best ever. The pose stays until you press Reset pose."><input type="radio" name="watch" id="watchGeneration"> Best this generation</label>
-          <label title="The doll uses the parent from when the 20-generation average last reached a new high. A single lucky child does not set this. The pose stays until you press Reset pose."><input type="radio" name="watch" id="watchEver"> Best ever</label>
+        <div id="perf"></div>
+        <h3 class="sub" title="Which brain the doll on screen is using. The search keeps training the parent either way. A loaded file is the exception: it replaces the parent and pauses training.">Network on the doll</h3>
+        <div class="controls">
+          <div id="watch">
+            <label title="The doll uses the parent: the weights that get a small step every generation. This is not the child with the highest score. The pose stays until you press Reset pose."><input type="radio" name="watch" id="watchParent" checked> Parent</label>
+            <label title="The doll uses the child that scored highest in the last generation. That score is the green line. The next generation replaces it. This is not Best ever. The pose stays until you press Reset pose."><input type="radio" name="watch" id="watchGeneration"> Best this generation</label>
+            <label title="The doll uses the parent from when the 20-generation average last reached a new high. A single lucky child does not set this. The pose stays until you press Reset pose."><input type="radio" name="watch" id="watchEver"> Best ever</label>
+          </div>
+          <label class="ctrl" title="A saved best from this session. Picking one shows that network on the doll until you pick another or press Reset pose.">Saved
+            <select id="savedNet"></select>
+          </label>
+          <button id="graphBtn" title="Opens a picture of every unit and connection in the network the doll is using right now.">Network graph</button>
         </div>
-        <label class="ctrl" title="A saved best from this session. Picking one shows that network on the doll until you pick another or press Reset pose.">Saved
-          <select id="savedNet"></select>
-        </label>
-        <button id="graphBtn" title="Opens a picture of every unit and connection in the network the doll is using right now.">Network graph</button>
-      </div>
-    </details>
-    <details class="fold" open>
-      <summary title="The search that runs in the background. The doll on screen keeps using whatever you picked above.">Training <small>the search</small></summary>
-      <p class="fold-note">Starts and stops the search. Each child starts standing. Head only, then add feet, then hands. A head that touches anything rejects that episode.</p>
-      <div class="bar-row">
-        <span class="group" title="Run the search, throw it away, or jump the parent to random trained-scale weights.">Run</span>
-        <button id="pause" title="Starts the search. The doll on screen keeps moving. This choice is remembered when you reopen the page.">Start training</button>
-        <button id="restart" title="Throws away this session, including saved networks, and starts from random weights.">Restart from scratch</button>
-        <button id="randomWeights" title="Replaces the parent with random weights at the scale of a trained network and shows that network. Training continues from it.">Random weights</button>
-        <label class="ctrl" title="Training scores the head target. Every child starts standing. The mark on screen is the same target."><input id="trainHead" type="checkbox" checked> Head</label>
-        <label class="ctrl" title="Training also scores both feet. They use the foot marks. Starts standing."><input id="trainFeet" type="checkbox"> Feet</label>
-        <label class="ctrl" title="Training also scores both hands. They use the hand marks. Starts standing."><input id="trainHands" type="checkbox"> Hands</label>
-        <label class="ctrl" title="How often the best network of the session is kept, when its score beats the previous save.">Save best every
-          <select id="snapshotEvery">
-            <option value="100" selected>100 generations</option>
-            <option value="10">10 generations</option>
-          </select>
-        </label>
-      </div>
-      <div class="bar-row">
-        <span class="group" title="Replace the parent from a file, choose where backups go, or read the visit log.">Files</span>
-        <button id="loadNetwork" title="Loads a saved network JSON as the new parent and shows it on the doll. Training stays paused until you press Start training.">Load network</button>
-        <input id="loadNetworkFile" type="file" accept=".json,application/json" hidden>
-        <button id="saveFolder" title="Pick a folder once. New backups of the parent and of Best ever are written there until you reload.">Save folder</button>
-        <button id="log" title="Opens a list of what happened in this visit: generations, loads, pauses.">Log</button>
-      </div>
-    </details>
+        <h3 class="sub" title="The doll you see. Nothing here starts or stops the search. Drag a limb to pick it up. Drag empty space to aim a throw.">Scene</h3>
+        <div class="controls">
+          <span class="group" title="Put the doll back, or change how the next reset begins. The search does not use this pose.">Pose</span>
+          <button id="reset" title="Puts the doll back at the start of a new episode, with the network selected below. Does not change training.">Reset pose</button>
+          <label class="ctrl" title="How the next reset begins. Standing, on its back, or face down. Workers ignore this.">Start
+            <select id="startPose">
+              <option value="up">Standing</option>
+              <option value="supine">On its back</option>
+              <option value="prone">Face down</option>
+            </select>
+          </label>
+          <label class="ctrl" title="Draws the sense rays. Green is clear, orange is within 35 cm, red is touching.">
+            <input id="viewRays" type="checkbox"> View raycasts
+          </label>
+          <label class="ctrl" title="Draws every Box2D shape: capsules, the round tail, and the box limbs.">
+            <input id="viewColliders" type="checkbox"> View colliders
+          </label>
+        </div>
+        <div class="controls" id="targetRow">
+          <span class="group" title="Marks on the doll. On, that part is scored in the picture and in training. Drag a mark to move it. Drag its tip to rotate it.">Targets</span>
+        </div>
+        <div class="controls">
+          <span class="group" title="Throw something at the doll. Fire comes from the side. A drag on empty space throws where you aim.">Throw</span>
+          <label class="ctrl" title="What Fire throws, or what a drag on empty space throws.">Object
+            <select id="objectKind"></select>
+          </label>
+          <button id="fire" title="Throws the chosen object in from the side of the doll.">Fire</button>
+          <label class="ctrl" title="Speed of a thrown object, in meters per second.">Speed <input id="speed" type="range" min="3" max="25" value="8"> <span id="speedValue">8 m/s</span></label>
+        </div>
+    </aside>
+    <div id="stage"></div>
+    <aside id="training" class="card side">
+        <h2 title="The search that runs in the background. The doll on screen keeps using whatever you picked above.">Training <small>the search</small></h2>
+        <canvas id="trainChart"></canvas>
+        <div id="status">Starting…</div>
+        <div class="controls">
+          <button id="pause" title="Starts the search. The doll on screen keeps moving. This choice is remembered when you reopen the page.">Start training</button>
+          <button id="restart" title="Throws away this session, including saved networks, and starts from random weights.">Restart from scratch</button>
+          <button id="randomWeights" title="Replaces the parent with random weights at the scale of a trained network and shows that network. Training continues from it.">Random weights</button>
+          <label class="ctrl" title="Shows the head mark on the sandbox doll. Training does not use it. Training scores every part near where that part starts."><input id="trainHead" type="checkbox" checked> Head</label>
+          <label class="ctrl" title="Shows both foot marks on the sandbox doll. Training does not use them."><input id="trainFeet" type="checkbox"> Feet</label>
+          <label class="ctrl" title="Shows both hand marks on the sandbox doll. Training does not use them."><input id="trainHands" type="checkbox"> Hands</label>
+          <label class="ctrl" title="How often the best network of the session is kept, when its score beats the previous save.">Save best every
+            <select id="snapshotEvery">
+              <option value="100" selected>100 generations</option>
+              <option value="10">10 generations</option>
+            </select>
+          </label>
+          <button id="loadNetwork" title="Loads a saved network JSON as the new parent and shows it on the doll. Training stays paused until you press Start training.">Load network</button>
+          <input id="loadNetworkFile" type="file" accept=".json,application/json" hidden>
+          <button id="saveFolder" title="Pick a folder once. New backups of the parent and of Best ever are written there until you reload.">Save folder</button>
+          <button id="log" title="Opens a list of what happened in this visit: generations, loads, pauses.">Log</button>
+        </div>
+    </aside>
   </div>
   <dialog id="logDialog">
     <div class="dialog-bar">
@@ -121,7 +102,7 @@
     <canvas id="graphCanvas"></canvas>
     <div id="netlist"></div>
   </dialog>
-  <div id="error"></div>
+  <div id="toast" hidden></div>
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js"></script>
   <script type="module" src="main.js"></script>
 </body>
