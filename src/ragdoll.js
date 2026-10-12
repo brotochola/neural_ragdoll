@@ -156,7 +156,7 @@ export class RagDoll2D {
     const {
       CreateWorld, CreateBoxPolygon, CreateRevoluteJoint, CreateCircle, CreateCapsule, b2Vec2, b2BodyType,
       b2Body_GetPosition, b2Body_GetRotation, b2Body_GetLinearVelocity, b2Body_GetAngularVelocity,
-      b2Shape_RayCast, b2Body_GetShapes,
+      b2Shape_RayCast, b2Body_GetShapes, b2DestroyWorld,
     } = box;
     const dynamicBody = b2BodyType.b2_dynamicBody;
     const staticBody = b2BodyType.b2_staticBody;
@@ -176,6 +176,7 @@ export class RagDoll2D {
     this.partSprites = null;
 
     const { worldId } = CreateWorld({});
+    this.worldId0 = worldId;
     const ground = CreateBoxPolygon({ worldId, type: staticBody, position: vector(0, -0.5), size: vector(800, 0.5), friction: 2 });
     const parts = [];
     const joints = [];
@@ -305,6 +306,21 @@ export class RagDoll2D {
     this.rayHit = new Uint8Array(this.rayCount);
   }
 
+  // Releases the world's slot in Box2D's fixed world array. Without this, building a world per
+  // episode exhausts the array and the next CreateBody reads undefined.
+  // This is also why a world cannot be reused across episodes: Box2D warm-starts every contact
+  // from the impulse it applied last step, and that cache survives a body transform reset. A
+  // reused world therefore gives a different answer depending on how many episodes ran in it
+  // before, which made the official evaluation depend on the worker count.
+  destroy() {
+    this.parts.length = 0;
+    this.joints.length = 0;
+    this.floorShapes = null;
+    this.thrownShapes = null;
+    this.worldId = null;
+    if (box.b2DestroyWorld && this.worldId0 != null) box.b2DestroyWorld(this.worldId0);
+    this.worldId0 = null;
+  }
   shapeOf(bodyId) {
     const shapes = this.shapeList;
     shapes.length = 0;

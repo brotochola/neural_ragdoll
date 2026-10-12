@@ -1,4 +1,4 @@
-// Ragdoll body, sensing, and one episode. The network and the reward live in their own files.
+﻿// Ragdoll body, sensing, and one episode. The network and the reward live in their own files.
 import { config, activeTrainingPhase } from "../config.js";
 import {
   scoreDecision,
@@ -6,6 +6,8 @@ import {
   isStanding,
   onMark,
   markError,
+  targetGain,
+  targetSpan,
 } from "./reward.js";
 import { ElmanNetwork, ResidualNet } from "./net.js";
 import { clamp, makeSeededRandom, randomNormalSample } from "./utils.js";
@@ -73,6 +75,23 @@ function buildObservationLabels() {
     { name: "mass vx", tip: "Horizontal speed of the center of mass." },
     { name: "mass vy", tip: "Vertical speed of the center of mass." },
   );
+  // Velocidad de cada parte mandada. El error de posicion, sin la velocidad con que se esta
+  // cerrando, no alcanza para frenar una parte que pasa volando hacia su marca.
+  for (const spec of config.targets) {
+    labels.push({
+      name: spec.id + " vx",
+      tip:
+        "Horizontal speed of the " +
+        spec.id +
+        " in meters per second. Full scale at " +
+        config.body.velocityScale +
+        " m/s.",
+    });
+    labels.push({
+      name: spec.id + " vy",
+      tip: "Vertical speed of the " + spec.id + ", same scale.",
+    });
+  }
   for (const spec of faceRaySpecs) {
     const reach = spec.vision ? spec.reach : config.body.bodyRayMeters;
     labels.push({
@@ -284,9 +303,14 @@ function fillWalk(out, list, randomSource, boxes) {
 export function fillTrainingStart(out, randomSource, mode) {
   const level = mode && mode.level ? mode.level | 0 : config.skill.level | 0;
   const full = !!(mode && mode.full);
-  const seconds = full
-    ? config.episode.seconds
-    : config.skill.trainSeconds || config.episode.seconds;
+  // mode.seconds manda sobre todo. Es lo que usa la rampa de entrenamiento: empezar con
+  // episodios cortos y estirarlos. No se toca config.episode.seconds globalmente, porque un
+  // numero global que se mueve por generacion es el tipo de cosa que se cuela en otro nivel.
+  const seconds = mode && mode.seconds > 0
+    ? mode.seconds
+    : full
+      ? config.episode.seconds
+      : config.skill.trainSeconds || config.episode.seconds;
   out.push = 0;
   out.amp = 0;
   out.period = config.body.platformPeriodSeconds;
@@ -313,19 +337,49 @@ export function fillTrainingStart(out, randomSource, mode) {
   out.tilt += signed(randomSource, config.episode.startTiltJitterRadians);
   out.drop += randomSource() * config.episode.startDropJitterMeters;
   out.shiftX = signed(randomSource, config.episode.startShiftMeters);
+  // El ancho de la postura va en la POSE, no en el premio. El blueprint trae los dos pies en el
+  // mismo x, y antes esa separacion se inventaba en la MARCA (fillStandFeet ponia +-stance en el
+  // dx), lo cual se colaba como orden de paso: en el skill 1, que se llama PARADO, al pie derecho
+  // se le pedia un paso de 12 cm en el mismo episodio en que se le pedia no caerse, y los pies
+  // valen 6 de los 12 puntos. Ahora los pies nacen separados de verdad y la marca se planta donde
+  // estan: en el skill 1 la fila del pie mide "no muevas el pie", y en el skill 4 mide el paso.
+  out.stance = config.skill.stanceMeters || 0;
+  // Que grupo de targets recibe una orden real en este nivel de la escalera.
+  out.commands =
+    mode && mode.commands != null
+      ? mode.commands
+      : config.commands[level] || "none";
   // El sandbox no entra. El nivel decide las marcas, y el par comparte este mismo sorteo.
   const list = ensureTargets(out);
   const meters = config.start.targetJitterMeters;
   const radians = config.start.targetJitterRadians;
+  const commands = out.commands;
+  const asksFoot = commands === "foot" || commands === "all";
   for (let i = 0; i < list.length; i++) {
     const target = list[i];
+    const spec = config.targets[i];
+    const order = commandFor(spec, commands, randomSource);
     target.on = true;
+    target.cx = order.x;
+    target.cy = order.y;
+    target.ca = order.angle;
     target.dx = signed(randomSource, meters);
     target.dy = signed(randomSource, meters);
-    target.turn = signed(randomSource, radians);
+    target.turn = spec.cmdArc || !spec.ride ? 0 : signed(randomSource, radians);
   }
-  if (level <= 1) fillStandFeet(list, randomSource);
-  else if (level === 2) {
+  // Primero la escalera de pies, DESPUES la orden de pie. Al reves, fillStandFeet pisa la
+  // orden y el nivel de "pie" deja de mandar sobre los pies.
+  // La escalera vieja (place, walk) solo corre con el gait escrito prendido: sin el, los pies
+  // van en la postura neutral y la orden manda. Si no, el stance de place (0.32 m) se cuela
+  // en los niveles de cabeza y de manos.
+  if (asksFoot) {
+    for (let i = 0; i < list.length; i++) {
+      const spec = config.targets[i];
+      if (spec.ride) continue;
+      list[i].dx = signed(randomSource, config.skill.cmdFootMeters);
+      list[i].turn = 0;
+    }
+  } else if (config.skill.scriptedLegs && level === 2) {
     const scale = full
       ? 1
       : mode && mode.placeScale != null
@@ -334,27 +388,123 @@ export function fillTrainingStart(out, randomSource, mode) {
           ? 1
           : config.skill.placeScale;
     fillPlaceFeet(out, list, randomSource, scale, mode && mode.shiftMeters);
-  } else fillWalk(out, list, randomSource, level >= 4);
+  } else if (config.skill.scriptedLegs && level >= 3) {
+    fillWalk(out, list, randomSource, level >= 4);
+  } else {
+    fillStandFeet(list, randomSource);
+  }
   return out;
 }
 
-// La cabeza y las manos se paran arriba del medio de los pies, así caminar no las deja en el origen.
-function plantBodyTargets(options) {
-  const targets = options && options.targets;
-  if (!targets) return;
-  const right = targets[targetSlot("footR")];
-  const left = targets[targetSlot("footL")];
-  const mid = ((right.x || 0) + (left.x || 0)) / 2;
-  for (let i = 0; i < 3; i++) targets[i].x = mid;
+// El neutral anatómico de cada parte, en el marco del torso: el blueprint menos la cadera.
+// Una orden es este punto más un offset sorteado dentro del workspace de la parte.
+export function neutralLocal(spec) {
+  return { x: spec.x || 0, y: (spec.y || 0) - config.body.torsoHeightMeters };
 }
 
-function applyStep(options, step) {
+// El arco que la cabeza puede describir: el cuello está a headRadius+headAxis del centro
+// de la cabeza, así que el centro solo puede estar sobre esa circunferencia.
+function headArc(theta) {
+  const r = config.body.headRadius + config.body.headAxis;
+  const neckY = config.body.neckOffsetMeters || 0.42;
+  return { x: -r * Math.sin(theta), y: neckY + r * Math.cos(theta) };
+}
+
+// El punto medio de los dos pies, en el mundo. Es el ancla de las marcas del cuerpo.
+function footMidX(measure) {
+  return ((measure.partX[config.partIndex.footLeft] || 0) +
+    (measure.partX[config.partIndex.footRight] || 0)) / 2;
+}
+
+// Deja el punto dentro del alcance del hombro o de la cadera. El brazo y la pierna arrancan
+// estirados, así que sin esto una orden "un poco más allá" es físicamente imposible y la red
+// se quemaAprendiendo a ignorar targets que nunca puede cumplir.
+function clampToReach(point, pivotY, reach) {
+  const dy = point.y - pivotY;
+  const d = Math.hypot(point.x, dy);
+  if (d <= reach || d === 0) return point;
+  const k = reach / d;
+  return { x: point.x * k, y: pivotY + dy * k };
+}
+
+// Sortea la orden de una parte. Devuelve el offset en el marco del torso y el giro pedido.
+// groups es lo que el nivel de la escalera tiene habilitado: 'none', 'head', 'hand', 'foot', 'all'.
+function commandFor(spec, groups, randomSource) {
+  const neutral = neutralLocal(spec);
+  if (spec.cmdArc) {
+    const theta = signed(randomSource, spec.cmdAngle || 0);
+    const arc = headArc(theta);
+    return { x: arc.x, y: arc.y, angle: theta };
+  }
+  if (!spec.cmdAngle && !spec.cmdX && !spec.cmdY) return { x: neutral.x, y: neutral.y, angle: 0 };
+  let point = {
+    x: neutral.x + signed(randomSource, spec.cmdX || 0),
+    y: neutral.y + signed(randomSource, spec.cmdY || 0),
+  };
+  if (spec.ride) {
+    const shoulderY = config.body.shoulderMeters - config.body.torsoHeightMeters;
+    point = clampToReach(point, shoulderY, config.body.armReachMeters);
+  }
+  return { x: point.x, y: point.y, angle: signed(randomSource, spec.cmdAngle || 0) };
+}
+
+function groupOf(spec) {
+  const id = spec.id;
+  return id === 'head' ? 'head' : id === 'footR' || id === 'footL' ? 'foot' : 'hand';
+}
+
+function commandedGroup(groups) {
+  if (!groups || groups === 'none') return '';
+  return groups;
+}
+
+// TRAINING: se plantan UNA vez. El anclaje a los pies se usa SOLO en ese instante, para tomar la
+// altura del torso parado. Despues quedan CONGELADAS en el mundo: el torso tiene que quedarse
+// arriba para alcanzarlas, asi que caerse es un error de target y no hace falta ningun termino
+// aparte. Antes esta funcion se llamaba en cada frame y la marca persigue a los pies, que es
+// exactamente lo que hacia que en el sandbox el arrastre de una marca "se viniera atras".
+// El giro que se pide es el de la ORDEN (ca), NO el jitter del arranque (turn): el cuello y las
+// muñecas tienen que servir una orden de mundo, no copiar la pose de arranque.
+function plantBodyTargets(measure, options) {
+  if (!measure || !options || !options.failOnHead) return;
+  const targets = options.targets;
+  if (!targets) return;
+  const mid = footMidX(measure);
+  for (let i = 0; i < config.targets.length; i++) {
+    const spec = config.targets[i];
+    if (!spec.ride) continue;
+    const target = targets[i];
+    if (!target || target.on === false || target.lx == null) continue;
+    target.x = mid + target.lx;
+    // ly es altura ABSOLUTA sobre el piso: la del arranque mas la orden.
+    target.y = target.ly;
+    // El giro que se pide es el de la orden (ca), NO el jitter del arranque (turn).
+    target.angle = target.ca || 0;
+    // Congelada: de aca en adelante esta se la deja como esta.
+    target.frozen = true;
+  }
+}
+
+// La decision es deliberada: los pies se movieron un poco al cambiar de etapa, y la marca de la
+// cabeza se queda donde estaba. Los pies si cambian de marca, y solo cuando el guion de
+// caminata avanza un paso.
+function refreezeBodyTargets(options) {
+  const targets = options && options.targets;
+  if (!targets) return;
+  for (let i = 0; i < config.targets.length; i++) {
+    const spec = config.targets[i];
+    if (!spec.ride) continue;
+    const target = targets[i];
+    if (target) target.frozen = true;
+  }
+}
+
+function applyStep(measure, options, step) {
   const target = options.targets[step.foot];
   target.x = (target.baseX || 0) + step.dx;
   target.y = config.skill.footGroundMeters;
   target.angle = step.turn || 0;
   target.on = true;
-  plantBodyTargets(options);
 }
 
 // El siguiente pie aparece cuando este ya está en la marca y el cuerpo sigue parado.
@@ -389,7 +539,8 @@ function armPlace(episode) {
   targets[targetSlot("footR")].x += extra;
   episode.placeExtra = extra;
   episode.phaseFrame = episode.frame;
-  plantBodyTargets(episode.options);
+  // Los pies se movieron un poco: la marca del cuerpo NO los sigue. Queda congelada.
+  refreezeBodyTargets(episode.options);
 }
 
 function maybeAdvance(episode) {
@@ -403,7 +554,7 @@ function maybeAdvance(episode) {
   episode.stepsDone = episode.stepCursor;
   const next = steps[episode.stepCursor];
   if (next) {
-    applyStep(episode.options, next);
+    applyStep(episode.measure, episode.options, next);
     episode.placeExtra = next.foot === targetSlot("footR") ? 1 : -1;
   }
   episode.phaseFrame = episode.frame;
@@ -437,31 +588,87 @@ function boxesCleared(episode) {
   return count;
 }
 
-// Escribe la marca del mundo: la parte ya colocada, más el corrimiento que sorteó el par.
-// Los pies quedan a la altura del suelo. El drop los deja en el aire y esa marca no se puede pisar.
+// Escribe la marca del mundo.
+// Los pies quedan a la altura del suelo, en coordenadas de mundo: una orden de pie es del
+// mundo, "pon ese pie 20 cm mas adelante".
+// Las partes del cuerpo van en el marco del torso, y la marca NO sale de donde el doll ya
+// esta: sale del neutral anatomico mas el offset que sorteo la escalera. Ahi esta la diferencia
+// entre una red que sostiene una pose y una red que obedece.
 function stampTrainTargets(measure, options) {
   const source = options && options.targets;
   if (!source) return;
+  const groups = options.commands;
   for (let i = 0; i < source.length && i < config.targets.length; i++) {
     const target = source[i];
     if (!target.on) continue;
     const spec = config.targets[i];
     const index = config.partIndex[spec.part];
-    const foot = spec.id === "footR" || spec.id === "footL";
-    if (foot) {
+    const group = groupOf(spec);
+    const asked = commandedGroup(groups) === 'all' || commandedGroup(groups) === group;
+    if (spec.ride) {
+      // El span y el gain dependen de si a esta parte la estan mandando: generosos si solo
+      // hay que estar "mas o menos ahi", apretados si hay que obedecer.
+      target.span = asked ? spec.spanCmd || spec.span : spec.span;
+      target.gain = targetGain(spec.id) * (asked ? spec.gainCmd || 1 : 1);
+      if (asked) {
+        // lx es el offset horizontal respecto de los pies; ly es la ALTURA ABSOLUTA pedida
+        // sobre el piso. Tomar la altura del arranque es lo que hace que la marca sea alcanzable
+        // solo si el torso se queda arriba.
+        const feetMid = footMidX(measure);
+        target.lx = (measure.partX[index] || 0) - feetMid + (target.cx || 0);
+        target.ly = (measure.partY[index] || 0) + (target.cy || 0);
+        target.angle = target.ca || 0;
+      } else {
+        const feetMid = footMidX(measure);
+        target.lx = (measure.partX[index] || 0) - feetMid;
+        target.ly = measure.partY[index] || 0;
+        target.angle = 0;
+      }
+    } else {
+      target.span = asked ? spec.spanCmd || spec.span : spec.span;
+      target.gain = targetGain(spec.id) * (asked ? spec.gainCmd || 1 : 1);
+      // LOS PIES TAMBIEN SE QUEDAN CONGELADOS EN EL MUNDO. Se probo anclar la marca a la cadera
+      // para que la fila midiera el paso y no la deriva, y se midio: lo hace, pero arruina skill 1.
+      //
+      // El porque es el que check-collapse.js no puede ver. check-collapse COMPARA POSAS
+      // CONGELADAS, y ahi el ancla a la cadera gana: parado 7.31 contra tumbado -4.99, un hueco
+      // de 10.31 donde el anclaje al mundo daba 3.18. Entrenando, en cambio, el pie anclado a la
+      // cadera daba 4/20 en la gen 300 contra 9/20 del anclaje al mundo, y despues se caia a
+      // 0/20 y se quedaba ahi. Motivo: mientras el torso se va al piso la cadera baja CON los
+      // pies, asi que la marca los sigue y el pie se gana el punto sin que el cuerpo este arriba.
+      // Los pies valen 6 de 12 puntos: regalarlos mientras cae es regalarle la mitad del premio.
+      //
+      // La deriva que si se midio (0.298 m contra una orden de 0.089 m) NO se arregla con el ancla:
+      // es la consecuencia de que la red todavia no sabe pararse. Cuando sepa pararse, la deriva es
+      // cero y la marca congelada mide la orden sola. Primero skill 1, despues skill 4.
       target.baseX = measure.partX[index] || 0;
-      target.x = target.baseX + (target.dx || 0);
+      // SI A ESTE PIE NO LE ESTAN MANDANDO NADA, LA MARCA VA DONDE ESTA EL PIE. Antes no: la
+      // separacion de los pies (fillStandFeet) se ponia en el dx del target, ese dx se sumaba a la
+      // marca, y en el skill 1 -que se llama PARADO- al pie derecho se le pedia un paso de 12 cm en
+      // el mismo episodio en que se le pedia no caerse. Los pies valen 6 de los 12 puntos.
+      // La separacion ahora va en la pose de arranque (options.stance); aca no hay nada que mandar.
+      target.x = target.baseX + (asked ? target.dx || 0 : 0);
       target.y = config.skill.footGroundMeters;
       target.angle = target.turn || 0;
-    } else {
-      target.x = (measure.partX[index] || 0) + (target.dx || 0);
-      target.y = (measure.partY[index] || 0) + (target.dy || 0);
-      target.angle =
-        Math.atan2(measure.partSin[index] || 0, measure.partCos[index] || 0) +
-        (target.turn || 0);
     }
   }
-  if ((options.skill || 0) >= 2) plantBodyTargets(options);
+  plantBodyTargets(measure, options);
+}
+
+// Cuántos targets de cuerpo (cabeza y manos) están dentro de su tolerancia, de los que están
+// prendidos. Lo usa el eval para medir si la red los está usando, no solo los pies.
+function placedBodyTargets(measure) {
+  let on = 0;
+  let placed = 0;
+  for (let i = 0; i < config.targets.length; i++) {
+    const spec = config.targets[i];
+    if (!spec.ride) continue;
+    const target = measure.targets && measure.targets[i];
+    if (!target || !target.on || !targetGain(spec.id)) continue;
+    on++;
+    if (onMark(measure, i)) placed++;
+  }
+  return on ? placed / on : 0;
 }
 
 export function poseScore(rows, offset, count, out) {
@@ -581,6 +788,30 @@ export function createSim(box) {
     return new RagDoll2D(box);
   }
 
+  // A world must be destroyed, not just dropped. Box2D keeps a fixed array of worlds and the
+  // slot is only released by DestroyWorld, so building worlds without destroying them exhausts
+  // the array and the next CreateBody reads undefined.
+  function destroyWorld(world) {
+    if (world) world.destroy();
+  }
+
+  // Runs one episode on a brand new world and returns the finished Episode.
+  //
+  // Every scored episode must come through here. Box2D warm-starts every contact from the
+  // impulse it applied last step, and that cache survives a body transform reset, so reusing a
+  // world made the result depend on how many episodes had run in it before. That is what made
+  // the official evaluation change when only the worker count changed.
+  //
+  // The world stays alive because callers read stats afterwards. Release it with
+  // destroyWorld(episode.world).
+  function runOneEpisode(weights, options) {
+    const world = build();
+    const episode = new Episode(world, weights, (options && options.tilt) || 0,
+      (options && options.drop) || 0, options || {});
+    while (!episode.step());
+    return episode;
+  }
+
   // Face rays miss a corner. Box2D's manifold has that point. Speculative contacts reach 2 cm with no load, so those do not count.
   const contactData = [];
   function bodyTouching(bodyId) {
@@ -607,6 +838,11 @@ export function createSim(box) {
     const count = parts.length;
     let lowest = Infinity;
     const shiftX = options.shiftX || 0;
+    // El ancho de la postura se aplica a la POSE, no a la marca. Ver fillTrainingStart: antes esa
+    // separacion se inventaba en el dx del target, lo cual se colaba como orden de paso.
+    const stance = options.stance || 0;
+    const footRight = config.partIndex.footRight;
+    const footLeft = config.partIndex.footLeft;
     for (let i = 0; i < count; i++) {
       const part = parts[i];
       let slot = placed[i];
@@ -614,7 +850,9 @@ export function createSim(box) {
         slot = { part: null, x: 0, y: 0 };
         placed[i] = slot;
       }
-      const x = cosine * part.cx - sine * (part.cy - 0.04) + shiftX;
+      let x = cosine * part.cx - sine * (part.cy - 0.04) + shiftX;
+      if (stance && i === footRight) x += stance;
+      else if (stance && i === footLeft) x -= stance;
       const y = 0.04 + drop + sine * part.cx + cosine * (part.cy - 0.04);
       slot.part = part;
       slot.x = x;
@@ -811,7 +1049,6 @@ export function createSim(box) {
 
   class Episode {
     constructor(world, weights, tilt, drop, options = {}) {
-      console.log("episode constructor", options, this);
       this.free = false;
       this.world = world;
       this.network = new ElmanNetwork(weights);
@@ -1001,14 +1238,29 @@ export function createSim(box) {
       input[cursor++] = measure.centerY - 0.85;
       input[cursor++] = measure.centerVelocityX / 2;
       input[cursor++] = measure.centerVelocityY / 2;
+      // Velocidad de las cinco partes mandadas. Antes la red veía el error de posicion pero no
+      // cuanta velocidad lleva la parte: una mano que pasa volando hacia la marca y otra que
+      // se arrastra hacia ella daban casi la misma entrada. Con esto puede frenar.
+      for (let v = 0; v < config.targets.length; v++) {
+        const vp = config.partIndex[config.targets[v].part];
+        input[cursor++] = clamp((measure.partVelocityX[vp] || 0) / config.body.velocityScale, -1, 1);
+        input[cursor++] = clamp((measure.partVelocityY[vp] || 0) / config.body.velocityScale, -1, 1);
+      }
       const face = measure.faceRay;
       for (let i = 0; i < face.length; i++) input[cursor++] = face[i];
       const targets = measure.targets;
+      const muted = config.net.mutedTargets;
+      // Para las partes ancladas a los pies, el error va en ejes de MUNDO: la marca vive en el
+      // mundo, asi que el premio y lo que ve la red son la misma magnitud. Girarlo al marco del
+      // torso hacia que el error se viera mas chico cuando el doll esta caido, que es
+      // exactamente cuando mas falta que se vea.
       for (let t = 0; t < config.targets.length; t++) {
         const spec = config.targets[t];
         const target = targets[t];
         const index = config.partIndex[spec.part];
-        const on = target.on ? 1 : 0;
+        // Un target con gain 0 esta fuera del premio Y fuera de la entrada. Si no, la red seguiria
+// viendo columnas de un target que no cuenta, y la rampa de gains no seria una rampa real.
+const on = target.on && targetGain(spec.id, target) > 0 && !(muted && muted.indexOf(spec.id) >= 0) ? 1 : 0;
         input[cursor++] = on;
         if (!on) {
           input[cursor++] = 0;
@@ -1017,20 +1269,13 @@ export function createSim(box) {
           input[cursor++] = 0;
           continue;
         }
-        const span =
-          spec.id === "footR" || spec.id === "footL"
-            ? config.skill.footSpanMeters
-            : config.body.targetSpanMeters;
-        input[cursor++] = clamp(
-          ((target.x || 0) - measure.partX[index]) / span,
-          -1,
-          1,
-        );
-        input[cursor++] = clamp(
-          ((target.y || 0) - measure.partY[index]) / span,
-          -1,
-          1,
-        );
+        // El normalizador es el span DEL EPISODIO, no el 2 m viejo: con 2 m una orden de
+        // 20 cm entra como 0.1 y la red casi no la ve.
+        const span = targetSpan(spec, target);
+        let ex = (target.x || 0) - measure.partX[index];
+        let ey = (target.y || 0) - measure.partY[index];
+        input[cursor++] = clamp(ex / span, -1, 1);
+        input[cursor++] = clamp(ey / span, -1, 1);
         const targetSin = Math.sin(target.angle || 0);
         const targetCos = Math.cos(target.angle || 0);
         const partSin = measure.partSin[index];
@@ -1127,6 +1372,9 @@ export function createSim(box) {
       const acting = frame % config.cadence.actionEveryNFrames === 0;
       this.measure.targets = episodeTargets(this.options);
       fillMeasure(this.world, this.measure);
+      // No se replantan las marcas aca: se plantan una vez en reset() y quedan congeladas en el
+      // mundo, las cinco. Replantarlas cada frame hacia que las marcas del cuerpo persigan a los
+      // pies, que era lo que hacia saltar el arrastre en el sandbox.
       this.notePose();
       armPlace(this);
       armWalk(this);
@@ -1179,6 +1427,7 @@ export function createSim(box) {
     blendLegs() {
       const add = this.legAdd;
       add.fill(0);
+      if (!config.skill.scriptedLegs) return;
       if (!this.options || (this.options.skill | 0) < 2) return;
       if (!this.placeArmed) return;
       const farMark = Math.abs(this.placeExtra || 0) > 0.18;
@@ -1780,30 +2029,27 @@ export function createSim(box) {
       );
     }
     get fitnessValue() {
-      const end = this.windowMean(true);
+      // EL FITNESS SON SOLO LAS DIEZ FILAS DE LOS TARGETS.
+      //   life  = promedio de las diez filas a lo largo de TODO el episodio
+      //   start = promedio de las mismas diez filas en la primera franja
+      // Pararse no es un termino: cae solo, porque las marcas se plantan con el torso parado y
+      // quedan congeladas en el mundo. Si el torso se va al piso, la cabeza baja a 0.12 m
+      // contra una marca a 1.58 m, y la fila lo castiga sola.
+      // El unico uso del arranque es startHoldShare: cuanto de lo que perdio entre el arranque y
+      // el final se le cobra. No hay ningun termino nuevo, son las mismas diez filas.
+      const life = this.lifeCount ? this.lifeSum / this.lifeCount : 0;
       const start = this.windowMean(false);
-      // El final de 3 s no separa a los que se caen antes. El promedio de todo el episodio sí.
-      const life = this.lifeCount ? this.lifeSum / this.lifeCount : end;
-      const body = this.options.failOnHead ? life : end;
-      let fitness = body - Math.max(0, start - body);
-      if (!this.options.failOnHead) return fitness;
-      if (this.headHit) fitness -= config.reward.headTouch;
-      if (this.motionCount)
-        fitness -= config.reward.motion * (this.motionSum / this.motionCount);
-      const frames = this.frame || 1;
-      fitness += config.reward.upright * (this.uprightSum / frames);
-      fitness += config.reward.alive * (this.stoodFrames / frames);
-      if ((this.options.skill | 0) >= 2) {
-        // Caer, cabeza en el piso, torso abajo, o no volver a los dos pies: por debajo de quedarse quieto.
-        if (this.headHit || this.torsoDown || !this.endedUp) return 0;
-        // Quietos en los dos pies vale 1. El pie que se acercó en el aire, y lo que quedó al final, valen más.
-        const stayed =
-          this.gap0 == null ? 0 : Math.max(0, this.gap0 - this.footGap - 0.01);
-        fitness = 1 + 8 * stayed;
-        if ((this.options.skill | 0) >= 3)
-          fitness += config.reward.step * (this.stepsDone || 0);
-      }
-      return fitness;
+      if (!this.lifeCount) return 0;
+      const hold = config.reward.startHoldShare;
+      // ANTES: (1-hold)*life + hold*min(start, life).
+      //Eso casts una red que MEJORA: min(start, life) es start, o sea que dar un paso con el pie
+      // (que sube el promedio del episodio) te deja el fitness a medio camino de no haber dado el
+      // paso. El nombre es startHoldShare, "lo que se sostiene del arranque", y lo que tiene que
+      // castigar es perder, no ganar. Para el skill de pies eso era la mitad de la senal.
+      // AHORA: se cobra la caída, y mejorar nunca se penaliza.
+      const drop = start > life ? start - life : 0;
+      const blend = hold ? life - hold * drop : life;
+      return config.reward.targetMean * blend;
     }
     get stats() {
       const end = this.windowMean(true);
@@ -1829,6 +2075,13 @@ export function createSim(box) {
         footR: markError(this.measure, targetSlot("footR")).dist,
         alignL: markError(this.measure, targetSlot("footL")).align,
         alignR: markError(this.measure, targetSlot("footR")).align,
+        headMark: markError(this.measure, targetSlot("head")).dist,
+        alignHead: markError(this.measure, targetSlot("head")).align,
+        handLMark: markError(this.measure, targetSlot("handL")).dist,
+        alignHandL: markError(this.measure, targetSlot("handL")).align,
+        handRMark: markError(this.measure, targetSlot("handR")).dist,
+        alignHandR: markError(this.measure, targetSlot("handR")).align,
+        bodyTargets: placedBodyTargets(this.measure),
         alive: this.frame ? this.stoodFrames / this.frame : 0,
         foot:
           (markError(this.measure, targetSlot("footL")).dist +
@@ -1989,11 +2242,14 @@ export function createSim(box) {
 
   return {
     build,
+    destroyWorld,
+    runOneEpisode,
     Episode,
     situation,
     varyStart,
     trainingStarts,
     fillTrainingStart,
+    neutralLocal,
     poseScore,
     spawnThrown,
     destroyThrown,

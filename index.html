@@ -69,9 +69,9 @@
           <button id="pause" title="Starts the search. The doll on screen keeps moving. This choice is remembered when you reopen the page.">Start training</button>
           <button id="restart" title="Throws away this session, including saved networks, and starts from random weights.">Restart from scratch</button>
           <button id="randomWeights" title="Replaces the parent with random weights at the scale of a trained network and shows that network. Training continues from it.">Random weights</button>
-          <label class="ctrl" title="Shows the head mark on the sandbox doll. Training does not use it. Training scores every part near where that part starts."><input id="trainHead" type="checkbox" checked> Head</label>
-          <label class="ctrl" title="Shows both foot marks on the sandbox doll. Training does not use them."><input id="trainFeet" type="checkbox"> Feet</label>
-          <label class="ctrl" title="Shows both hand marks on the sandbox doll. Training does not use them."><input id="trainHands" type="checkbox"> Hands</label>
+          <label class="ctrl" title="Scores the head mark on the sandbox doll. Training places its own head mark and its own gain, see config.targetGains. This box does not change training."><input id="trainHead" type="checkbox" checked> Head</label>
+          <label class="ctrl" title="Scores both foot marks on the sandbox doll. Training places its own foot marks. This box does not change training."><input id="trainFeet" type="checkbox"> Feet</label>
+          <label class="ctrl" title="Scores both hand marks on the sandbox doll. Training places its own hand marks, and since training starts the neck and the wrists are trainable again, those marks are reachable. This box does not change training."><input id="trainHands" type="checkbox"> Hands</label>
           <label class="ctrl" title="How often the best network of the session is kept, when its score beats the previous save.">Save best every
             <select id="snapshotEvery">
               <option value="100" selected>100 generations</option>

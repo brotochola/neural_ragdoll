@@ -27,11 +27,21 @@ function buildLayout() {
   const recurrentBlock = recurrent * recurrentStride;
   const feedbackBase = feedforwardBlock;
   const recurrentBase = feedforwardBlock + feedbackBlock;
+  // Camino directo de las columnas de error de los targets a la salida de cada articulacion.
+  // Sin esto, mover el cuello a la orden de cabeza exige que el error sobreviva a una
+  // compresion 99 -> 50 -> 25 y ademas que la capa de salida lo vuelva a encontrar, todo a
+  // partir de UN solo numero de fitness. Con el atajo, esa relacion lineal se aprende en un paso.
+  const skip = net.skipTargetInputs ? net.targetInputCount : 0;
+  const skipFrom = net.targetInputIndex;
+  const outputStride = 1 + recurrent + skip;
   return {
     inputCount,
     feedforward,
     feedback,
     recurrent,
+    skip,
+    skipFrom,
+    outputStride,
     feedforwardStride,
     feedbackStride,
     recurrentStride,
@@ -55,7 +65,7 @@ export class ElmanNetwork {
   // Pesos de la red actual. Con una sola capa es el mismo empaquetado de antes.
   static get weightCount() {
     const layout = ElmanNetwork.layout;
-    return layout.outputBase + net.jointCount * (layout.recurrent + 1);
+    return layout.outputBase + net.jointCount * layout.outputStride;
   }
 
   // Copia el vector si tiene exactamente ese largo. Si no, null.
@@ -112,6 +122,9 @@ export class ElmanNetwork {
     for (let joint = 0; joint < net.jointCount; joint++) {
       let sum = weights[cursor++];
       for (let unit = 0; unit < layout.recurrent; unit++) sum += weights[cursor++] * this.nextHidden[unit];
+      // Atajo: el error del target entra directo a la articulacion, sin pasar por el
+      //cuello de botella de las capas escondidas.
+      for (let c = 0; c < layout.skip; c++) sum += weights[cursor++] * input[layout.skipFrom + c];
       this.action[joint] = Math.tanh(sum);
     }
     if (cursor !== weights.length) return;
@@ -121,7 +134,21 @@ export class ElmanNetwork {
   }
 }
 
-// 1 si esa articulación de salida se entrena. Cuello y muñecas quedan en 0. Se arma una vez.
+// Deja en cero los pesos del atajo de cada articulacion. Los 14 van entrenables: cuello y
+// muñecas volvieron a la lista, si no las filas de giro de cabeza y manos no se movian.
+export function zeroSkip(weights) {
+  const layout = ElmanNetwork.layout;
+  if (!layout.skip) return weights;
+  for (let joint = 0; joint < net.jointCount; joint++) {
+    const from = layout.outputBase + joint * layout.outputStride + 1 + layout.recurrent;
+    for (let i = 0; i < layout.skip; i++) weights[from + i] = 0;
+  }
+  return weights;
+}
+
+// 1 si esa articulación de salida se entrena. La lista es config.search.trainableJointIndexes.
+// Los 14 van: cuello y muñecas volvieron a la lista, si no las filas de giro de cabeza y manos
+// no tenían forma de moverse. Se arma una vez.
 const limbJoint = new Uint8Array(net.jointCount);
 for (let jointIndex = 0; jointIndex < search.trainableJointIndexes.length; jointIndex++) {
   const joint = search.trainableJointIndexes[jointIndex];
@@ -145,7 +172,7 @@ export function setOutputJoints(indexes) {
 
 // Cuánto ruido le toca a cada peso. El cuerpo casi no se mueve; los miembros y los targets, sí.
 // El ruido grande de los targets y del contacto de la cabeza solo cae en los pesos que multiplican esa entrada.
-// `boost` agranda ese ruido cuando el puntaje no mejora. sigmaCap lo corta. Cuello y muñecas siguen en 0.
+// `boost` agranda ese ruido cuando el puntaje no mejora. sigmaCap lo corta.
 function explorationOf(index, scale, boost) {
   const extra = boost > 0 ? boost : 1;
   let sigma = search.bodyExplorationScale * extra;
@@ -163,9 +190,16 @@ function explorationOf(index, scale, boost) {
       else if (local > net.sensedInputCount && local <= net.inputCount) sigma = net.freshInputExplorationScale * extra;
     }
   } else {
-    const joint = Math.floor((index - layout.outputBase) / (layout.recurrent + 1));
+    const stride = layout.outputStride;
+    const joint = Math.floor((index - layout.outputBase) / stride);
+    const local = (index - layout.outputBase) % stride;
     const allowed = outputJointMask ? outputJointMask[joint] : limbJoint[joint];
-    sigma = allowed ? search.limbExplorationScale * extra : 0;
+    if (!allowed) sigma = 0;
+    // El atajo arranca en cero, asi que necesita un poco mas de ruido que un peso normal
+    // para que el gradiente lo despierte, pero no el ruido grande de los targets: ese le
+    // cambiaba la accion a todas las articulaciones y rompia el equilibrio.
+    else if (local > layout.recurrent) sigma = search.skipExplorationScale * extra;
+    else sigma = search.limbExplorationScale * extra;
   }
   const cap = search.sigmaCap;
   return sigma > 0 && cap > 0 ? Math.min(cap, sigma) : sigma;
@@ -195,6 +229,10 @@ export class EvolutionSearch {
     const outputBase = ElmanNetwork.layout.outputBase;
     for (let i = 0; i < outputBase; i++) parent[i] = randomNormal() * search.hiddenInitScale;
     for (let i = outputBase; i < ElmanNetwork.weightCount; i++) parent[i] = randomNormal() * search.outputInitScale;
+    // El atajo arranca en CERO. Si no, mete 25 x ruido x 14 articulaciones de perturbacion en
+    // la accion desde el genero 0, y el doll se cae siempre: skill 1 dejo de aprender a pararse.
+    // En cero es capacidad extra, no un cambio de comportamiento inicial: crece donde sirve.
+    zeroSkip(parent);
     this.theta = parent;
     this.gen = 0;
     this.hist = [];
@@ -212,6 +250,11 @@ export class EvolutionSearch {
     this.mutationBoost = 1;
     this.mutationFraction = 0;
     this.anchorNote = "";
+    // Cuantas veces cambio el padre. Si esto se queda en cero durante una meseta, la poblacion
+    // esta explorando alrededor de un padre fijo y el promedio no sube de verdad. Hay que mirar
+    // ESTE numero antes de culpar al premio.
+    this.parentMoves = 0;
+    this.parentMoveNote = "";
     const length = ElmanNetwork.weightCount;
     this.sigmaQuiet = new Float32Array(length);
     this.sigmaHot = new Float32Array(length);
@@ -401,12 +444,51 @@ export class EvolutionSearch {
     for (let i = 1; i < values.length; i++) if (values[i] > values[bestIndex]) bestIndex = i;
     this.bestGenTheta.set(generation.weights[bestIndex]);
     this.bestGenScore = values[bestIndex];
-    // El padre solo se reemplaza si un hijo suyo llegó al marcador. Las copias de Best ever no entran acá.
-    const parentBestIndex = order.length ? order[order.length - 1] : -1;
-    if (parentBestIndex >= 0 && values[parentBestIndex] > (this.eliteScore ?? -1e9) && (scores[parentBestIndex].gap ?? search.eliteMissingGapMeters) < search.goalCloseEnoughMeters) {
+    // El padre solo se reemplaza si un hijo SUYO llego al marcador.
+    // OJO: `order` esta ordenado sobre TODOS los hijos, las copias de Best ever incluidas, asi que
+    // el indice del mejor no dice de quien venia. Con bestEverPairs > 0 una copia del record (que es
+    // un promedio de 16 generaciones atras, y de otra escala si el premio cambio) podia terminar
+    // siendo el padre. Por eso el guard exige ademas que el hijo venga del padre. Los pares del
+    // padre son los primeros `count`, o sea los indices [0, count); los del ancla van despues.
+    let parentBestIndex = order.length ? order[order.length - 1] : -1;
+    if (parentBestIndex < (generation.anchorPairs | 0)) parentBestIndex = -1;
+    // La meta es lo que decide si el hijo puede ser padre. OJO: el guard era
+    // (gap ?? 9) < goalCloseEnoughMeters con goalCloseEnoughMeters en -1, y una distancia NUNCA
+    // es menor que -1. O sea la elitancia estaba CERRADA: el padre no cambiaba nunca, y el unico
+    // camino que quedaba era adoptAnchor, que pide 1000 generaciones de meseta. Medido: 400
+    // generaciones de skill 1 y el padre no se movio NI UNA vez. El promedio subia por el paso
+    // de Adam, no por seleccion, y por eso el eval daba 7/20 en la gen 300 y 1/20 en la 400 con
+    // el record subiendo. La elitancia se mide con parentMoves, que ahora va en el log.
+    //
+    // Si la situacion NO tiene meta (los cinco niveles de targets), no hay por que exigir
+    // closeness a nada: se exige solo que le gane al marcador del padre. Si tiene meta, el guard
+    // sigue pidiendo closeness, y ahi goalCloseEnoughMeters tiene que ser una distancia positiva.
+    const row = parentBestIndex >= 0 ? scores[parentBestIndex] || {} : {};
+    const hasGoal = row.goalX != null;
+    const goalGate = row.gap ?? search.eliteMissingGapMeters;
+    const goalOpen = !hasGoal || goalGate < search.goalCloseEnoughMeters;
+    if (
+      parentBestIndex >= 0 &&
+      values[parentBestIndex] > (this.eliteScore ?? -1e9) &&
+      goalOpen
+    ) {
       this.theta.set(generation.weights[parentBestIndex]);
       this.eliteScore = values[parentBestIndex];
+      this.parentMoves++;
+      this.parentMoveNote =
+        (hasGoal ? "elite(meta) " : "elite ") +
+        values[parentBestIndex].toFixed(3) +
+        " gap " + Number(goalGate).toFixed(2);
       this.zeroMoments();
+    } else if (parentBestIndex >= 0) {
+      // Por que no se promocio. "META CERRADA" significa que la situacion tiene meta y el hijo
+      // no llego: eso es correcto. Un padre congelado es lo que hay que mirar.
+      this.parentMoveNote =
+        (goalOpen
+          ? "elite "
+          : "meta " + Number(goalGate).toFixed(2) + " > " + search.goalCloseEnoughMeters + ", ") +
+        "hijo " + values[parentBestIndex].toFixed(3) +
+        " vs elite " + (this.eliteScore ?? -1e9).toFixed(3);
     }
     this.gen++;
     let stoodCount = 0;
@@ -481,6 +563,7 @@ export class EvolutionSearch {
     }
     if (bestIndex < 0) return;
     this.theta.set(generation.weights[bestIndex]);
+    this.parentMoves++;
     this.zeroMoments();
     const source = bestIndex >= thetaChildren ? "best ever child " : "child ";
     this.anchorNote = source + bestValue.toFixed(2) + " became the parent";

@@ -4,7 +4,7 @@ import { config, setTrainingPhase } from "../config.js";
 import { HEADER, TASK_HEADER, STEP_SLOTS, BOX_SLOTS, resultIndex } from "./task-buffer.js";
 
 const sim = createSim(Box2D);
-const world = sim.build();
+let world = null;
 let episode = null;
 const targets = [];
 for (let i = 0; i < config.targets.length; i++) targets.push({ on: false, x: 0, y: 0, angle: 0 });
@@ -110,8 +110,13 @@ onmessage = (event) => {
     const taskIndex = f32[cursor];
     readOptions(f32, cursor);
     const weights = new Float32Array(buffer, (cursor + TASK_HEADER) * 4, weightCount);
-    if (!episode) episode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
-    else episode.reset(weights, options.tilt || 0, options.drop || 0, options);
+    // A FRESH WORLD PER EPISODE. Box2D warm-starts every contact from the impulse it applied
+    // last step, and that cache survives a body transform reset. Reusing one world gave a
+    // different answer depending on how many episodes ran in it before, which made the official
+    // evaluation depend on the worker count.
+    sim.destroyWorld(world);
+    world = sim.build();
+    episode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
     while (!episode.step());
     steps += episode.frame;
     const at = resultIndex(taskCount, weightCount, index);

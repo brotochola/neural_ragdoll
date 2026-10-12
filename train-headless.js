@@ -1,14 +1,15 @@
-// One headless loop: same sim, net, reward, and config as the page.
-// Training ranks the whole episode, plus upright, standing, and assisted-step bonuses. A head touch subtracts config.reward.headTouch and does not abort.
-// Pass/fail is the parent on a fixed held-out set. Skill 1: isStanding for the whole end window.
-// Skill 2: both feet on the marks and still standing. Skill 3: several assisted steps, still standing.
-// Skill 4: past at least one box, still standing. Rates are config.eval.passRate. Official when --eval-n >= config.eval.officialMinN.
+﻿// One headless loop: same sim, net, reward, and config as the page.
+// La escalera ahora es de ORDENES, no de pasos: 1 pararse, 2 la cabeza a la orden que le
+// mandan, 3 las manos, 4 los pies, 5 los cinco a la vez. Un nivel pasa cuando el net esta
+// parado y los targets de ese grupo estan dentro de su tolerancia (5 cm y 0.2 rad).
+// Rates are config.eval.passRate. Official when --eval-n >= config.eval.officialMinN.
 import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { config, setTrainingPhase, setSkill } from './config.js';
+import { isStanding, markError, targetGain } from './src/reward.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,7 +25,7 @@ async function runWorker() {
   const { createSim } = await import('./src/sim.js');
   const { isStanding } = await import('./src/reward.js');
   const sim = createSim(Box2D);
-  const world = sim.build();
+  let world = null;
   parentPort.postMessage({ type: 'ready' });
   parentPort.on('message', (msg) => {
     if (msg.type === 'phase') {
@@ -37,9 +38,14 @@ async function runWorker() {
       parentPort.postMessage({ type: 'scale' });
       return;
     }
+    if (msg.type === 'gains') {
+      Object.assign(config.targetGains, msg.gains || {});
+      parentPort.postMessage({ type: 'gains' });
+      return;
+    }
     if (msg.type !== 'run') return;
     try {
-      const results = msg.jobs.map((job) => runEpisode(sim, world, job, isStanding));
+      const results = msg.jobs.map((job) => runEpisode(sim, job, isStanding));
       parentPort.postMessage({ type: 'done', id: msg.id, results });
     } catch (error) {
       parentPort.postMessage({ type: 'done', id: msg.id, error: String(error && error.stack || error) });
@@ -48,18 +54,30 @@ async function runWorker() {
 }
 
 let workerEpisode = null;
+let workerWorld = null;
 
-function runEpisode(sim, world, job, isStanding) {
+function runEpisode(sim, job, isStanding) {
   const options = job.options || {};
   const weights = job.weights instanceof Float32Array ? job.weights : Float32Array.from(job.weights);
-  if (!workerEpisode) workerEpisode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
-  else workerEpisode.reset(weights, options.tilt || 0, options.drop || 0, options);
+  // A FRESH WORLD PER EPISODE. Box2D warm-starts every contact from the impulse it applied
+  // last step, and that cache survives a body transform reset. Reusing one world gave a
+  // different answer depending on how many episodes ran in it before, which made the official
+  // evaluation depend on the worker count.
+  sim.destroyWorld(workerWorld);
+  workerWorld = sim.build();
+  workerEpisode = new sim.Episode(workerWorld, weights, options.tilt || 0, options.drop || 0, options);
   const startGap = options.goalX == null ? null : Math.abs(options.goalX - (workerEpisode.measure.centerX || 0));
   while (!workerEpisode.step());
   const stats = workerEpisode.stats;
   const measure = workerEpisode.measure;
   const standing = isStanding(measure);
   const headHeight = measure.headHeight || 0;
+  // Error de cada target contra su orden, para poder medir obediencia y no solo "estuvo parado".
+  const errors = {};
+  for (let t = 0; t < config.targets.length; t++) {
+    const error = markError(measure, t);
+    errors[config.targets[t].id] = { dist: error.dist, align: error.align };
+  }
   workerEpisode.cleanup();
   return {
     index: job.index,
@@ -87,6 +105,14 @@ function runEpisode(sim, world, job, isStanding) {
     cleared: stats.cleared || 0,
     alive: stats.alive || 0,
     foot: stats.foot || 0,
+    headMark: stats.headMark,
+    alignHead: stats.alignHead,
+    handLMark: stats.handLMark,
+    alignHandL: stats.alignHandL,
+    handRMark: stats.handRMark,
+    alignHandR: stats.alignHandR,
+    bodyTargets: stats.bodyTargets || 0,
+    errors,
     reach: stats.reach || 0,
     closed: stats.closed || 0,
     leaned: stats.leaned || 0,
@@ -107,6 +133,11 @@ function readArgs() {
     skill: config.skill.level || 1,
     evalOnly: false,
     resetMoments: false,
+    gains: null,
+    residualSearch: null,
+    gateTargets: null,
+    targetMean: null,
+    from: null,
   };
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
@@ -123,6 +154,33 @@ function readArgs() {
     else if (key === '--skill') { out.skill = +val; i++; }
     else if (key === '--eval-only') out.evalOnly = true;
     else if (key === '--reset-moments') out.resetMoments = true;
+    // --gains hand=0.5, o --gains body=0 para sacar cabeza y manos, o feet=0 para los pies.
+    else if (key === '--gains') {
+      const aliases = {
+        head: ['head'],
+        handR: ['handR'],
+        handL: ['handL'],
+        hand: ['handR', 'handL'],
+        footR: ['footR'],
+        footL: ['footL'],
+        foot: ['footR', 'footL'],
+        feet: ['footR', 'footL'],
+        body: ['head', 'handR', 'handL'],
+        all: ['head', 'handR', 'handL', 'footR', 'footL'],
+      };
+      const gains = {};
+      for (const piece of String(val || '').split(',')) {
+        const [name, value] = piece.split('=');
+        const key2 = String(name || '').trim();
+        if (!key2) continue;
+        for (const id of aliases[key2] || [key2]) gains[id] = +value;
+      }
+      out.gains = gains;
+      i++;
+    } else if (key === '--residual-search') out.residualSearch = true;
+    else if (key === '--from') { out.from = val; i++; }
+    else if (key === '--gate-targets') out.gateTargets = true;
+    else if (key === '--target-mean') { out.targetMean = +val; i++; }
   }
   return out;
 }
@@ -151,7 +209,7 @@ function makePool(count) {
         pump();
         return;
       }
-      if (msg.type === 'phase' || msg.type === 'scale') {
+      if (msg.type === 'phase' || msg.type === 'scale' || msg.type === 'gains') {
         if (slot.phaseWait) { const done = slot.phaseWait; slot.phaseWait = null; done(); }
         return;
       }
@@ -195,28 +253,69 @@ function makePool(count) {
       slot.worker.postMessage({ type: 'scale', scale });
     })));
   }
+  function setGains(gains) {
+    return Promise.all(workers.map((slot) => new Promise((resolve) => {
+      slot.phaseWait = resolve;
+      slot.worker.postMessage({ type: 'gains', gains });
+    })));
+  }
   async function stop() {
     await Promise.race([
       Promise.all(workers.map((slot) => Promise.resolve(slot.worker.terminate()).catch(() => {}))),
       new Promise((resolve) => setTimeout(resolve, 2000)),
     ]);
   }
-  return { whenReady, run, setPhase, setScale, stop };
+  return { whenReady, run, setPhase, setScale, setGains, stop };
+}
+
+// Que grupos manda este nivel. 'none' es pararse, 'all' es el examen final.
+function commandGroup(skill) {
+  return config.commands[skill | 0] || 'none';
+}
+
+// Que grupo es cada target. 'hand' son los dos brazos.
+function groupOfId(id) {
+  return id === 'head' ? 'head' : id === 'footR' || id === 'footL' ? 'foot' : 'hand';
+}
+
+// Un target "obedece" si esta dentro de su tolerancia. Las tolerancias son las mismas para
+// los cinco: 8 cm y 0.4 rad. Los que no reciben orden quedan en el neutral, asi que se cumplen
+// solos: la barra de cada nivel es la del grupo nuevo, y 'all' es la de los cinco.
+function obeys(row, spec) {
+  if (!targetGain(spec.id)) return true;
+  const error = row.errors && row.errors[spec.id];
+  if (!error) return false;
+  const useReach = spec.ride ? config.skill.targetReachMeters : config.skill.footReachMeters;
+  const useRadians = spec.ride ? config.skill.targetReachRadians : config.skill.footReachRadians;
+  return error.dist <= useReach && error.align >= Math.cos(useRadians);
 }
 
 function skillPass(skill, row) {
-  const reach = config.skill.footReachMeters;
-  const align = Math.cos(config.skill.footReachRadians);
-  if (skill === 1) return row.windowFrames > 0 && row.windowStood === row.windowFrames;
-  if (skill === 2) {
-    return !!row.stoodUp && row.footL <= reach && row.footR <= reach && row.alignL >= align && row.alignR >= align;
+  const group = commandGroup(skill);
+  if (group === 'none') {
+    // "Parado" es una FRACCION de la ventana final, no los 180 frames sin uno menos. Antes era
+    // windowStood === windowFrames: un solo tropiezo en tres segundos echaba el episodio, y la
+    // barra no media "se para" sino "no parpadea nunca". Ver config.eval.standWindowShare.
+    const frames = row.windowFrames || 0;
+    if (!(frames > 0) || !row.stoodUp) return false;
+    return row.windowStood / frames >= config.eval.standWindowShare;
   }
-  if (skill === 3) return !!row.stoodUp && (row.steps || 0) >= config.skill.walkSteps;
-  return !!row.stoodUp && (row.cleared || 0) >= 1;
+  if (!row.stoodUp) return false;
+  for (const spec of config.targets) {
+    if (group !== 'all' && groupOfId(spec.id) !== group) continue;
+    if (!obeys(row, spec)) return false;
+  }
+  return true;
 }
 
 function skillKey(skill) {
-  return ['', 'stand', 'feet', 'assist', 'boxes'][skill] || 'stand';
+  return ['', 'stand', 'head', 'hand', 'foot', 'all'][skill] || 'stand';
+}
+
+function targetGainText() {
+  return config.targets
+    .map((spec) => spec.id + ' ' + (config.targetGains[spec.id] || 0))
+    .join(' ');
 }
 
 function skillOk(kind, row) {
@@ -248,12 +347,22 @@ function summarize(kind, rows) {
   let impactSum = 0;
   let closed = 0;
   let stanceSum = 0;
+  let headMarkSum = 0;
+  let handMarkSum = 0;
+  let bodySum = 0;
+  let bodyN = 0;
   for (const row of rows) {
     if (row.standing) standing++;
     if (skillOk(kind, row)) ok++;
     headSum += row.headHeight || 0;
     impactSum += row.headImpact || 0;
     stanceSum += row.stance || 0;
+    headMarkSum += row.headMark == null ? 0 : row.headMark;
+    handMarkSum += (row.handLMark || 0) + (row.handRMark || 0);
+    if (row.bodyTargets) {
+      bodySum += row.bodyTargets;
+      bodyN++;
+    }
     if (row.startGap != null && row.endGap < row.startGap - config.eval.walkClosingMeters) closed++;
   }
   const n = rows.length;
@@ -267,6 +376,9 @@ function summarize(kind, rows) {
     meanHead: n ? headSum / n : 0,
     meanImpact: n ? impactSum / n : 0,
     meanStance: n ? stanceSum / n : 0,
+    meanHeadMark: n ? headMarkSum / n : 0,
+    meanHandMark: n ? handMarkSum / (2 * n) : 0,
+    bodyRate: bodyN ? bodySum / bodyN : 0,
     wilsonLow: band[0],
     wilsonHigh: band[1],
   };
@@ -302,6 +414,12 @@ function fmtEval(ev) {
 
 async function runMain() {
   const opts = readArgs();
+  // Los cinco targets: qué peso tiene cada grupo en el premio, y cuánto pesa el grupo entero
+  // en el fitness. Con --gains se prueba un subconjunto sin tocar el archivo.
+  if (opts.gains) Object.assign(config.targetGains, opts.gains);
+  if (opts.residualSearch) config.skill.residualSearch = true;
+  if (opts.gateTargets) config.eval.gateTargets = true;
+  if (opts.targetMean != null && Number.isFinite(opts.targetMean)) config.reward.targetMean = opts.targetMean;
   const backupDir = path.join(root, 'backups');
   fs.mkdirSync(backupDir, { recursive: true });
   const logPath = path.join(backupDir, 'train-log.txt');
@@ -322,6 +440,7 @@ async function runMain() {
   const curve = [];
   const bestFiles = [];
   let logFile = logPath;
+  let reportedParentMoves = 0;
 
   function log(line) {
     console.log(line);
@@ -363,9 +482,12 @@ async function runMain() {
       k: state.k || 0,
       phase: state.phase,
       drill: state.drill || 0,
+      fitnessVersion: config.reward.version,
       bestEverScore: state.bestEverScore,
       bestSmooth: Number.isFinite(state.bestSmooth) ? state.bestSmooth : null,
       eliteScore: state.eliteScore,
+      parentMoves: state.parentMoves || 0,
+      parentMoveNote: state.parentMoveNote || "",
       flatGens: state.flatGens || 0,
       skill: state.skill || 1,
       placeScale: state.placeScale || 0,
@@ -390,6 +512,24 @@ async function runMain() {
   }
 
   function loadPolicy() {
+    // --from carga un checkpoint explicito. Es la via para seguir desde una red que ya
+    // paso una barra, en vez de arrancar de cero o retomar el ultimo train-state.
+    if (opts.from) {
+      const saved = JSON.parse(fs.readFileSync(opts.from, 'utf8'));
+      const raw = saved.theta;
+      const theta = ElmanNetwork.copy(raw);
+      if (!theta) throw new Error(opts.from + ' tiene ' + (raw ? raw.length : 0) + ' pesos, la red pide ' + ElmanNetwork.weightCount);
+      const state = new EvolutionSearch(randomNormal);
+      state.theta = theta;
+      state.bestEverTheta = theta.slice();
+      state.bestGenTheta = theta.slice();
+      state.gen = 0;
+      state.phase = config.curriculum.phases[0].id;
+      state.drill = 0;
+      state.bestEverScore = -1e9;
+      state.eliteScore = -1e9;
+      return { state, source: path.basename(opts.from), rawLength: raw.length };
+    }
     const file = fs.existsSync(path.join(root, 'checkpoint.json')) ? 'checkpoint.json' : 'weights.json';
     const data = JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
     const raw = data.bestTheta || data.theta;
@@ -455,11 +595,29 @@ async function runMain() {
     state.bestEverScore = saved.bestEverScore ?? -1e9;
     if (Number.isFinite(+saved.bestSmooth)) state.bestSmooth = +saved.bestSmooth;
     state.eliteScore = saved.eliteScore ?? -1e9;
+    state.parentMoves = saved.parentMoves || 0;
+    state.parentMoveNote = saved.parentMoveNote || '';
+    reportedParentMoves = state.parentMoves;
     if (Number.isFinite(+saved.flatGens) && +saved.flatGens > 0) state.flatGens = Math.floor(+saved.flatGens);
     state.refreshMutationBoost();
     if (Array.isArray(saved.curve)) curve.push(...saved.curve);
     if (Array.isArray(saved.evalLog)) evalLog.push(...saved.evalLog);
     if (Array.isArray(saved.bestFiles)) bestFiles.push(...saved.bestFiles);
+    // El fitness cambio de escala: un bestEverScore guardado de antes ya no comparable.
+    // Se tira abajo y se vuelve a sembrar, si no el padre nunca supera su propio record.
+    const version = saved.fitnessVersion;
+    if (version !== config.reward.version) {
+      log('fitness version ' + (version == null ? 'sin version' : version) + ' -> ' + config.reward.version
+        + ', record anterior (' + state.bestEverScore + ') no comparable, se vuelve a sembrar');
+      state.bestEverScore = -1e9;
+      state.bestSmooth = null;
+      state.eliteScore = -1e9;
+      state.flatGens = 0;
+      state.reseed = true;
+      state.m.fill(0);
+      state.v.fill(0);
+      state.k = 0;
+    }
     return state;
   }
 
@@ -481,6 +639,13 @@ async function runMain() {
           goalX: side * config.eval.walkGoalMeters,
           goalY: 0,
           shiftX: kind === 'walk' ? 0 : jitter() * config.eval.shiftMeters,
+          // Sin esto el episodio no marca nada y las diez filas del premio quedan mirando el
+          // blueprint, no la pose de arranque. El eval mide igual, pero el fitness salía raro.
+          failOnHead: true,
+          skill: 0,
+          // Marcas planas, sin sortear nada: la lista se arma a mano para no correrse la
+          // secuencia de rand y dejar el mismo set de eval que antes.
+          targets: config.targets.map(() => ({ on: true, x: 0, y: 0, angle: 0, dx: 0, dy: 0, turn: 0 })),
         };
         if (kind === 'supine' || kind === 'prone') {
           const sign = kind === 'prone' ? -1 : 1;
@@ -514,7 +679,10 @@ async function runMain() {
 
   async function oneGeneration(state) {
     const before = state.bestEverScore;
-    const useResidual = (state.skill | 0) >= 2 && state.residualSearch;
+    // residualSearch freezes the main net and only tunes the small leg net. That net reads
+    // twelve hand-built numbers and never sees a target column, so it can never be the one
+    // learning to aim a hand. config.skill.residualSearch turns the old behaviour back on.
+    const useResidual = config.skill.residualSearch && (state.skill | 0) >= 2 && state.residualSearch;
     const generation = useResidual
       ? state.residualSearch.ask(opts.pairs, randomNormal)
       : state.ask(null, opts.pairs, randomNormal);
@@ -522,6 +690,12 @@ async function runMain() {
       level: state.skill | 0,
       shiftMeters: state.shiftMeters || 0,
       full: !(state.shiftMeters > 0),
+      // La RAMPA DE DURACION. Pedirle a la busqueda que aprenda a no caerse durante 6 s desde la
+      // generacion 0 es pedirle un control de equilibrio de 6 s sin ningun peldao. Arranca en
+      // rampStartSeconds y llega a episode.seconds en rampGenerations. El PREMIO no cambia:
+      // siguen siendo las mismas diez filas, solo que sobre un episodio mas corto. El eval
+      // (evaluateSkill) siempre corre el episodio entero.
+      seconds: trainingSeconds(state.gen),
     };
     const jobs = [];
     const trios = [];
@@ -535,7 +709,12 @@ async function runMain() {
           weights: useResidual ? state.theta : generation.weights[child],
           options: Object.assign({}, start, {
             phase: child % config.cadence.actionEveryNFrames,
-            residual: useResidual ? generation.weights[child] : null,
+            // El residual congelado entra igual en train y en eval: si sirve, sirve en los dos.
+            residual: useResidual
+              ? generation.weights[child]
+              : state.residualSearch
+                ? state.residualSearch.theta
+                : null,
           }),
         });
       }
@@ -599,6 +778,14 @@ async function runMain() {
       const file = saveBackup('best-ever', state);
       log('best-ever gen ' + state.gen + ' score ' + state.bestEverScore.toFixed(3) + ' ' + file);
     }
+    // El padre cambio en esta generacion? Si esto dice 0 por un rato largo, la poblacion esta
+    // explorando alrededor de un padre fijo y el promedio sube por ruido, no por aprendizaje.
+    if (state.parentMoves > reportedParentMoves) {
+      log('padre ' + state.parentMoves + ' cambios (ultimo: ' + (state.parentMoveNote || '?') + ')');
+      reportedParentMoves = state.parentMoves;
+    } else if (state.gen % 25 === 0 && state.parentMoves === 0) {
+      log('AVISO: el padre no cambio NUNCA. ' + (state.parentMoveNote || ''));
+    }
     if (state.gen % 100 === 0) saveBackup('parent', state);
   }
 
@@ -628,6 +815,9 @@ async function runMain() {
       gen: state.gen,
       phase: state.phase,
       bestEverScore: state.bestEverScore,
+      parentMoves: state.parentMoves || 0,
+      parentMoveNote: state.parentMoveNote || "",
+      eliteScore: state.eliteScore,
       thresholds: config.eval.passRate,
       evalN: opts.evalN,
       dropMeters,
@@ -637,13 +827,16 @@ async function runMain() {
     }, extra || {}), null, 2));
   }
 
-  function skillJobs(weights, skill, n, placeScale) {
-    const shift = state.shiftMeters || 0;
-    const mode = shift > 0
-      ? { full: false, level: skill, shiftMeters: shift }
-      : placeScale == null
-        ? { full: true, level: skill }
-        : { full: false, level: skill, placeScale, placeAssist: 0 };
+  // El set de eval: mismas semillas para cada nivel, nivel entero, sin la rampa vieja de
+// placeScale. La orden sale de config.commands[skill].
+//
+// secondsHere es lo UNICO que diferencia el eval del entrenamiento: el eval SIEMPRE corre el
+// episodio entero, aunque la rampa de entrenamiento este en 1.5 s. Si el eval acortara el
+// episodio estariamos approveando una red que solo sabe pararse un segundo y medio.
+function skillJobs(weights, skill, n, secondsHere) {
+    const mode = secondsHere > 0
+      ? { full: true, level: skill, seconds: secondsHere }
+      : { full: true, level: skill };
     const jobs = [];
     for (let i = 0; i < n; i++) {
       const rand = makeSeededRandom(config.eval.seed + skill * 10007 + i * 17);
@@ -659,43 +852,18 @@ async function runMain() {
     return jobs;
   }
 
-  function feetOfficial(skill) {
-    return skill !== 2 || !(state.shiftMeters > 0);
+  // La RAMPA DE DURACION. Ver startMode arriba.
+  function trainingSeconds(gen) {
+    const skill = config.skill;
+    const full = config.episode.seconds;
+    const start = skill.rampStartSeconds || 0;
+    const gens = skill.rampGenerations | 0;
+    if (!(start > 0) || !(gens > 0) || gen >= gens) return full;
+    return start + ((full - start) * gen) / gens;
   }
 
-  function keepResidual(latest) {
-    if (!state.residualSearch || (state.skill | 0) !== 2 || !latest) return;
-    const rate = latest.rate || 0;
-    const foot = latest.foot == null ? 1 : latest.foot;
-    const stood = latest.stood == null ? 0 : latest.stood;
-    const better = stood >= 0.9 && (rate > (state.bestFootRate || 0) + 1e-9 || (Math.abs(rate - (state.bestFootRate || 0)) < 1e-9 && foot < (state.bestFootErr || 1) - 0.002));
-    if (better) {
-      state.bestFootRate = rate;
-      state.bestFootErr = foot;
-      state.bestResidual = Array.from(state.residualSearch.theta);
-      log('kept residual ' + rate.toFixed(2) + ' foot ' + foot.toFixed(3));
-    } else if (state.bestResidual && state.bestResidual.length === state.residualSearch.theta.length) {
-      state.residualSearch.theta.set(Float32Array.from(state.bestResidual));
-      state.residualSearch.zeroMoments();
-      log('reverted residual, held was ' + rate.toFixed(2) + ' foot ' + foot.toFixed(3));
-    }
-  }
-
-  function growShift(latest) {
-    if ((state.skill | 0) !== 2 || !(state.shiftMeters > 0)) return false;
-    log('SHIFT ' + state.shiftMeters.toFixed(2) + ' ' + fmtSkill(latest));
-    if (latest.rate + 1e-9 >= config.eval.passRate.feet) {
-      const cur = state.shiftMeters;
-      state.shiftMeters = cur < 0.15 ? 0.18 : cur < 0.21 ? 0.24 : 0;
-      state.residualSearch.zeroMoments();
-      log('shift -> ' + (state.shiftMeters > 0 ? state.shiftMeters.toFixed(2) : 'full'));
-      saveBackup('shift', state, { eval: latest, shiftMeters: cur });
-    }
-    return true;
-  }
-
-  async function evaluateSkill(weights, skill, n, placeScale) {
-    const rows = await pool.run(skillJobs(weights, skill, n, placeScale));
+  async function evaluateSkill(weights, skill, n) {
+    const rows = await pool.run(skillJobs(weights, skill, n, 0));
     if (rows.some((row) => !row || !Number.isFinite(row.fitness))) throw new Error('eval returned an empty score');
     let ok = 0;
     let stood = 0;
@@ -705,6 +873,11 @@ async function runMain() {
     let clearSum = 0;
     let headSum = 0;
     let stanceSum = 0;
+    let headMarkSum = 0;
+    let handMarkSum = 0;
+    let bodySum = 0;
+    let bodyN = 0;
+    const obey = { head: [0, 0], hand: [0, 0], foot: [0, 0] };
     for (const row of rows) {
       if (skillPass(skill, row)) ok++;
       if (row.stoodUp) stood++;
@@ -714,6 +887,21 @@ async function runMain() {
       clearSum += row.cleared || 0;
       headSum += row.headHeight || 0;
       stanceSum += row.stance || 0;
+      headMarkSum += row.headMark == null ? 0 : row.headMark;
+      handMarkSum += ((row.handLMark || 0) + (row.handRMark || 0)) / 2;
+      if (row.bodyTargets) {
+        bodySum += row.bodyTargets;
+        bodyN++;
+      }
+      // Obediencia por grupo: que fraccion de los targets de cada grupo esta en su marca.
+      for (const spec of config.targets) {
+        const group = groupOfId(spec.id);
+        const error = row.errors && row.errors[spec.id];
+        if (!error) continue;
+        const tol = spec.ride ? config.skill.targetReachMeters : config.skill.footReachMeters;
+        obey[group][1]++;
+        if (error.dist <= tol) obey[group][0]++;
+      }
     }
     const count = rows.length;
     return {
@@ -729,6 +917,12 @@ async function runMain() {
       cleared: count ? clearSum / count : 0,
       head: count ? headSum / count : 0,
       stance: count ? stanceSum / count : 0,
+      headMark: count ? headMarkSum / count : 0,
+      handMark: count ? handMarkSum / count : 0,
+      body: bodyN ? bodySum / bodyN : 0,
+      headObey: obey.head[1] ? obey.head[0] / obey.head[1] : 0,
+      handObey: obey.hand[1] ? obey.hand[0] / obey.hand[1] : 0,
+      footObey: obey.foot[1] ? obey.foot[0] / obey.foot[1] : 0,
     };
   }
 
@@ -740,7 +934,12 @@ async function runMain() {
       + ' steps ' + row.steps.toFixed(2)
       + ' boxes ' + row.cleared.toFixed(2)
       + ' head ' + (row.head || 0).toFixed(2)
-      + ' stance ' + (row.stance || 0).toFixed(2);
+      + ' stance ' + (row.stance || 0).toFixed(2)
+      + ' headMark ' + (row.headMark == null ? 0 : row.headMark).toFixed(3)
+      + ' handMark ' + (row.handMark == null ? 0 : row.handMark).toFixed(3)
+      + ' obedece c' + Math.round((row.headObey || 0) * 100)
+      + ' m' + Math.round((row.handObey || 0) * 100)
+      + ' p' + Math.round((row.footObey || 0) * 100);
   }
 
   function skillReached(row) {
@@ -804,20 +1003,24 @@ async function runMain() {
   try {
     log('=== ' + (opts.fresh ? 'fresh' : 'resume') + ' workers ' + opts.workers + ' pairs ' + opts.pairs + ' evalN ' + opts.evalN + ' ===');
     log('thresholds ' + JSON.stringify(config.eval.passRate) + ' dropM ' + dropMeters.toFixed(2) + ' impact<' + config.search.headImpactQuiet + ' walkClose ' + config.eval.walkClosingMeters);
+    log('targets gains ' + targetGainText() + ' targetMean ' + config.reward.targetMean + ' fail ' + config.reward.fail
+      + ' residualSearch ' + (config.skill.residualSearch ? 'on (main net frozen)' : 'off (main net trains)')
+      + ' gateTargets ' + (config.eval.gateTargets ? 'on' : 'off'));
     await Promise.race([
       pool.whenReady(),
       new Promise((_resolve, reject) => setTimeout(() => reject(new Error('workers did not start')), 60000)),
     ]);
+    await pool.setGains(config.targetGains);
     const startedAt = Date.now();
     const timedOut = () => opts.minutes > 0 && Date.now() - startedAt > opts.minutes * 60000;
     if (opts.fresh) {
-      fs.rmSync(statePath, { force: true });
+      if (!opts.from) fs.rmSync(statePath, { force: true });
       setTrainingPhase(config.curriculum.phases[0].id);
       const loaded = loadPolicy();
       state = loaded.state;
       log('loaded ' + loaded.source + ' raw ' + loaded.rawLength + ' padded ' + weightCount);
     } else {
-      state = loadTrainState();
+      state = opts.from ? null : loadTrainState();
       if (!state) {
         const loaded = loadPolicy();
         state = loaded.state;
@@ -828,14 +1031,11 @@ async function runMain() {
     }
     if (!(state.skill > 0)) state.skill = opts.skill || 1;
     setSkill(state.skill);
-    if ((state.skill | 0) === 2) {
-      if (!(state.placeScale > 0)) state.placeScale = config.skill.placeScale || 0.2;
-      config.skill.placeScale = state.placeScale;
-      await pool.setScale(state.placeScale);
-      log('place scale ' + state.placeScale);
-      if (!(state.footRatio > 0)) state.footRatio = 0.97;
-      if (!(state.heldFoot > 0)) state.heldFoot = 0.215;
-      log('foot ratio ' + state.footRatio + ' held foot ' + state.heldFoot);
+    log('skill ' + state.skill + ' (' + skillKey(state.skill) + ') comanda ' + commandGroup(state.skill));
+    if (state.reseed) {
+      state.reseed = false;
+      await seedBest(state);
+      saveTrainState(state);
     }
     if (opts.resetMoments) {
       state.m = new Float32Array(weightCount);
@@ -862,29 +1062,27 @@ async function runMain() {
       writeStatus(state, { baseline });
     }
 
-    for (let skill = state.skill; skill <= 4; skill++) {
+    for (let skill = state.skill; skill <= 5; skill++) {
       state.skill = skill;
       setSkill(skill);
       const gen0 = state.gen;
       let latest = null;
       setOutputJoints(null);
-      if (skill >= 2) {
-        if (!state.residualSearch) {
-          state.residualSearch = new ResidualSearch(randomNormal);
-          state.residualSearch.sigma = 0.04;
-          state.residualSearch.lr = 0.01;
-          if (state.shiftMeters == null) state.shiftMeters = skill === 2 ? 0.12 : 0;
-        }
-        if (skill > 2) state.shiftMeters = 0;
+      // El residual congelado se crea una vez y queda como prior de las piernas. Con la
+      // escalera de ordenes el gait escrito esta apagado, asi que el residual casi no hace
+      // nada: el net maneja las piernas entero.
+      if (skill >= 2 && !state.residualSearch) {
+        state.residualSearch = new ResidualSearch(randomNormal);
         state.residualSearch.sigma = 0.012;
         state.residualSearch.lr = 0.01;
-        if (!state.bestResidual) {
-          state.bestResidual = Array.from(state.residualSearch.theta);
-          state.bestFootRate = 0.55;
-          state.bestFootErr = 0.081;
-        }
+        if (state.shiftMeters == null) state.shiftMeters = 0;
+        if (!state.bestResidual) state.bestResidual = Array.from(state.residualSearch.theta);
       }
-      log('SKILL ' + skill + ' ' + skillKey(skill) + ' start gen ' + state.gen + ' budget ' + opts.gens + ' bar ' + config.eval.passRate[skillKey(skill)] + (state.residualSearch && skill >= 2 ? ' residual ' + state.residualSearch.length + ' shift ' + (state.shiftMeters || 'full') : ''));
+      log('SKILL ' + skill + ' ' + skillKey(skill) + ' comanda ' + commandGroup(skill) +
+        ' start gen ' + state.gen + ' budget ' + opts.gens +
+        ' barra ' + config.eval.passRate[skillKey(skill)] +
+        (config.skill.scriptedLegs ? ' gait escrito ON' : ' gait escrito OFF') +
+        ' gains ' + targetGainText());
       while (state.gen - gen0 < opts.gens && !timedOut()) {
         const tick = Date.now();
         await oneGeneration(state);
@@ -911,37 +1109,16 @@ async function runMain() {
           log('EVAL gen ' + state.gen + ' ' + fmtSkill(latest));
           writeStatus(state, { latest });
           saveTrainState(state);
-          if (skill === 2) keepResidual(latest);
-          if (!feetOfficial(skill)) growShift(latest);
-          else if (skillReached(latest)) break;
-          if (skill === 2 && state.placeScale > 0 && state.placeScale < 0.999) {
-            const scaled = await evaluateSkill(state.theta, skill, opts.evalN, state.placeScale);
-            log('SCALE ' + state.placeScale.toFixed(2) + ' ' + fmtSkill(scaled));
-            if (scaled.rate >= config.eval.passRate.feet) {
-              state.placeScale = Math.min(1, Math.round((state.placeScale + 0.12) * 100) / 100);
-              config.skill.placeScale = state.placeScale;
-              state.m.fill(0);
-              state.v.fill(0);
-              state.k = 0;
-              state.flatGens = 0;
-              state.bestEverScore = -1e9;
-              state.bestSmooth = null;
-              await pool.setScale(state.placeScale);
-              await seedBest(state);
-              log('place scale -> ' + state.placeScale);
-              saveTrainState(state);
-            }
-          }
+          if (skillReached(latest)) break;
         }
       }
-      if (!feetOfficial(skill) || !(latest && skillReached(latest))) {
+      if (!(latest && skillReached(latest))) {
         latest = await evaluateSkill(state.theta, skill, opts.evalN);
         log('FINAL skill ' + skill + ' ' + fmtSkill(latest));
-        if (skill === 2) keepResidual(latest);
-        if (!feetOfficial(skill)) growShift(latest);
       }
       let ever = null;
-      if (feetOfficial(skill) && !skillReached(latest) && !(state.residualSearch && skill >= 2)) {
+      const frozenMain = config.skill.residualSearch && state.residualSearch && skill >= 2;
+      if (!skillReached(latest) && !frozenMain) {
         ever = await evaluateSkill(state.bestEverTheta, skill, opts.evalN);
         log('BESTEVER skill ' + skill + ' ' + fmtSkill(ever));
         if (skillReached(ever)) {
@@ -965,14 +1142,14 @@ async function runMain() {
         bestFiles,
       };
       fs.writeFileSync(path.join(backupDir, 'result.json'), JSON.stringify(result, null, 2));
-      if (!feetOfficial(skill) || !skillReached(latest)) {
-        log('skill ' + skillKey(skill) + ' gate not met' + (feetOfficial(skill) ? '' : ' short shift ' + state.shiftMeters));
+      if (!skillReached(latest)) {
+        log('gate de ' + skillKey(skill) + ' no alcanzado ' + fmtSkill(latest));
         break;
       }
       const file = saveBackup('phase', state, { eval: latest, passed: true, skill });
       log('PASS skill ' + skill + ' ' + skillKey(skill) + ' ' + fmtSkill(latest) + ' ' + file);
-      if (skill === 4) {
-        log('DONE all skills');
+      if (skill === 5) {
+        log('DONE la escalera entera: los cinco targets con orden');
         break;
       }
       state.m = new Float32Array(weightCount);
@@ -992,5 +1169,10 @@ async function runMain() {
     process.exitCode = 1;
   } finally {
     await pool.stop();
+    // Los workers son threads, no procesos: si alguno no llega a terminar mantiene el event
+    // loop vivo y el script no sale nunca. Esto es un CLI, asi que se sale explicito.
+    // El retraso le da a stdout el tiempo de volcar.
+    setTimeout(() => process.exit(process.exitCode || 0), 300);
   }
 }
+

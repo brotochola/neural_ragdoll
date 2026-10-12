@@ -379,13 +379,17 @@ export class NeuralRagDollWorld {
         const groundNow = this.view.groundY || this.app.screen.height * 0.78;
         const point = this.worldPoint(screen.x, screen.y, scaleNow, groundNow);
         const target = this.targets[this.targetDrag.index];
+        const spec = config.targets[this.targetDrag.index];
         if (this.targetDrag.mode === "turn")
           target.angle = Math.atan2(point.y - target.y, point.x - target.x);
         else {
+          // Mundo puro: la marca se queda donde la dejes. No hay offset local que el proximo
+          // frame convierta otra vez, y por eso no "salta" cuando mueves el doll.
           target.x = point.x;
           target.y = point.y;
           target.placed = true;
         }
+        void spec;
         return;
       }
       if (this.drag) {
@@ -821,11 +825,7 @@ export class NeuralRagDollWorld {
       ],
       [
         "Start → end",
-        "Average reward of the parent's children in the first 0.5 s, then in the last 3 s. The light copies of Best ever are not in this average. The fitness is that ending, minus whatever was lost since the start, minus " +
-          config.reward.headTouch +
-          " if the head touched, minus " +
-          config.reward.motion +
-          " times how hard the joints were moving. A child that ends where it began keeps the ending. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.",
+        "Average reward of the parent's children in the first 0.5 s, then in the last 3 s. The light copies of Best ever are not in this average. The reward is only the ten target rows: five positions, five rotations. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.",
         "avg",
       ],
       [
@@ -835,11 +835,7 @@ export class NeuralRagDollWorld {
       ],
       [
         "Best ever",
-        "The 20-generation average fitness, at the last time it reached a new high. The fitness is the ending, minus any drop from the start, minus " +
-          config.reward.headTouch +
-          " if the head touched, minus " +
-          config.reward.motion +
-          " times how hard the joints were moving. Network → Best ever plays the parent from that generation. A single lucky child does not set this.",
+        "The 20-generation average fitness, at the last time it reached a new high. That fitness is only the ten target rows, so its scale is 12 when every mark is hit and -12 when every part is on the floor upside down. Nothing is subtracted: there is no head-touch term, no motion term, no survival term. Network → Best ever plays the parent from that generation. A single lucky child does not set this.",
       ],
       [
         "Plateau",
@@ -864,14 +860,14 @@ export class NeuralRagDollWorld {
       [
         "Mutation",
         config.search.stagnationMutateCap > 0
-          ? "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting. The factor follows the plateau: at " +
+          ? "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. x1 means nobody is scouting. The factor follows the plateau: at " +
             every +
             " generations it becomes x" +
             config.search.stagnationBoost +
             ". Scout noise never passes " +
             config.search.sigmaCap +
-            ". When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average. A scout never does."
-          : "Scout noise is off, so every pair keeps the small noise. Neck and wrists never change. x1 means nobody is scouting. When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average.",
+            ". The weights that read the target columns and the head-contact column always get the larger noise, so the five targets are the first thing the search explores. When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average. A scout never does."
+          : "Scout noise is off, so every pair keeps the small noise. x1 means nobody is scouting. When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average.",
       ],
       [
         "Send",
@@ -902,6 +898,14 @@ export class NeuralRagDollWorld {
       [
         "Milliseconds per frame",
         "How long one physics frame takes while a ragdoll is moving. A frame is one small update of the body. The picture on screen aims for a frame every 16 milliseconds. The workers run faster than that and do not wait.",
+      ],
+      // Al FINAL a proposito: las filas de arriba se llenan por indice, y este dato es nuevo.
+      [
+        "Parent moves",
+        "How many times a child has replaced the parent. READ THIS BEFORE BLAMING THE REWARD. If it stays at 0 the population is exploring around a parent that never improves, the average can still rise from Adam's step, and the network you get back is a random walk. A target level has no goal, so nothing gates the promotion there; a situation that has a goal also needs the child within " +
+          config.search.goalCloseEnoughMeters +
+          " m of it.",
+        "moves",
       ],
     ]);
     this.statusValues = status.values;
@@ -1004,6 +1008,7 @@ export class NeuralRagDollWorld {
       12,
       ragCount ? this.formatRange(frameLow, frameHigh, 2) : pending,
     );
+    this.setStatus(13, String(this.state.parentMoves || 0));
     if (ragCount)
       this.setStatusTip(
         10,
@@ -1110,9 +1115,13 @@ export class NeuralRagDollWorld {
       const label = document.createElement("label");
       label.className = "ctrl target-toggle";
       label.title =
-        "Sandbox mark for " +
-        spec.id +
-        ". This is only the doll on screen. Drag the mark to move it and its tip to rotate it. Training places its own marks near where each part starts.";
+        spec.ride
+          ? "Command for " +
+            spec.id +
+            ". Drag it to tell the doll where you want that part. The mark stays in world coordinates: it goes where you put it and it does NOT follow the torso, so you can see the doll miss it. Its tip sets the angle you want in world terms. In training the mark is planted once and frozen the same way, which is why a fall costs you the head and hand rows."
+          : "Command for " +
+            spec.id +
+            ". Drag it to tell the doll where you want that foot. This one lives on the floor, in world coordinates.";
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = this.targets[index].on;
