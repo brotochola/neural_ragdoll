@@ -1,12 +1,39 @@
-import { CreateMouseJoint, b2MouseJoint_SetTarget, b2DestroyJoint, b2Body_GetPosition, b2Body_GetRotation, b2Rot_GetAngle, b2Vec2, b2World_Draw, b2DebugDraw } from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
+import {
+  CreateMouseJoint,
+  b2MouseJoint_SetTarget,
+  b2DestroyJoint,
+  b2Body_GetPosition,
+  b2Body_GetRotation,
+  b2Rot_GetAngle,
+  b2Vec2,
+  b2World_Draw,
+  b2DebugDraw,
+} from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
 import * as Box2D from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
 import { config } from "./config.js";
 import { scoreDecision, isStanding } from "./src/reward.js";
 import { ElmanNetwork, EvolutionSearch } from "./src/net.js";
-import { clamp, makeSeededRandom, randomNormalSample, rotate, quantizeWeights } from "./src/utils.js";
-import { createSim, observationLabels, jointNames, thrownKinds } from "./src/sim.js";
+import {
+  clamp,
+  makeSeededRandom,
+  randomNormalSample,
+  rotate,
+  quantizeWeights,
+} from "./src/utils.js";
+import {
+  createSim,
+  observationLabels,
+  jointNames,
+  thrownKinds,
+} from "./src/sim.js";
 import { RagDoll2D } from "./src/ragdoll.js";
-import { openStore, loadStored, putSession, syncSnapshots, storeReady } from "./src/session-store.js";
+import {
+  openStore,
+  loadStored,
+  putSession,
+  syncSnapshots,
+  storeReady,
+} from "./src/session-store.js";
 
 const QUAD_X = [-1, 1, 1, -1];
 const QUAD_Y = [-1, -1, 1, 1];
@@ -15,12 +42,13 @@ const GRAPH_ALPHA = [0.06, 0.11, 0.18, 0.3, 0.46, 0.7];
 export class NeuralRagDollWorld {
   constructor() {
     this.start();
+    window.neuralRagDollWorld = this;
   }
 
   async start() {
     this.$ = (id) => document.getElementById(id);
     this.sim = createSim(Box2D);
-    this.sim.setRandom((Date.now() & 0xffff) || 1);
+    this.sim.setRandom(Date.now() & 0xffff || 1);
     this.random = makeSeededRandom(7);
     this.randomNormal = () => randomNormalSample(this.random);
     this.state = await this.openSession();
@@ -32,7 +60,9 @@ export class NeuralRagDollWorld {
     if (this.discardedNetwork) {
       this.saveSession();
       this.clearSnapshots();
-      this.toast("Saved network doesn't match this layout. Starting from scratch.");
+      this.toast(
+        "Saved network doesn't match this layout. Starting from scratch.",
+      );
       this.logEvent("stale network discarded");
     }
     this.point = new b2Vec2(0, 0);
@@ -48,7 +78,13 @@ export class NeuralRagDollWorld {
       this.$("objectKind").appendChild(option);
     }
     this.fillSavedList();
-    this.targets = config.targets.map((item) => ({ on: item.on, x: item.x, y: item.y, angle: item.angle, placed: item.on }));
+    this.targets = config.targets.map((item) => ({
+      on: item.on,
+      x: item.x,
+      y: item.y,
+      angle: item.angle,
+      placed: item.on,
+    }));
     this.targetColors = [0xffd166, 0xff6b6b, 0x7aa2ff, 0x43d9ad, 0xc084fc];
     this.targetDrag = null;
     this.fillTargetToggles();
@@ -70,7 +106,10 @@ export class NeuralRagDollWorld {
       this.postOrchestrator({ type: "pause", paused: this.paused });
       this.logEvent(this.paused ? "training paused" : "training started");
     };
-    window.addEventListener("pagehide", () => { this.saveSession(); this.saveUi(); });
+    window.addEventListener("pagehide", () => {
+      this.saveSession();
+      this.saveUi();
+    });
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") this.saveSession();
     });
@@ -86,7 +125,9 @@ export class NeuralRagDollWorld {
         return;
       }
       try {
-        this.backupDir = await window.showDirectoryPicker({ mode: "readwrite" });
+        this.backupDir = await window.showDirectoryPicker({
+          mode: "readwrite",
+        });
         this.$("saveFolder").textContent = "Folder set";
         this.$("error").textContent = "";
         this.logEvent("save-folder chosen");
@@ -101,11 +142,13 @@ export class NeuralRagDollWorld {
       input.click();
     };
     this.$("loadNetworkFile").onchange = async () => {
-      const file = this.$("loadNetworkFile").files && this.$("loadNetworkFile").files[0];
+      const file =
+        this.$("loadNetworkFile").files && this.$("loadNetworkFile").files[0];
       if (!file) return;
       let data;
-      try { data = JSON.parse(await file.text()); }
-      catch (error) {
+      try {
+        data = JSON.parse(await file.text());
+      } catch (error) {
         this.$("error").textContent = "Could not read that network file.";
         this.logEvent("JSON load failed");
         return;
@@ -115,19 +158,26 @@ export class NeuralRagDollWorld {
         this.freshSearch();
         this.paused = true;
         this.paintPause();
-        this.toast("That file doesn't match this network. Starting from scratch.");
+        this.toast(
+          "That file doesn't match this network. Starting from scratch.",
+        );
         this.logEvent("JSON load failed");
         return;
       }
       const stem = file.name.replace(/\.json$/i, "");
       let hash = "";
-      try { hash = await this.thetaHash8(revived.theta); }
-      catch (error) { hash = ""; }
-      this.visit.loadedLabel = hash && !stem.endsWith(hash) ? stem + " " + hash : stem;
+      try {
+        hash = await this.thetaHash8(revived.theta);
+      } catch (error) {
+        hash = "";
+      }
+      this.visit.loadedLabel =
+        hash && !stem.endsWith(hash) ? stem + " " + hash : stem;
       this.visit.parentName = "";
       this.visit.trained = false;
       if (hash) revived.networkName = this.fileStamp(new Date()) + "_" + hash;
-      if (data && data.role === "best-ever" && !revived.bestEverName) revived.bestEverName = stem;
+      if (data && data.role === "best-ever" && !revived.bestEverName)
+        revived.bestEverName = stem;
       this.state = revived;
       this.backedBestScore = this.state.bestEverScore ?? -1e9;
       this.paused = true;
@@ -150,8 +200,12 @@ export class NeuralRagDollWorld {
       const keptHist = this.state.hist;
       this.state = new EvolutionSearch(this.randomNormal);
       const outputBase = ElmanNetwork.layout.outputBase;
-      for (let i = 0; i < outputBase; i++) this.state.theta[i] = this.randomNormal() * config.search.randomHiddenScale;
-      for (let i = outputBase; i < this.state.theta.length; i++) this.state.theta[i] = this.randomNormal() * config.search.randomOutputScale;
+      for (let i = 0; i < outputBase; i++)
+        this.state.theta[i] =
+          this.randomNormal() * config.search.randomHiddenScale;
+      for (let i = outputBase; i < this.state.theta.length; i++)
+        this.state.theta[i] =
+          this.randomNormal() * config.search.randomOutputScale;
       this.state.bestGenTheta = this.state.theta.slice();
       this.state.bestEverTheta = this.state.theta.slice();
       this.state.gen = keptGen;
@@ -171,7 +225,8 @@ export class NeuralRagDollWorld {
     this.$("log").onclick = () => {
       this.paintLog();
       this.toggleDialog(this.$("logDialog"));
-      if (this.$("logDialog").open) this.$("logBody").scrollTop = this.$("logBody").scrollHeight;
+      if (this.$("logDialog").open)
+        this.$("logBody").scrollTop = this.$("logBody").scrollHeight;
     };
     this.$("logClose").onclick = () => this.$("logDialog").close();
     this.$("graphBtn").onclick = () => {
@@ -179,7 +234,10 @@ export class NeuralRagDollWorld {
       if (dialog.open) dialog.close();
       else {
         dialog.show();
-        requestAnimationFrame(() => { this.drawNetworkGraph(); this.paintNetList(); });
+        requestAnimationFrame(() => {
+          this.drawNetworkGraph();
+          this.paintNetList();
+        });
       }
     };
     this.$("graphClose").onclick = () => this.$("graphDialog").close();
@@ -212,27 +270,56 @@ export class NeuralRagDollWorld {
       this.$("speedValue").textContent = this.$("speed").value + " m/s";
       this.saveUi();
     };
-    for (const id of ["snapshotEvery", "startPose", "viewRays", "viewColliders", "objectKind"]) {
+    for (const id of [
+      "snapshotEvery",
+      "startPose",
+      "viewRays",
+      "viewColliders",
+      "objectKind",
+    ]) {
       this.$(id).addEventListener("change", () => this.saveUi());
     }
 
     this.app = new PIXI.Application();
     this.host = this.$("stage");
-    await this.app.init({ resizeTo: this.host, background: 0x12162a, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+    await this.app.init({
+      resizeTo: this.host,
+      background: 0x12162a,
+      antialias: true,
+      resolution: window.devicePixelRatio || 1,
+      autoDensity: true,
+    });
     this.host.appendChild(this.app.canvas);
     this.graphics = new PIXI.Graphics();
     this.throws = new PIXI.Graphics();
     this.colliders = new PIXI.Graphics();
     this.dollView = new PIXI.Container();
     this.dollView.sortableChildren = true;
-    this.label = new PIXI.Text({ text: "", style: { fill: 0xdfe4ff, fontSize: 13, fontFamily: "system-ui,sans-serif", lineHeight: 18 } });
+    this.label = new PIXI.Text({
+      text: "",
+      style: {
+        fill: 0xdfe4ff,
+        fontSize: 13,
+        fontFamily: "system-ui,sans-serif",
+        lineHeight: 18,
+      },
+    });
     this.label.position.set(12, 10);
-    this.app.stage.addChild(this.graphics, this.dollView, this.throws, this.colliders, this.label);
+    this.app.stage.addChild(
+      this.graphics,
+      this.dollView,
+      this.throws,
+      this.colliders,
+      this.label,
+    );
     this.doll.attachView(this.dollView);
     this.prepareColliderDraw();
     this.resetEpisode();
     for (const id of ["trainHead", "trainFeet", "trainHands"]) {
-      this.$(id).onchange = () => { this.applyTrainGroup(id); this.saveUi(); };
+      this.$(id).onchange = () => {
+        this.applyTrainGroup(id);
+        this.saveUi();
+      };
     }
     this.trainLoop();
 
@@ -259,14 +346,31 @@ export class NeuralRagDollWorld {
         const dx = part.x - point.x;
         const dy = part.y - point.y;
         const distance = dx * dx + dy * dy;
-        if (distance < best && distance < (part.hx + 0.2) ** 2) { best = distance; picked = part; }
+        if (distance < best && distance < (part.hx + 0.2) ** 2) {
+          best = distance;
+          picked = part;
+        }
       }
       if (picked) {
         this.point.x = point.x;
         this.point.y = point.y;
-        const joint = CreateMouseJoint({ worldId: this.world.worldId, bodyIdA: this.world.groundId, bodyIdB: picked.id, target: this.point, hertz: 5, dampingRatio: 0.7, maxForce: 1500 });
-        this.drag = { id: joint.jointId, x: screen.x, y: screen.y, part: picked };
-      } else this.aim = { x0: screen.x, y0: screen.y, x: screen.x, y: screen.y };
+        const joint = CreateMouseJoint({
+          worldId: this.world.worldId,
+          bodyIdA: this.world.groundId,
+          bodyIdB: picked.id,
+          target: this.point,
+          hertz: 5,
+          dampingRatio: 0.7,
+          maxForce: 1500,
+        });
+        this.drag = {
+          id: joint.jointId,
+          x: screen.x,
+          y: screen.y,
+          part: picked,
+        };
+      } else
+        this.aim = { x0: screen.x, y0: screen.y, x: screen.x, y: screen.y };
     });
     this.canvas.addEventListener("pointermove", (event) => {
       const screen = this.screenPoint(event);
@@ -275,7 +379,8 @@ export class NeuralRagDollWorld {
         const groundNow = this.view.groundY || this.app.screen.height * 0.78;
         const point = this.worldPoint(screen.x, screen.y, scaleNow, groundNow);
         const target = this.targets[this.targetDrag.index];
-        if (this.targetDrag.mode === "turn") target.angle = Math.atan2(point.y - target.y, point.x - target.x);
+        if (this.targetDrag.mode === "turn")
+          target.angle = Math.atan2(point.y - target.y, point.x - target.x);
         else {
           target.x = point.x;
           target.y = point.y;
@@ -283,8 +388,14 @@ export class NeuralRagDollWorld {
         }
         return;
       }
-      if (this.drag) { this.drag.x = screen.x; this.drag.y = screen.y; }
-      if (this.aim) { this.aim.x = screen.x; this.aim.y = screen.y; }
+      if (this.drag) {
+        this.drag.x = screen.x;
+        this.drag.y = screen.y;
+      }
+      if (this.aim) {
+        this.aim.x = screen.x;
+        this.aim.y = screen.y;
+      }
     });
     this.canvas.addEventListener("pointerup", () => this.release());
     this.canvas.addEventListener("pointercancel", () => this.release());
@@ -292,7 +403,14 @@ export class NeuralRagDollWorld {
       const side = Math.random() < 0.5 ? -1 : 1;
       const speed = +this.$("speed").value;
       const kind = thrownKinds[+this.$("objectKind").value];
-      const id = this.sim.spawnThrown(this.world, kind, this.episode.measure.centerX + side * 3.5, 1.2, -side * speed, 1.5);
+      const id = this.sim.spawnThrown(
+        this.world,
+        kind,
+        this.episode.measure.centerX + side * 3.5,
+        1.2,
+        -side * speed,
+        1.5,
+      );
       this.objects.push({ id, kind });
     };
 
@@ -312,8 +430,10 @@ export class NeuralRagDollWorld {
     let stepCount = 0;
     while (this.accumulator >= 1000 / config.physics.hz) {
       this.accumulator -= 1000 / config.physics.hz;
-      if (this.hold > 0) { this.hold--; if (!this.hold) this.resetEpisode(); }
-      else {
+      if (this.hold > 0) {
+        this.hold--;
+        if (!this.hold) this.resetEpisode();
+      } else {
         const stepStart = performance.now();
         const ended = this.episode.step();
         stepSum += performance.now() - stepStart;
@@ -330,7 +450,9 @@ export class NeuralRagDollWorld {
     this.view.height = height;
     this.view.scale = scale;
     this.view.groundY = groundY;
-    this.view.cx += ((this.episode.measure.centerX || 0) - this.view.cx) * Math.min(1, ticker.deltaMS / 250);
+    this.view.cx +=
+      ((this.episode.measure.centerX || 0) - this.view.cx) *
+      Math.min(1, ticker.deltaMS / 250);
     if (this.drag) {
       const point = this.worldPoint(this.drag.x, this.drag.y, scale, groundY);
       this.point.x = point.x;
@@ -356,10 +478,32 @@ export class NeuralRagDollWorld {
         this.drawNetworkGraph();
         this.paintNetList();
       }
-      const pose = isStanding(this.episode.measure) ? "standing" : (this.episode.measure.handOn ? "on hands" : (this.episode.measure.bodyOn ? "on the floor" : "in the air"));
+      const pose = isStanding(this.episode.measure)
+        ? "standing"
+        : this.episode.measure.handOn
+          ? "on hands"
+          : this.episode.measure.bodyOn
+            ? "on the floor"
+            : "in the air";
       const hit = this.episode.headHit ? " · head hit" : "";
       this.paintTraining();
-      this.label.text = "Head " + (this.episode.measure.headHeight || 0).toFixed(2) + " m · torso " + (Math.abs(Math.atan2(this.episode.measure.torsoSin || 0, this.episode.measure.torsoCos || 1)) * 180 / Math.PI).toFixed(0) + "° · " + pose + hit;
+      this.label.text =
+        "Head " +
+        (this.episode.measure.headHeight || 0).toFixed(2) +
+        " m · torso " +
+        (
+          (Math.abs(
+            Math.atan2(
+              this.episode.measure.torsoSin || 0,
+              this.episode.measure.torsoCos || 1,
+            ),
+          ) *
+            180) /
+          Math.PI
+        ).toFixed(0) +
+        "° · " +
+        pose +
+        hit;
     }
   }
 
@@ -407,7 +551,10 @@ export class NeuralRagDollWorld {
           corners[k * 2 + 1] = this.toY(y + rot.y);
         }
         throws.poly(corners).fill(thrown.kind.color);
-      } else throws.circle(this.toX(x), this.toY(y), thrown.kind.radius * scale).fill(thrown.kind.color);
+      } else
+        throws
+          .circle(this.toX(x), this.toY(y), thrown.kind.radius * scale)
+          .fill(thrown.kind.color);
     }
   }
 
@@ -425,9 +572,19 @@ export class NeuralRagDollWorld {
     for (let i = 0; i < count; i++) {
       const touched = hit[i] !== 0;
       const distance = gap[i];
-      const color = !touched ? 0x8b93b0 : distance < 0.02 ? 0xff4d5a : distance < 0.35 ? 0xffb020 : 0x3ecf8e;
-      throws.moveTo(this.toX(x0[i]), this.toY(y0[i])).lineTo(this.toX(x1[i]), this.toY(y1[i])).stroke({ width: 1.5, color, alpha: touched ? 0.95 : 0.35 });
-      if (touched) throws.circle(this.toX(x1[i]), this.toY(y1[i]), 3).fill(color);
+      const color = !touched
+        ? 0x8b93b0
+        : distance < 0.02
+          ? 0xff4d5a
+          : distance < 0.35
+            ? 0xffb020
+            : 0x3ecf8e;
+      throws
+        .moveTo(this.toX(x0[i]), this.toY(y0[i]))
+        .lineTo(this.toX(x1[i]), this.toY(y1[i]))
+        .stroke({ width: 1.5, color, alpha: touched ? 0.95 : 0.35 });
+      if (touched)
+        throws.circle(this.toX(x1[i]), this.toY(y1[i]), 3).fill(color);
     }
   }
 
@@ -436,7 +593,9 @@ export class NeuralRagDollWorld {
     this.orchestrator = worker;
     this.epoch = 0;
     worker.onmessage = (event) => this.onOrchestrator(event.data);
-    worker.onerror = () => { this.$("error").textContent = "Could not start training"; };
+    worker.onerror = () => {
+      this.$("error").textContent = "Could not start training";
+    };
     this.pushSearch();
   }
 
@@ -483,7 +642,13 @@ export class NeuralRagDollWorld {
         eliteScore: state.eliteScore,
         hist: state.hist || [],
       },
-      transfer: [theta.buffer, bestGenTheta.buffer, bestEverTheta.buffer, m.buffer, v.buffer],
+      transfer: [
+        theta.buffer,
+        bestGenTheta.buffer,
+        bestEverTheta.buffer,
+        m.buffer,
+        v.buffer,
+      ],
     };
   }
 
@@ -491,14 +656,17 @@ export class NeuralRagDollWorld {
     if (!this.orchestrator || !this.state) return;
     this.epoch = (this.epoch || 0) + 1;
     const sent = this.searchPacket();
-    this.postOrchestrator({
-      type: "replace",
-      epoch: this.epoch,
-      paused: this.paused,
-      phase: config.curriculum.phase,
-      targets: this.targetPacket(),
-      state: sent.packet,
-    }, sent.transfer);
+    this.postOrchestrator(
+      {
+        type: "replace",
+        epoch: this.epoch,
+        paused: this.paused,
+        phase: config.curriculum.phase,
+        targets: this.targetPacket(),
+        state: sent.packet,
+      },
+      sent.transfer,
+    );
   }
 
   onOrchestrator(data) {
@@ -538,8 +706,20 @@ export class NeuralRagDollWorld {
     const finished = state.hist[state.hist.length - 1];
     if (finished) {
       const mut = this.mutationStatus(", ");
-      const began = Number.isFinite(finished.start) ? finished.start.toFixed(2) + " → " : "";
-      this.logEvent("generation finished (gen " + state.gen + ", " + began + finished.mean.toFixed(2) + ", gen best " + finished.best.toFixed(2) + mut + ")");
+      const began = Number.isFinite(finished.start)
+        ? finished.start.toFixed(2) + " → "
+        : "";
+      this.logEvent(
+        "generation finished (gen " +
+          state.gen +
+          ", " +
+          began +
+          finished.mean.toFixed(2) +
+          ", gen best " +
+          finished.best.toFixed(2) +
+          mut +
+          ")",
+      );
     }
     this.rememberBest();
     if (state.gen % config.session.everyGenerations === 0) this.saveSession();
@@ -548,14 +728,20 @@ export class NeuralRagDollWorld {
   savedSnapshot() {
     const generation = this.$("savedNet").value;
     if (!generation) return null;
-    return (this.state.snapshots || []).find((item) => String(item.gen) === generation) || null;
+    return (
+      (this.state.snapshots || []).find(
+        (item) => String(item.gen) === generation,
+      ) || null
+    );
   }
 
   watchedWeights() {
     const saved = this.savedSnapshot();
     if (saved) return saved.weights;
-    if (this.$("watchEver").checked) return this.state.bestEverTheta || this.state.theta;
-    if (this.$("watchGeneration").checked) return this.state.bestGenTheta || this.state.theta;
+    if (this.$("watchEver").checked)
+      return this.state.bestEverTheta || this.state.theta;
+    if (this.$("watchGeneration").checked)
+      return this.state.bestGenTheta || this.state.theta;
     return this.state.theta;
   }
 
@@ -614,27 +800,109 @@ export class NeuralRagDollWorld {
     if (this.statusValues) return;
     const every = config.search.stagnationGenerations;
     const perf = this.fillStats(this.$("perf"), [
-      ["Step", "Milliseconds for one physics step of the doll on screen. This is the main thread, not a worker."],
-      ["Render", "Milliseconds to draw the frame on the main thread, after the physics step. Does not include rewriting this panel."],
-      ["Frame gap", "Milliseconds between frames on the main thread. This is the wait you feel. Step and Render are only the work inside the frame."],
+      [
+        "Step",
+        "Milliseconds for one physics step of the doll on screen. This is the main thread, not a worker.",
+      ],
+      [
+        "Render",
+        "Milliseconds to draw the frame on the main thread, after the physics step. Does not include rewriting this panel.",
+      ],
+      [
+        "Frame gap",
+        "Milliseconds between frames on the main thread. This is the wait you feel. Step and Render are only the work inside the frame.",
+      ],
     ]);
     this.perfValues = perf.values;
     const status = this.fillStats(this.$("status"), [
-      ["Generation", "How many generations have finished. Each generation is a batch of children of the parent, scored on one episode each."],
-      ["Start → end", "Average reward of the parent's children in the first 0.5 s, then in the last 3 s. The light copies of Best ever are not in this average. The fitness is that ending, minus whatever was lost since the start, minus " + config.reward.headTouch + " if the head touched, minus " + config.reward.motion + " times how hard the joints were moving. A child that ends where it began keeps the ending. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.", "avg"],
-      ["Generation best", "Highest fitness among the children, including the light copies of Best ever. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.", "best"],
-      ["Best ever", "The 20-generation average fitness, at the last time it reached a new high. The fitness is the ending, minus any drop from the start, minus " + config.reward.headTouch + " if the head touched, minus " + config.reward.motion + " times how hard the joints were moving. Network → Best ever plays the parent from that generation. A single lucky child does not set this."],
-      ["Plateau", "Generations since the 20-generation average fitness last reached a new high. " + (config.search.stagnationMutateCap > 0 ? "At " + every + ", mutation becomes x" + config.search.stagnationBoost + " for " + Math.round(config.search.stagnationMutateCap * 100) + "% of pairs, and that factor multiplies again every " + every + " generations. " : "Scout noise is off. ") + "One new Best ever removes " + every + " from this count. After " + config.search.revertAfterGenerations + " generations the parent is put back on Best ever and Adam's memory is cleared."],
-      ["Mutation", config.search.stagnationMutateCap > 0
-        ? "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting. The factor follows the plateau: at " + every + " generations it becomes x" + config.search.stagnationBoost + ". Scout noise never passes " + config.search.sigmaCap + ". When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average. A scout never does."
-        : "Scout noise is off, so every pair keeps the small noise. Neck and wrists never change. x1 means nobody is scouting. When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average."],
-      ["Send", "Milliseconds to copy the weight buffers and hand them to the workers. The workers have not started yet.", null, "split"],
-      ["Handoff", "Milliseconds from the handoff until the scores come back, minus the time the worker spent simulating. Waiting and copying, not physics."],
-      ["Tell", "Milliseconds to fold the scores into the parent, on the training worker, after the sim workers finish."],
-      ["Save", "Milliseconds to hand the session to IndexedDB. The weights are copied as binary, not as text."],
-      ["Ragdolls per worker", "How many ragdolls each worker ran in the last generation. A pair is two ragdolls. They share a starting pose and try opposite small changes."],
-      ["Seconds per generation", "How long each worker took to finish every ragdoll it was given, one after another. The workers run at the same time, so a generation lasts about this long."],
-      ["Milliseconds per frame", "How long one physics frame takes while a ragdoll is moving. A frame is one small update of the body. The picture on screen aims for a frame every 16 milliseconds. The workers run faster than that and do not wait."],
+      [
+        "Generation",
+        "How many generations have finished. Each generation is a batch of children of the parent, scored on one episode each.",
+      ],
+      [
+        "Start → end",
+        "Average reward of the parent's children in the first 0.5 s, then in the last 3 s. The light copies of Best ever are not in this average. The fitness is that ending, minus whatever was lost since the start, minus " +
+          config.reward.headTouch +
+          " if the head touched, minus " +
+          config.reward.motion +
+          " times how hard the joints were moving. A child that ends where it began keeps the ending. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.",
+        "avg",
+      ],
+      [
+        "Generation best",
+        "Highest fitness among the children, including the light copies of Best ever. The green line. Network → Best this generation plays that child. The next generation replaces it. This is not Best ever.",
+        "best",
+      ],
+      [
+        "Best ever",
+        "The 20-generation average fitness, at the last time it reached a new high. The fitness is the ending, minus any drop from the start, minus " +
+          config.reward.headTouch +
+          " if the head touched, minus " +
+          config.reward.motion +
+          " times how hard the joints were moving. Network → Best ever plays the parent from that generation. A single lucky child does not set this.",
+      ],
+      [
+        "Plateau",
+        "Generations since the 20-generation average fitness last reached a new high. " +
+          (config.search.stagnationMutateCap > 0
+            ? "At " +
+              every +
+              ", mutation becomes x" +
+              config.search.stagnationBoost +
+              " for " +
+              Math.round(config.search.stagnationMutateCap * 100) +
+              "% of pairs, and that factor multiplies again every " +
+              every +
+              " generations. "
+            : "Scout noise is off. ") +
+          "One new Best ever removes " +
+          every +
+          " from this count. After " +
+          config.search.revertAfterGenerations +
+          " generations the parent is put back on Best ever and Adam's memory is cleared.",
+      ],
+      [
+        "Mutation",
+        config.search.stagnationMutateCap > 0
+          ? "How far the scout children are pushed from the parent, and what share of the pairs get that push. The rest keep the small noise. Neck and wrists never change. x1 means nobody is scouting. The factor follows the plateau: at " +
+            every +
+            " generations it becomes x" +
+            config.search.stagnationBoost +
+            ". Scout noise never passes " +
+            config.search.sigmaCap +
+            ". When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average. A scout never does."
+          : "Scout noise is off, so every pair keeps the small noise. Neck and wrists never change. x1 means nobody is scouting. When a Best ever record exists, the extra pairs are light copies of that network. A copy becomes the parent when it beats the parent average.",
+      ],
+      [
+        "Send",
+        "Milliseconds to copy the weight buffers and hand them to the workers. The workers have not started yet.",
+        null,
+        "split",
+      ],
+      [
+        "Handoff",
+        "Milliseconds from the handoff until the scores come back, minus the time the worker spent simulating. Waiting and copying, not physics.",
+      ],
+      [
+        "Tell",
+        "Milliseconds to fold the scores into the parent, on the training worker, after the sim workers finish.",
+      ],
+      [
+        "Save",
+        "Milliseconds to hand the session to IndexedDB. The weights are copied as binary, not as text.",
+      ],
+      [
+        "Ragdolls per worker",
+        "How many ragdolls each worker ran in the last generation. A pair is two ragdolls. They share a starting pose and try opposite small changes.",
+      ],
+      [
+        "Seconds per generation",
+        "How long each worker took to finish every ragdoll it was given, one after another. The workers run at the same time, so a generation lasts about this long.",
+      ],
+      [
+        "Milliseconds per frame",
+        "How long one physics frame takes while a ragdoll is moving. A frame is one small update of the body. The picture on screen aims for a frame every 16 milliseconds. The workers run faster than that and do not wait.",
+      ],
     ]);
     this.statusValues = status.values;
     this.statusTips = status.tips;
@@ -644,16 +912,34 @@ export class NeuralRagDollWorld {
     this.ensureStatus();
     const last = this.state.hist[this.state.hist.length - 1];
     const ever = this.state.bestEverScore;
-    const everText = Number.isFinite(ever) && ever > -1e8 ? ever.toFixed(2) : "–";
+    const everText =
+      Number.isFinite(ever) && ever > -1e8 ? ever.toFixed(2) : "–";
     const every = config.search.stagnationGenerations;
     const flat = this.state.flatGens || 0;
     const steps = every > 0 && flat >= every ? Math.floor(flat / every) : 0;
-    const pct = steps > 0 && config.search.stagnationMutateCap > 0 ? Math.round(Math.min(1, config.search.stagnationMutateCap) * 100) : 0;
-    const boost = pct > 0 ? Math.min(config.search.stagnationBoostCap, Math.pow(config.search.stagnationBoost, steps)) : 1;
-    const anchor = this.state.anchorPairCount ? this.state.anchorPairCount() : 0;
+    const pct =
+      steps > 0 && config.search.stagnationMutateCap > 0
+        ? Math.round(Math.min(1, config.search.stagnationMutateCap) * 100)
+        : 0;
+    const boost =
+      pct > 0
+        ? Math.min(
+            config.search.stagnationBoostCap,
+            Math.pow(config.search.stagnationBoost, steps),
+          )
+        : 1;
+    const anchor = this.state.anchorPairCount
+      ? this.state.anchorPairCount()
+      : 0;
     const anchorText = anchor > 0 ? " · best ever ×" + anchor : "";
-    const ending = last && Number.isFinite(last.end) ? last.end : last ? last.mean : null;
-    const arrow = !last || !Number.isFinite(ending) ? "–" : Number.isFinite(last.start) ? last.start.toFixed(2) + " → " + ending.toFixed(2) : ending.toFixed(2);
+    const ending =
+      last && Number.isFinite(last.end) ? last.end : last ? last.mean : null;
+    const arrow =
+      !last || !Number.isFinite(ending)
+        ? "–"
+        : Number.isFinite(last.start)
+          ? last.start.toFixed(2) + " → " + ending.toFixed(2)
+          : ending.toFixed(2);
     let handoffLow = Infinity;
     let handoffHigh = -Infinity;
     let handoffCount = 0;
@@ -686,7 +972,9 @@ export class NeuralRagDollWorld {
       if (frame < frameLow) frameLow = frame;
       if (frame > frameHigh) frameHigh = frame;
     }
-    const handoffText = !handoffCount ? "–" : this.formatRange(handoffLow, handoffHigh, 1) + " ms";
+    const handoffText = !handoffCount
+      ? "–"
+      : this.formatRange(handoffLow, handoffHigh, 1) + " ms";
     const pending = "–";
     this.setPerf(0, this.formatMs(this.stepMs));
     this.setPerf(1, this.formatMs(this.renderMs));
@@ -696,19 +984,40 @@ export class NeuralRagDollWorld {
     this.setStatus(2, last ? last.best.toFixed(2) : "–");
     this.setStatus(3, everText);
     this.setStatus(4, flat + " gens");
-    this.setStatus(5, "x" + boost + (pct > 0 ? " · " + pct + "%" : "") + anchorText);
+    this.setStatus(
+      5,
+      "x" + boost + (pct > 0 ? " · " + pct + "%" : "") + anchorText,
+    );
     this.setStatus(6, this.formatMs(this.sendMs));
     this.setStatus(7, handoffText);
     this.setStatus(8, this.formatMs(this.tellMs));
     this.setStatus(9, this.formatMs(this.saveMs));
-    this.setStatus(10, ragCount ? this.formatRange(ragLow, ragHigh, 0) : pending);
-    this.setStatus(11, ragCount ? this.formatRange(secLow, secHigh, 1) : pending);
-    this.setStatus(12, ragCount ? this.formatRange(frameLow, frameHigh, 2) : pending);
-    if (ragCount) this.setStatusTip(10, "How many ragdolls each worker ran in the last generation. There were " + ragTotal + " ragdolls in total, split across " + ragCount + " workers. A pair is two ragdolls. They share a starting pose and try opposite small changes. More pairs means more ragdolls here.");
+    this.setStatus(
+      10,
+      ragCount ? this.formatRange(ragLow, ragHigh, 0) : pending,
+    );
+    this.setStatus(
+      11,
+      ragCount ? this.formatRange(secLow, secHigh, 1) : pending,
+    );
+    this.setStatus(
+      12,
+      ragCount ? this.formatRange(frameLow, frameHigh, 2) : pending,
+    );
+    if (ragCount)
+      this.setStatusTip(
+        10,
+        "How many ragdolls each worker ran in the last generation. There were " +
+          ragTotal +
+          " ragdolls in total, split across " +
+          ragCount +
+          " workers. A pair is two ragdolls. They share a starting pose and try opposite small changes. More pairs means more ragdolls here.",
+      );
   }
   applyTrainGroup(id) {
     const on = this.$(id).checked;
-    const group = id === "trainHead" ? "head" : id === "trainFeet" ? "foot" : "hand";
+    const group =
+      id === "trainHead" ? "head" : id === "trainFeet" ? "foot" : "hand";
     config.targets.forEach((spec, index) => {
       if (!spec.id.startsWith(group)) return;
       const target = this.targets[index];
@@ -739,16 +1048,27 @@ export class NeuralRagDollWorld {
 
   networkTitle() {
     const saved = this.savedSnapshot();
-    if (saved) return saved.name || ("gen " + saved.gen);
+    if (saved) return saved.name || "gen " + saved.gen;
     if (this.$("watchEver").checked) {
-      const gen = Number.isFinite(this.state.bestEverGen) ? this.state.bestEverGen : this.state.gen;
-      return "Best ever, generation " + gen + (this.state.bestEverName ? ", " + this.state.bestEverName : "");
+      const gen = Number.isFinite(this.state.bestEverGen)
+        ? this.state.bestEverGen
+        : this.state.gen;
+      return (
+        "Best ever, generation " +
+        gen +
+        (this.state.bestEverName ? ", " + this.state.bestEverName : "")
+      );
     }
     if (this.$("watchGeneration").checked) {
-      return "Best this generation, generation " + this.state.gen + (this.state.bestGenName ? ", " + this.state.bestGenName : "");
+      return (
+        "Best this generation, generation " +
+        this.state.gen +
+        (this.state.bestGenName ? ", " + this.state.bestGenName : "")
+      );
     }
     if (this.visit.parentName) return this.visit.parentName;
-    if (this.visit.loadedLabel && this.paused && !this.visit.trained) return "Loaded " + this.visit.loadedLabel;
+    if (this.visit.loadedLabel && this.paused && !this.visit.trained)
+      return "Loaded " + this.visit.loadedLabel;
     return "Parent, generation " + this.state.gen;
   }
 
@@ -756,7 +1076,15 @@ export class NeuralRagDollWorld {
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
     const log = this.visit.log;
-    log.push(pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds()) + "  " + line);
+    log.push(
+      pad(now.getHours()) +
+        ":" +
+        pad(now.getMinutes()) +
+        ":" +
+        pad(now.getSeconds()) +
+        "  " +
+        line,
+    );
     if (log.length > 80) log.shift();
     const dialog = this.$("logDialog");
     if (!dialog.open) return;
@@ -766,7 +1094,9 @@ export class NeuralRagDollWorld {
   }
 
   paintLog() {
-    this.$("logBody").textContent = this.visit.log.length ? this.visit.log.join("\n") : "Nothing yet.";
+    this.$("logBody").textContent = this.visit.log.length
+      ? this.visit.log.join("\n")
+      : "Nothing yet.";
   }
 
   toggleDialog(dialog) {
@@ -779,7 +1109,10 @@ export class NeuralRagDollWorld {
     config.targets.forEach((spec, index) => {
       const label = document.createElement("label");
       label.className = "ctrl target-toggle";
-      label.title = "Sandbox mark for " + spec.id + ". This is only the doll on screen. Drag the mark to move it and its tip to rotate it. Training places its own marks near where each part starts.";
+      label.title =
+        "Sandbox mark for " +
+        spec.id +
+        ". This is only the doll on screen. Drag the mark to move it and its tip to rotate it. Training places its own marks near where each part starts.";
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = this.targets[index].on;
@@ -791,7 +1124,10 @@ export class NeuralRagDollWorld {
           const measure = this.episode.measure;
           target.x = measure.partX[part];
           target.y = measure.partY[part];
-          target.angle = Math.atan2(measure.partSin[part], measure.partCos[part]);
+          target.angle = Math.atan2(
+            measure.partSin[part],
+            measure.partCos[part],
+          );
           target.placed = true;
         }
         this.syncTrainBoxes();
@@ -805,7 +1141,8 @@ export class NeuralRagDollWorld {
 
   paintTargetToggles() {
     const inputs = this.$("targetRow").querySelectorAll("input");
-    for (let i = 0; i < inputs.length && i < this.targets.length; i++) inputs[i].checked = !!this.targets[i].on;
+    for (let i = 0; i < inputs.length && i < this.targets.length; i++)
+      inputs[i].checked = !!this.targets[i].on;
   }
 
   pickTarget(point) {
@@ -852,7 +1189,8 @@ export class NeuralRagDollWorld {
     const debug = new b2DebugDraw();
     const skip = () => {};
     for (const key of Object.keys(debug)) {
-      if (typeof debug[key] === "object" && debug[key] === null) debug[key] = skip;
+      if (typeof debug[key] === "object" && debug[key] === null)
+        debug[key] = skip;
     }
     debug.drawShapes = true;
     debug.drawJoints = false;
@@ -868,8 +1206,8 @@ export class NeuralRagDollWorld {
       const dx = x2 - x1;
       const dy = y2 - y1;
       const length = Math.hypot(dx, dy) || 1;
-      const px = -dy / length * pixels;
-      const py = dx / length * pixels;
+      const px = (-dy / length) * pixels;
+      const py = (dx / length) * pixels;
       this.colliders.moveTo(x1 + px, y1 + py).lineTo(x2 + px, y2 + py);
       this.colliders.moveTo(x1 - px, y1 - py).lineTo(x2 - px, y2 - py);
       this.colliders.circle(x1, y1, pixels);
@@ -879,7 +1217,9 @@ export class NeuralRagDollWorld {
     debug.DrawSolidCircle = (transform, radius) => {
       const scale = this.view.scale || 1;
       const point = transform.p || transform;
-      this.colliders.circle(this.toX(point.x), this.toY(point.y), radius * scale).stroke(stroke);
+      this.colliders
+        .circle(this.toX(point.x), this.toY(point.y), radius * scale)
+        .stroke(stroke);
     };
     debug.DrawSolidPolygon = (transform, vertices, count) => {
       if (!transform || !transform.p || !transform.q || count < 3) return;
@@ -915,16 +1255,37 @@ export class NeuralRagDollWorld {
 
   episodeOptions() {
     const pose = this.$("startPose").value;
-    const shared = { frames: 1e9, targets: this.targets, amp: 0, period: 8, phaseShift: 0 };
-    if (pose === "up") return Object.assign(shared, { tilt: (Math.random() * 2 - 1) * 0.1, drop: 0.12, settle: 0 });
+    const shared = {
+      frames: 1e9,
+      targets: this.targets,
+      amp: 0,
+      period: 8,
+      phaseShift: 0,
+    };
+    if (pose === "up")
+      return Object.assign(shared, {
+        tilt: (Math.random() * 2 - 1) * 0.1,
+        drop: 0.12,
+        settle: 0,
+      });
     const sign = pose === "prone" ? -1 : 1;
-    return Object.assign(shared, { tilt: sign * (1.4 + Math.random() * 0.2), drop: 0.04, settle: 40 });
+    return Object.assign(shared, {
+      tilt: sign * (1.4 + Math.random() * 0.2),
+      drop: 0.04,
+      settle: 40,
+    });
   }
 
   resetEpisode() {
     if (this.episode) this.episode.cleanup();
     const options = this.episodeOptions();
-    this.episode = new this.sim.Episode(this.world, this.watchedWeights(), options.tilt, options.drop, options);
+    this.episode = new this.sim.Episode(
+      this.world,
+      this.watchedWeights(),
+      options.tilt,
+      options.drop,
+      options,
+    );
     this.episode.free = true;
     this.hold = 0;
     if (this.$("graphDialog").open) {
@@ -995,7 +1356,10 @@ export class NeuralRagDollWorld {
       this.netRows = null;
       return;
     }
-    if (!this.netRows || this.netRows.length !== input.length + hidden.length + action.length) {
+    if (
+      !this.netRows ||
+      this.netRows.length !== input.length + hidden.length + action.length
+    ) {
       root.textContent = "";
       this.netRows = [];
       const addSection = (title) => {
@@ -1024,9 +1388,21 @@ export class NeuralRagDollWorld {
         addRow(rowLabel.name, rowLabel.tip);
       }
       addSection("Hidden (" + hidden.length + ")");
-      for (let unit = 0; unit < hidden.length; unit++) addRow(String(unit), "Hidden unit " + unit + ". It keeps a fraction of its previous value.");
+      for (let unit = 0; unit < hidden.length; unit++)
+        addRow(
+          String(unit),
+          "Hidden unit " +
+            unit +
+            ". It keeps a fraction of its previous value.",
+        );
       addSection("Outputs");
-      for (let joint = 0; joint < action.length; joint++) addRow(jointNames[joint], "Command to " + jointNames[joint] + ". Positive and negative bend opposite ways.");
+      for (let joint = 0; joint < action.length; joint++)
+        addRow(
+          jointNames[joint],
+          "Command to " +
+            jointNames[joint] +
+            ". Positive and negative bend opposite ways.",
+        );
     }
     let row = 0;
     const paint = (number) => {
@@ -1042,10 +1418,20 @@ export class NeuralRagDollWorld {
   }
 
   observationLabel(index) {
-    return observationLabels[index] || { name: "input " + index, tip: "Observation " + index + "." };
+    return (
+      observationLabels[index] || {
+        name: "input " + index,
+        tip: "Observation " + index + ".",
+      }
+    );
   }
 
-  escapeTip(text) { return String(text).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
+  escapeTip(text) {
+    return String(text)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;");
+  }
 
   paintPause() {
     this.$("pause").textContent = this.paused ? "Start training" : "Pause";
@@ -1076,19 +1462,33 @@ export class NeuralRagDollWorld {
       this.saveUi();
       return;
     }
-    if (this.drag) { b2DestroyJoint(this.drag.id); this.drag = null; }
+    if (this.drag) {
+      b2DestroyJoint(this.drag.id);
+      this.drag = null;
+    }
     if (this.aim) {
       const scale = this.view.scale || 100;
       const groundY = this.view.groundY || this.app.screen.height * 0.78;
       const start = this.worldPoint(this.aim.x0, this.aim.y0, scale, groundY);
-      let vx = (this.aim.x - this.aim.x0) / scale * 5;
-      let vy = -(this.aim.y - this.aim.y0) / scale * 5;
+      let vx = ((this.aim.x - this.aim.x0) / scale) * 5;
+      let vy = (-(this.aim.y - this.aim.y0) / scale) * 5;
       const speed = Math.hypot(vx, vy);
-      if (speed > 25) { vx *= 25 / speed; vy *= 25 / speed; }
+      if (speed > 25) {
+        vx *= 25 / speed;
+        vy *= 25 / speed;
+      }
       const kind = thrownKinds[+this.$("objectKind").value];
-      const id = this.sim.spawnThrown(this.world, kind, start.x, Math.max(start.y, 0.2), vx, vy);
+      const id = this.sim.spawnThrown(
+        this.world,
+        kind,
+        start.x,
+        Math.max(start.y, 0.2),
+        vx,
+        vy,
+      );
       this.objects.push({ id, kind });
-      if (this.objects.length > 15) this.sim.destroyThrown(this.world, this.objects.shift().id);
+      if (this.objects.length > 15)
+        this.sim.destroyThrown(this.world, this.objects.shift().id);
       this.aim = null;
     }
   }
@@ -1097,7 +1497,9 @@ export class NeuralRagDollWorld {
     const boost = this.state.mutationBoost || 1;
     if (!(boost > 1)) return "";
     const pct = Math.round((this.state.mutationFraction || 0) * 100);
-    return (joiner || " · ") + "mut x" + boost + (pct > 0 ? " · " + pct + "%" : "");
+    return (
+      (joiner || " · ") + "mut x" + boost + (pct > 0 ? " · " + pct + "%" : "")
+    );
   }
 
   chartY(value, originY, plot, drawLow, drawHigh, span) {
@@ -1171,7 +1573,7 @@ export class NeuralRagDollWorld {
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.5;
       for (let index = 0; index < count; index++) {
-        const x = 4 + index / (count - 1) * (width - 8);
+        const x = 4 + (index / (count - 1)) * (width - 8);
         const y = this.chartY(yAt(index), 0, plot, drawLow, drawHigh, span);
         if (index) ctx.lineTo(x, y);
         else ctx.moveTo(x, y);
@@ -1179,8 +1581,12 @@ export class NeuralRagDollWorld {
       ctx.stroke();
     };
     if (count >= 2) {
-      strokeLine("#6f95ff", (index) => Number.isFinite(smoothed[index]) ? smoothed[index] : drawLow);
-      strokeLine("#43d9ad", (index) => Number.isFinite(history[index].best) ? history[index].best : drawLow);
+      strokeLine("#6f95ff", (index) =>
+        Number.isFinite(smoothed[index]) ? smoothed[index] : drawLow,
+      );
+      strokeLine("#43d9ad", (index) =>
+        Number.isFinite(history[index].best) ? history[index].best : drawLow,
+      );
     }
     const last = history[history.length - 1];
     const lastSmooth = count ? smoothed[count - 1] : NaN;
@@ -1193,19 +1599,33 @@ export class NeuralRagDollWorld {
     ctx.textAlign = "left";
     ctx.fillStyle = "#6f95ff";
     ctx.fillRect(8, legendY + 2, 8, 8);
-    ctx.fillText("avg" + (Number.isFinite(lastSmooth) ? " " + lastSmooth.toFixed(2) : ""), 20, legendY);
+    ctx.fillText(
+      "avg" + (Number.isFinite(lastSmooth) ? " " + lastSmooth.toFixed(2) : ""),
+      20,
+      legendY,
+    );
     ctx.fillStyle = "#43d9ad";
     ctx.fillRect(width / 2, legendY + 2, 8, 8);
-    ctx.fillText("gen best" + (last ? " " + last.best.toFixed(2) : ""), width / 2 + 12, legendY);
+    ctx.fillText(
+      "gen best" + (last ? " " + last.best.toFixed(2) : ""),
+      width / 2 + 12,
+      legendY,
+    );
   }
 
   graphSlotY(index, count, top, bottom) {
     if (count <= 1) return (top + bottom) / 2;
-    return top + index * (bottom - top) / (count - 1);
+    return top + (index * (bottom - top)) / (count - 1);
   }
 
   ensureGraphBuffers(feedCount, arcCount) {
-    if (this.feedX0 && this.feedX0.length >= feedCount && this.arcX && this.arcX.length >= arcCount) return;
+    if (
+      this.feedX0 &&
+      this.feedX0.length >= feedCount &&
+      this.arcX &&
+      this.arcX.length >= arcCount
+    )
+      return;
     this.feedX0 = new Float32Array(feedCount);
     this.feedY0 = new Float32Array(feedCount);
     this.feedX1 = new Float32Array(feedCount);
@@ -1221,7 +1641,10 @@ export class NeuralRagDollWorld {
   }
 
   graphBucket(weight, source) {
-    const drive = Math.min(1, Math.abs(source || 0) * Math.min(1, Math.abs(weight)));
+    const drive = Math.min(
+      1,
+      Math.abs(source || 0) * Math.min(1, Math.abs(weight)),
+    );
     return Math.min(5, (drive * 6) | 0);
   }
 
@@ -1305,7 +1728,7 @@ export class NeuralRagDollWorld {
     }
   }
 
-drawNetworkGraph() {
+  drawNetworkGraph() {
     const canvas = this.$("graphCanvas");
     const missing = this.$("graphMissing");
     this.$("graphTitle").textContent = this.networkTitle();
@@ -1333,7 +1756,10 @@ drawNetworkGraph() {
     const width = Math.max(320, canvas.clientWidth || 640);
     const height = Math.max(360, canvas.clientHeight || 480);
     const pixelRatio = Math.min(1.5, devicePixelRatio || 1);
-    if (canvas.width !== Math.floor(width * pixelRatio) || canvas.height !== Math.floor(height * pixelRatio)) {
+    if (
+      canvas.width !== Math.floor(width * pixelRatio) ||
+      canvas.height !== Math.floor(height * pixelRatio)
+    ) {
       canvas.width = Math.floor(width * pixelRatio);
       canvas.height = Math.floor(height * pixelRatio);
     }
@@ -1343,7 +1769,11 @@ drawNetworkGraph() {
     context.textBaseline = "middle";
     if (!this.drawNetworkGraph.labelPad) {
       let widest = 72;
-      for (let i = 0; i < config.net.inputCount; i++) widest = Math.max(widest, context.measureText(this.observationLabel(i).name).width);
+      for (let i = 0; i < config.net.inputCount; i++)
+        widest = Math.max(
+          widest,
+          context.measureText(this.observationLabel(i).name).width,
+        );
       this.drawNetworkGraph.labelPad = Math.ceil(widest + 16);
     }
     const left = Math.min(this.drawNetworkGraph.labelPad, width * 0.32);
@@ -1352,12 +1782,45 @@ drawNetworkGraph() {
     const bottom = height - 12;
     if (!this.graphColumns) {
       const built = [
-        { title: "", count: config.net.inputCount, radius: 1.6, align: "right", tag: (i) => this.observationLabel(i).name },
+        {
+          title: "",
+          count: config.net.inputCount,
+          radius: 1.6,
+          align: "right",
+          tag: (i) => this.observationLabel(i).name,
+        },
       ];
-      if (feedforward) built.push({ title: "hidden 1", count: feedforward, radius: 3.5, align: "left", tag: (i) => "a" + i });
-      if (feedbackCount) built.push({ title: "feedback", count: feedbackCount, radius: 3.5, align: "left", tag: (i) => "f" + i });
-      built.push({ title: feedforward ? "hidden 2" : "recurrent dashed", count: recurrent, radius: feedforward ? 3.5 : 5, align: "left", tag: (i) => (feedforward ? "b" : "h") + i });
-      built.push({ title: "", count: joints, x: right, radius: 5, align: "left", tag: (i) => jointNames[i] });
+      if (feedforward)
+        built.push({
+          title: "hidden 1",
+          count: feedforward,
+          radius: 3.5,
+          align: "left",
+          tag: (i) => "a" + i,
+        });
+      if (feedbackCount)
+        built.push({
+          title: "feedback",
+          count: feedbackCount,
+          radius: 3.5,
+          align: "left",
+          tag: (i) => "f" + i,
+        });
+      built.push({
+        title: feedforward ? "hidden 2" : "recurrent dashed",
+        count: recurrent,
+        radius: feedforward ? 3.5 : 5,
+        align: "left",
+        tag: (i) => (feedforward ? "b" : "h") + i,
+      });
+      built.push({
+        title: "",
+        count: joints,
+        x: right,
+        radius: 5,
+        align: "left",
+        tag: (i) => jointNames[i],
+      });
       this.graphColumns = built;
     }
     const columns = this.graphColumns;
@@ -1370,10 +1833,17 @@ drawNetworkGraph() {
     columns[columnCursor].x = right;
     columns[columnCursor].values = outputs;
     const denom = columns.length - 1;
-    for (let i = 1; i < columns.length - 1; i++) columns[i].x = left + (right - left) * i / denom;
-    const yAt = (column, index) => this.graphSlotY(index, column.count, top, bottom);
+    for (let i = 1; i < columns.length - 1; i++)
+      columns[i].x = left + ((right - left) * i) / denom;
+    const yAt = (column, index) =>
+      this.graphSlotY(index, column.count, top, bottom);
     const inputCount = config.net.inputCount;
-    const feedCount = (feedforward ? feedforward * inputCount : 0) + feedbackCount * joints + recurrent * (feedforward ? feedforward : inputCount) + recurrent * feedbackCount + joints * recurrent;
+    const feedCount =
+      (feedforward ? feedforward * inputCount : 0) +
+      feedbackCount * joints +
+      recurrent * (feedforward ? feedforward : inputCount) +
+      recurrent * feedbackCount +
+      joints * recurrent;
     this.ensureGraphBuffers(feedCount, recurrent * recurrent);
     this.feedUsed = 0;
     this.arcUsed = 0;
@@ -1387,7 +1857,14 @@ drawNetworkGraph() {
         const base = unit * layout.feedforwardStride;
         const hiddenY = yAt(firstColumn, unit);
         for (let i = 0; i < config.net.inputCount; i++) {
-          this.pushWire(weights[base + 1 + i], inputs && inputs[i], inputColumn.x, yAt(inputColumn, i), firstColumn.x, hiddenY);
+          this.pushWire(
+            weights[base + 1 + i],
+            inputs && inputs[i],
+            inputColumn.x,
+            yAt(inputColumn, i),
+            firstColumn.x,
+            hiddenY,
+          );
         }
       }
     }
@@ -1396,7 +1873,14 @@ drawNetworkGraph() {
         const base = layout.feedbackBase + unit * layout.feedbackStride;
         const feedbackY = yAt(feedbackColumn, unit);
         for (let joint = 0; joint < joints; joint++) {
-          this.pushWire(weights[base + 1 + joint], feedbackFrom && feedbackFrom[joint], jointColumn.x, yAt(jointColumn, joint), feedbackColumn.x, feedbackY);
+          this.pushWire(
+            weights[base + 1 + joint],
+            feedbackFrom && feedbackFrom[joint],
+            jointColumn.x,
+            yAt(jointColumn, joint),
+            feedbackColumn.x,
+            feedbackY,
+          );
         }
       }
     }
@@ -1406,34 +1890,71 @@ drawNetworkGraph() {
       let offset = 1;
       if (feedforward) {
         for (let i = 0; i < feedforward; i++) {
-          this.pushWire(weights[base + offset + i], firstAct && firstAct[i], firstColumn.x, yAt(firstColumn, i), memoryColumn.x, hiddenY);
+          this.pushWire(
+            weights[base + offset + i],
+            firstAct && firstAct[i],
+            firstColumn.x,
+            yAt(firstColumn, i),
+            memoryColumn.x,
+            hiddenY,
+          );
         }
         offset += feedforward;
       } else {
         for (let i = 0; i < config.net.inputCount; i++) {
-          this.pushWire(weights[base + offset + i], inputs && inputs[i], inputColumn.x, yAt(inputColumn, i), memoryColumn.x, hiddenY);
+          this.pushWire(
+            weights[base + offset + i],
+            inputs && inputs[i],
+            inputColumn.x,
+            yAt(inputColumn, i),
+            memoryColumn.x,
+            hiddenY,
+          );
         }
         offset += config.net.inputCount;
       }
       for (let i = 0; i < feedbackCount; i++) {
-        this.pushWire(weights[base + offset + i], feedbackAct && feedbackAct[i], feedbackColumn.x, yAt(feedbackColumn, i), memoryColumn.x, hiddenY);
+        this.pushWire(
+          weights[base + offset + i],
+          feedbackAct && feedbackAct[i],
+          feedbackColumn.x,
+          yAt(feedbackColumn, i),
+          memoryColumn.x,
+          hiddenY,
+        );
       }
       offset += feedbackCount;
       for (let other = 0; other < recurrent; other++) {
-        this.pushArc(weights[base + offset + other], memoryAct && memoryAct[other], memoryColumn.x, yAt(memoryColumn, other), hiddenY, other === unit);
+        this.pushArc(
+          weights[base + offset + other],
+          memoryAct && memoryAct[other],
+          memoryColumn.x,
+          yAt(memoryColumn, other),
+          hiddenY,
+          other === unit,
+        );
       }
     }
     for (let joint = 0; joint < joints; joint++) {
       const base = layout.outputBase + joint * (recurrent + 1);
       for (let unit = 0; unit < recurrent; unit++) {
-        this.pushWire(weights[base + 1 + unit], memoryAct && memoryAct[unit], memoryColumn.x, yAt(memoryColumn, unit), jointColumn.x, yAt(jointColumn, joint));
+        this.pushWire(
+          weights[base + 1 + unit],
+          memoryAct && memoryAct[unit],
+          memoryColumn.x,
+          yAt(memoryColumn, unit),
+          jointColumn.x,
+          yAt(jointColumn, joint),
+        );
       }
     }
     this.strokeGraph(context);
     const fillOf = (value) => {
       const mag = Math.min(1, Math.abs(value || 0));
       const alpha = 0.18 + 0.82 * mag;
-      return (value || 0) >= 0 ? "rgba(62,207,142," + alpha + ")" : "rgba(255,77,90," + alpha + ")";
+      return (value || 0) >= 0
+        ? "rgba(62,207,142," + alpha + ")"
+        : "rgba(255,77,90," + alpha + ")";
     };
     const dot = (x, y, radius, value) => {
       context.fillStyle = fillOf(value);
@@ -1442,29 +1963,41 @@ drawNetworkGraph() {
       context.fill();
     };
     for (const column of columns) {
-      for (let index = 0; index < column.count; index++) dot(column.x, yAt(column, index), column.radius, column.values && column.values[index]);
+      for (let index = 0; index < column.count; index++)
+        dot(
+          column.x,
+          yAt(column, index),
+          column.radius,
+          column.values && column.values[index],
+        );
     }
     const tag = (text, x, y, align) => {
       context.textAlign = align;
       const box = context.measureText(text).width;
-      const boxX = align === "right" ? x - box : align === "center" ? x - box / 2 : x;
+      const boxX =
+        align === "right" ? x - box : align === "center" ? x - box / 2 : x;
       context.fillStyle = "#12162a";
       context.fillRect(boxX - 2, y - 7, box + 4, 14);
       context.fillStyle = "#e7e9f5";
       context.fillText(text, x, y);
     };
-    for (const column of columns) if (column.title) tag(column.title, column.x, 11, "center");
+    for (const column of columns)
+      if (column.title) tag(column.title, column.x, 11, "center");
     const labeled = this.graphLabeled || (this.graphLabeled = []);
     const usedY = this.graphUsedY || (this.graphUsedY = []);
     labeled.length = 0;
     usedY.length = 0;
     const place = (index) => {
       const y = yAt(inputColumn, index);
-      for (let k = 0; k < usedY.length; k++) if (Math.abs(usedY[k] - y) < 12) return;
+      for (let k = 0; k < usedY.length; k++)
+        if (Math.abs(usedY[k] - y) < 12) return;
       usedY.push(y);
       labeled.push(index);
     };
-    const labelStep = Math.max(4, Math.ceil(config.net.inputCount / Math.max(6, ((bottom - top) / 15) | 0)));
+    const labelStep = Math.max(
+      4,
+      Math.ceil(config.net.inputCount / Math.max(6, ((bottom - top) / 15) | 0)),
+    );
     for (let i = 0; i < config.net.inputCount; i += labelStep) place(i);
     place(config.net.inputCount - 1);
     if (inputs && inputs.length) {
@@ -1474,7 +2007,9 @@ drawNetworkGraph() {
         for (let i = 0; i < config.net.inputCount; i++) rank.push(i);
         this.graphRank = rank;
         const self = this;
-        this.compareAbsInput = (a, b) => Math.abs(self.graphInputs[b] || 0) - Math.abs(self.graphInputs[a] || 0);
+        this.compareAbsInput = (a, b) =>
+          Math.abs(self.graphInputs[b] || 0) -
+          Math.abs(self.graphInputs[a] || 0);
       } else {
         for (let i = 0; i < rank.length; i++) rank[i] = i;
       }
@@ -1482,15 +2017,25 @@ drawNetworkGraph() {
       rank.sort(this.compareAbsInput);
       for (let k = 0; k < 8 && k < rank.length; k++) place(rank[k]);
     }
-    for (const index of labeled) tag(inputColumn.tag(index), inputColumn.x - 8, yAt(inputColumn, index), "right");
+    for (const index of labeled)
+      tag(
+        inputColumn.tag(index),
+        inputColumn.x - 8,
+        yAt(inputColumn, index),
+        "right",
+      );
     const seen = this.graphSeen || (this.graphSeen = []);
     for (let columnIndex = 1; columnIndex < columns.length; columnIndex++) {
       const column = columns[columnIndex];
       seen.length = 0;
-      const step = Math.max(1, Math.ceil(column.count / Math.max(6, (bottom - top) / 15)));
+      const step = Math.max(
+        1,
+        Math.ceil(column.count / Math.max(6, (bottom - top) / 15)),
+      );
       const keep = (index) => {
         const y = yAt(column, index);
-        for (let k = 0; k < seen.length; k++) if (Math.abs(seen[k] - y) < 12) return;
+        for (let k = 0; k < seen.length; k++)
+          if (Math.abs(seen[k] - y) < 12) return;
         seen.push(y);
         const gap = column.align === "right" ? -8 : 8;
         tag(column.tag(index), column.x + gap, y, column.align);
@@ -1502,21 +2047,39 @@ drawNetworkGraph() {
 
   fileStamp(date) {
     const pad = (n) => String(n).padStart(2, "0");
-    return date.getFullYear() + pad(date.getMonth() + 1) + pad(date.getDate()) + "-" + pad(date.getHours()) + pad(date.getMinutes()) + pad(date.getSeconds());
+    return (
+      date.getFullYear() +
+      pad(date.getMonth() + 1) +
+      pad(date.getDate()) +
+      "-" +
+      pad(date.getHours()) +
+      pad(date.getMinutes()) +
+      pad(date.getSeconds())
+    );
   }
 
   async thetaHash8(weights) {
     const packed = JSON.stringify(quantizeWeights(weights));
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(packed));
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 8);
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(packed),
+    );
+    return Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    )
+      .join("")
+      .slice(0, 8);
   }
 
   async freeStem(hash) {
     let when = new Date();
     for (let n = 0; n < 5; n++) {
       const stem = this.fileStamp(when) + "_" + hash;
-      try { await this.backupDir.getFileHandle(stem + ".json"); }
-      catch (error) { return stem; }
+      try {
+        await this.backupDir.getFileHandle(stem + ".json");
+      } catch (error) {
+        return stem;
+      }
       when = new Date(when.getTime() + 1000);
     }
     return this.fileStamp(new Date()) + "_" + hash;
@@ -1529,7 +2092,7 @@ drawNetworkGraph() {
       gen: this.state.gen,
       bestEverScore: this.state.bestEverScore,
       bestEverGen: this.state.bestEverGen || 0,
-      bestEverName: role === "best-ever" ? stem : (this.state.bestEverName || ""),
+      bestEverName: role === "best-ever" ? stem : this.state.bestEverName || "",
       trainingPhase: config.curriculum.phase,
       inputCount: config.net.inputCount,
       theta: quantizeWeights(this.state.theta),
@@ -1538,7 +2101,8 @@ drawNetworkGraph() {
   }
 
   async writeBackup(role) {
-    const weights = role === "best-ever" ? this.state.bestEverTheta : this.state.theta;
+    const weights =
+      role === "best-ever" ? this.state.bestEverTheta : this.state.theta;
     if (!weights || !this.backupDir) return "";
     try {
       const hash = await this.thetaHash8(weights);
@@ -1552,7 +2116,9 @@ drawNetworkGraph() {
       await writable.close();
       this.logEvent("JSON saved (" + file + ")");
       return stem;
-    } catch (error) { return ""; }
+    } catch (error) {
+      return "";
+    }
   }
 
   async rememberBest() {
@@ -1594,12 +2160,19 @@ drawNetworkGraph() {
     for (const item of this.state.snapshots || []) {
       const option = document.createElement("option");
       option.value = String(item.gen);
-      option.textContent = "gen " + item.gen + " · " + Number(item.score).toFixed(2);
+      option.textContent =
+        "gen " + item.gen + " · " + Number(item.score).toFixed(2);
       select.appendChild(option);
     }
     const keep = [...select.options].some((option) => option.value === current);
     select.value = keep ? current : "";
-    if (current && !keep && !this.$("watchParent").checked && !this.$("watchGeneration").checked && !this.$("watchEver").checked) {
+    if (
+      current &&
+      !keep &&
+      !this.$("watchParent").checked &&
+      !this.$("watchGeneration").checked &&
+      !this.$("watchEver").checked
+    ) {
       this.$("watchParent").checked = true;
     }
   }
@@ -1622,7 +2195,9 @@ drawNetworkGraph() {
       k: state.k || 0,
       bestEverScore: state.bestEverScore,
       bestEverName: state.bestEverName || "",
-      bestEverGen: Number.isFinite(state.bestEverGen) ? state.bestEverGen : null,
+      bestEverGen: Number.isFinite(state.bestEverGen)
+        ? state.bestEverGen
+        : null,
       networkName: state.networkName || "",
       eliteScore: state.eliteScore,
       flatGens: state.flatGens || 0,
@@ -1644,21 +2219,30 @@ drawNetworkGraph() {
     this.sessionWriting = true;
     const started = performance.now();
     let pending;
-    try { pending = putSession(this.sessionRecord()); }
-    catch (error) {
+    try {
+      pending = putSession(this.sessionRecord());
+    } catch (error) {
       this.sessionWriting = false;
       return;
     }
     this.saveMs = performance.now() - started;
-    pending.then(() => {}, () => {}).then(() => {
-      this.sessionWriting = false;
-      if (this.sessionDirty) this.flushSession();
-    });
+    pending
+      .then(
+        () => {},
+        () => {},
+      )
+      .then(() => {
+        this.sessionWriting = false;
+        if (this.sessionDirty) this.flushSession();
+      });
   }
 
   syncSnapshotStore() {
     if (!storeReady() || !this.state) return Promise.resolve();
-    return syncSnapshots(this.state.snapshots || []).then(() => {}, () => {});
+    return syncSnapshots(this.state.snapshots || []).then(
+      () => {},
+      () => {},
+    );
   }
 
   clearSnapshots() {
@@ -1666,19 +2250,28 @@ drawNetworkGraph() {
   }
 
   async openSession() {
-    try { await openStore(); }
-    catch (error) { return new EvolutionSearch(this.randomNormal); }
+    try {
+      await openStore();
+    } catch (error) {
+      return new EvolutionSearch(this.randomNormal);
+    }
     let stored = null;
-    try { stored = await loadStored(); }
-    catch (error) { stored = null; }
+    try {
+      stored = await loadStored();
+    } catch (error) {
+      stored = null;
+    }
     if (stored && stored.session && stored.session.theta) {
       const revived = this.stateFromPacket(stored.session, stored.snapshots);
       if (revived) return revived;
       this.discardedNetwork = true;
     }
     let legacy = null;
-    try { legacy = JSON.parse(localStorage.getItem("ragdoll-panel") || "null"); }
-    catch (error) { legacy = null; }
+    try {
+      legacy = JSON.parse(localStorage.getItem("ragdoll-panel") || "null");
+    } catch (error) {
+      legacy = null;
+    }
     if (legacy && legacy.theta) {
       const revived = this.stateFromPacket(legacy, legacy.snapshots);
       if (revived) {
@@ -1699,7 +2292,9 @@ drawNetworkGraph() {
     el.hidden = false;
     el.textContent = message;
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
+    this.toastTimer = setTimeout(() => {
+      el.hidden = true;
+    }, 5000);
   }
 
   freshSearch() {
@@ -1721,40 +2316,63 @@ drawNetworkGraph() {
 
   takeWeights(source) {
     const length = ElmanNetwork.weightCount;
-    if (source instanceof Float32Array && source.length === length) return source;
+    if (source instanceof Float32Array && source.length === length)
+      return source;
     return ElmanNetwork.copy(source);
   }
 
   saveUi() {
     try {
-      const watch = this.$("watchEver").checked ? "ever" : this.$("watchGeneration").checked ? "gen" : "parent";
-      localStorage.setItem("ragdoll-ui", JSON.stringify({
-        paused: this.paused,
-        snapshotEvery: this.$("snapshotEvery").value,
-        watch,
-        savedNet: this.$("savedNet").value,
-        startPose: this.$("startPose").value,
-        viewRays: this.$("viewRays").checked,
-        viewColliders: this.$("viewColliders").checked,
-        objectKind: this.$("objectKind").value,
-        speed: this.$("speed").value,
-        phaseStartGen: this.phaseStartGen,
-        curriculumPhase: config.curriculum.phase,
-        targets: this.targets.map((item) => ({ on: !!item.on, x: item.x, y: item.y, angle: item.angle, placed: !!item.placed })),
-      }));
-    } catch (error) { /* settings are small; a quota error still leaves the run going */ }
+      const watch = this.$("watchEver").checked
+        ? "ever"
+        : this.$("watchGeneration").checked
+          ? "gen"
+          : "parent";
+      localStorage.setItem(
+        "ragdoll-ui",
+        JSON.stringify({
+          paused: this.paused,
+          snapshotEvery: this.$("snapshotEvery").value,
+          watch,
+          savedNet: this.$("savedNet").value,
+          startPose: this.$("startPose").value,
+          viewRays: this.$("viewRays").checked,
+          viewColliders: this.$("viewColliders").checked,
+          objectKind: this.$("objectKind").value,
+          speed: this.$("speed").value,
+          phaseStartGen: this.phaseStartGen,
+          curriculumPhase: config.curriculum.phase,
+          targets: this.targets.map((item) => ({
+            on: !!item.on,
+            x: item.x,
+            y: item.y,
+            angle: item.angle,
+            placed: !!item.placed,
+          })),
+        }),
+      );
+    } catch (error) {
+      /* settings are small; a quota error still leaves the run going */
+    }
   }
 
   restoreUi() {
     let saved;
-    try { saved = JSON.parse(localStorage.getItem("ragdoll-ui") || "null"); }
-    catch (error) { return; }
+    try {
+      saved = JSON.parse(localStorage.getItem("ragdoll-ui") || "null");
+    } catch (error) {
+      return;
+    }
     if (!saved) return;
     const pick = (id, value) => {
       if (value == null || value === "") return;
       const el = this.$(id);
       const text = String(value);
-      if (el.options && ![...el.options].some((option) => option.value === text)) return;
+      if (
+        el.options &&
+        ![...el.options].some((option) => option.value === text)
+      )
+        return;
       el.value = text;
     };
     pick("snapshotEvery", saved.snapshotEvery);
@@ -1779,7 +2397,8 @@ drawNetworkGraph() {
       this.paintTargetToggles();
       this.syncTrainBoxes();
     }
-    this.$("watchParent").checked = saved.watch !== "gen" && saved.watch !== "ever";
+    this.$("watchParent").checked =
+      saved.watch !== "gen" && saved.watch !== "ever";
     this.$("watchGeneration").checked = saved.watch === "gen";
     this.$("watchEver").checked = saved.watch === "ever";
     if (saved.savedNet) {
@@ -1803,65 +2422,117 @@ drawNetworkGraph() {
     if (!parent) return null;
     const revived = new EvolutionSearch(this.randomNormal);
     revived.theta = parent;
-    revived.bestEverTheta = (!rawArray && ElmanNetwork.copy(packet.bestEverTheta)) || parent.slice();
-    revived.bestGenTheta = (!rawArray && ElmanNetwork.copy(packet.bestGenTheta)) || parent.slice();
+    revived.bestEverTheta =
+      (!rawArray && ElmanNetwork.copy(packet.bestEverTheta)) || parent.slice();
+    revived.bestGenTheta =
+      (!rawArray && ElmanNetwork.copy(packet.bestGenTheta)) || parent.slice();
     revived.m = new Float32Array(parent.length);
     revived.v = new Float32Array(parent.length);
     revived.k = 0;
     if (rawArray) return revived;
-    if (Number.isFinite(+packet.gen) && +packet.gen >= 0) revived.gen = Math.floor(+packet.gen);
-    if (Number.isFinite(+packet.bestEverScore)) revived.bestEverScore = +packet.bestEverScore;
-    if (typeof packet.bestEverName === "string") revived.bestEverName = packet.bestEverName.replace(/\.json$/i, "");
-    if (Number.isFinite(+packet.bestEverGen) && +packet.bestEverGen >= 0) revived.bestEverGen = Math.floor(+packet.bestEverGen);
-    if (typeof packet.name === "string") revived.networkName = packet.name.replace(/\.json$/i, "");
-    if (Number.isFinite(+packet.eliteScore)) revived.eliteScore = +packet.eliteScore;
-    if (Number.isFinite(+packet.bestSmooth)) revived.bestSmooth = +packet.bestSmooth;
+    if (Number.isFinite(+packet.gen) && +packet.gen >= 0)
+      revived.gen = Math.floor(+packet.gen);
+    if (Number.isFinite(+packet.bestEverScore))
+      revived.bestEverScore = +packet.bestEverScore;
+    if (typeof packet.bestEverName === "string")
+      revived.bestEverName = packet.bestEverName.replace(/\.json$/i, "");
+    if (Number.isFinite(+packet.bestEverGen) && +packet.bestEverGen >= 0)
+      revived.bestEverGen = Math.floor(+packet.bestEverGen);
+    if (typeof packet.name === "string")
+      revived.networkName = packet.name.replace(/\.json$/i, "");
+    if (Number.isFinite(+packet.eliteScore))
+      revived.eliteScore = +packet.eliteScore;
+    if (Number.isFinite(+packet.bestSmooth))
+      revived.bestSmooth = +packet.bestSmooth;
     if (Array.isArray(packet.hist)) {
-      revived.hist = packet.hist.filter((item) => item && Number.isFinite(+item.mean) && Number.isFinite(+item.best));
+      revived.hist = packet.hist.filter(
+        (item) =>
+          item && Number.isFinite(+item.mean) && Number.isFinite(+item.best),
+      );
     }
     if (Array.isArray(packet.snapshots)) {
-      revived.snapshots = packet.snapshots.slice(-40).map((item) => ({
-        gen: item && item.gen,
-        score: item && item.score,
-        name: item && typeof item.name === "string" ? item.name.replace(/\.json$/i, "") : "",
-        weights: item && ElmanNetwork.copy(item.weights),
-      })).filter((item) => item.weights && Number.isFinite(+item.gen) && Number.isFinite(+item.score));
+      revived.snapshots = packet.snapshots
+        .slice(-40)
+        .map((item) => ({
+          gen: item && item.gen,
+          score: item && item.score,
+          name:
+            item && typeof item.name === "string"
+              ? item.name.replace(/\.json$/i, "")
+              : "",
+          weights: item && ElmanNetwork.copy(item.weights),
+        }))
+        .filter(
+          (item) =>
+            item.weights &&
+            Number.isFinite(+item.gen) &&
+            Number.isFinite(+item.score),
+        );
     }
     return revived;
   }
 
   stateFromPacket(packet, snapshotSource) {
     if (!packet || !packet.theta) return null;
-    if (packet.weightCount != null && +packet.weightCount !== ElmanNetwork.weightCount) return null;
-    if (packet.inputCount != null && +packet.inputCount !== config.net.inputCount) return null;
+    if (
+      packet.weightCount != null &&
+      +packet.weightCount !== ElmanNetwork.weightCount
+    )
+      return null;
+    if (
+      packet.inputCount != null &&
+      +packet.inputCount !== config.net.inputCount
+    )
+      return null;
     const parent = this.takeWeights(packet.theta);
     if (!parent) return null;
     const revived = new EvolutionSearch(this.randomNormal);
     revived.theta = parent;
     revived.gen = packet.gen || 0;
-    revived.bestGenTheta = this.takeWeights(packet.bestGenTheta) || parent.slice();
-    revived.bestEverTheta = this.takeWeights(packet.bestEverTheta) || parent.slice();
+    revived.bestGenTheta =
+      this.takeWeights(packet.bestGenTheta) || parent.slice();
+    revived.bestEverTheta =
+      this.takeWeights(packet.bestEverTheta) || parent.slice();
     revived.bestEverScore = packet.bestEverScore ?? -1e9;
-    revived.bestEverName = typeof packet.bestEverName === "string" ? packet.bestEverName : "";
-    if (packet.bestEverGen != null && Number.isFinite(+packet.bestEverGen)) revived.bestEverGen = Math.floor(+packet.bestEverGen);
-    revived.networkName = typeof packet.networkName === "string" ? packet.networkName : "";
+    revived.bestEverName =
+      typeof packet.bestEverName === "string" ? packet.bestEverName : "";
+    if (packet.bestEverGen != null && Number.isFinite(+packet.bestEverGen))
+      revived.bestEverGen = Math.floor(+packet.bestEverGen);
+    revived.networkName =
+      typeof packet.networkName === "string" ? packet.networkName : "";
     revived.eliteScore = packet.eliteScore ?? -1e9;
-    if (Number.isFinite(+packet.flatGens) && +packet.flatGens > 0) revived.flatGens = Math.floor(+packet.flatGens);
-    if (Number.isFinite(+packet.bestSmooth)) revived.bestSmooth = +packet.bestSmooth;
-    if (Number.isFinite(+packet.k) && +packet.k >= 0) revived.k = Math.floor(+packet.k);
+    if (Number.isFinite(+packet.flatGens) && +packet.flatGens > 0)
+      revived.flatGens = Math.floor(+packet.flatGens);
+    if (Number.isFinite(+packet.bestSmooth))
+      revived.bestSmooth = +packet.bestSmooth;
+    if (Number.isFinite(+packet.k) && +packet.k >= 0)
+      revived.k = Math.floor(+packet.k);
     const moments = this.takeWeights(packet.m);
     const second = this.takeWeights(packet.v);
     if (moments) revived.m = moments;
     if (second) revived.v = second;
     revived.refreshMutationBoost();
-    revived.hist = Array.isArray(packet.hist) ? packet.hist.filter((item) => item && Number.isFinite(+item.mean) && Number.isFinite(+item.best)) : [];
+    revived.hist = Array.isArray(packet.hist)
+      ? packet.hist.filter(
+          (item) =>
+            item && Number.isFinite(+item.mean) && Number.isFinite(+item.best),
+        )
+      : [];
     const source = snapshotSource || packet.snapshots || [];
-    revived.snapshots = source.slice(-40).map((item) => ({
-      gen: item.gen,
-      score: item.score,
-      name: item.name || "",
-      weights: item && this.takeWeights(item.weights),
-    })).filter((item) => item.weights && Number.isFinite(+item.gen) && Number.isFinite(+item.score));
+    revived.snapshots = source
+      .slice(-40)
+      .map((item) => ({
+        gen: item.gen,
+        score: item.score,
+        name: item.name || "",
+        weights: item && this.takeWeights(item.weights),
+      }))
+      .filter(
+        (item) =>
+          item.weights &&
+          Number.isFinite(+item.gen) &&
+          Number.isFinite(+item.score),
+      );
     revived.snapshots.sort((a, b) => a.gen - b.gen);
     return revived;
   }

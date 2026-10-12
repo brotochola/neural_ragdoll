@@ -2,7 +2,11 @@
 // El main lo transfiere, el worker lo devuelve. Nadie lo toca mientras está del otro lado.
 
 export const HEADER = 3;
-export const TASK_HEADER = 37;
+// 17 de la situación, 20 de las cinco marcas, el plan del paso, y el paso de un pie (índice, metros, giro).
+// planSteps del config es 4. Si pasa de 4, el cable se queda con los primeros.
+export const STEP_SLOTS = 4;
+export const BOX_SLOTS = 4;
+export const TASK_HEADER = 17 + 20 + 2 + STEP_SLOTS * 4 + 1 + BOX_SLOTS * 4 + 3;
 export const RESULT_STRIDE = 8;
 
 export function bytesFor(taskCount, weightCount) {
@@ -52,6 +56,32 @@ export function writeTasks(buffer, tasks, weightCount) {
       f32[field++] = options.failOnHead ? (target.dy || 0) : (target.y || 0);
       f32[field++] = options.failOnHead ? (target.turn || 0) : (target.angle || 0);
     }
+    f32[cursor + 37] = options.skill || 0;
+    const steps = options.steps || [];
+    const stepCount = Math.min(steps.length, STEP_SLOTS);
+    f32[cursor + 38] = stepCount;
+    let plan = cursor + 39;
+    for (let s = 0; s < STEP_SLOTS; s++) {
+      const step = s < stepCount ? steps[s] : {};
+      f32[plan++] = step.foot || 0;
+      f32[plan++] = step.dx || 0;
+      f32[plan++] = step.dy || 0;
+      f32[plan++] = step.turn || 0;
+    }
+    const boxes = options.boxes || [];
+    const boxCount = Math.min(boxes.length, BOX_SLOTS);
+    f32[plan++] = boxCount;
+    for (let b = 0; b < BOX_SLOTS; b++) {
+      const box = b < boxCount ? boxes[b] : {};
+      f32[plan++] = box.dx || 0;
+      f32[plan++] = box.halfW || 0;
+      f32[plan++] = box.halfH || 0;
+      f32[plan++] = box.dir || 0;
+    }
+    const place = options.place;
+    f32[plan++] = place ? place.foot : -1;
+    f32[plan++] = place ? place.extra || 0 : 0;
+    f32[plan++] = place ? place.turn || 0 : 0;
     f32.set(task.weights, cursor + TASK_HEADER);
     cursor += TASK_HEADER + weightCount;
   }

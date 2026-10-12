@@ -1,16 +1,14 @@
 // One headless loop: same sim, net, reward, and config as the page.
-// Training fitness is the target score for the whole episode. A head touch subtracts config.reward.headTouch.
-// Pass/fail is the search center (theta) on a fixed held-out set, not the training batch.
-// Stand and drop need isStanding, head above config.body.standingHeadMeters, and headImpact < config.search.headImpactQuiet.
-// Ball needs isStanding at the end. Get-up needs isStanding at the end.
-// Walk needs isStanding at the end and the gap to config.eval.walkGoalMeters down by at least config.eval.walkClosingMeters.
-// Official gate (only when --eval-n >= config.eval.officialMinN): see config.eval.passRate in config.js.
+// Training ranks the whole episode, plus upright, standing, and assisted-step bonuses. A head touch subtracts config.reward.headTouch and does not abort.
+// Pass/fail is the parent on a fixed held-out set. Skill 1: isStanding for the whole end window.
+// Skill 2: both feet on the marks and still standing. Skill 3: several assisted steps, still standing.
+// Skill 4: past at least one box, still standing. Rates are config.eval.passRate. Official when --eval-n >= config.eval.officialMinN.
 import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { config, setTrainingPhase, setTrainingByPhases } from './config.js';
+import { config, setTrainingPhase, setSkill } from './config.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,7 +19,7 @@ if (!isMainThread) {
 }
 
 async function runWorker() {
-  const boxUrl = pathToFileURL(path.join(root, 'node_modules/phaser-box2d/dist/PhaserBox2D.min.js')).href;
+  const boxUrl = pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href;
   const Box2D = await import(boxUrl);
   const { createSim } = await import('./src/sim.js');
   const { isStanding } = await import('./src/reward.js');
@@ -32,6 +30,11 @@ async function runWorker() {
     if (msg.type === 'phase') {
       setTrainingPhase(msg.phase);
       parentPort.postMessage({ type: 'phase', phase: msg.phase });
+      return;
+    }
+    if (msg.type === 'scale') {
+      config.skill.placeScale = msg.scale;
+      parentPort.postMessage({ type: 'scale' });
       return;
     }
     if (msg.type !== 'run') return;
@@ -74,6 +77,20 @@ function runEpisode(sim, world, job, isStanding) {
     startGap,
     endGap: options.goalX == null ? null : stats.gap,
     goalX: options.goalX ?? null,
+    windowStood: stats.windowStood || 0,
+    windowFrames: stats.windowFrames || 0,
+    steps: stats.steps || 0,
+    footL: stats.footL,
+    footR: stats.footR,
+    alignL: stats.alignL,
+    alignR: stats.alignR,
+    cleared: stats.cleared || 0,
+    alive: stats.alive || 0,
+    foot: stats.foot || 0,
+    reach: stats.reach || 0,
+    closed: stats.closed || 0,
+    leaned: stats.leaned || 0,
+    headHit: workerEpisode.headHit ? 1 : 0,
   };
 }
 
@@ -87,6 +104,9 @@ function readArgs() {
     quickEvery: config.eval.quickEvery,
     pairs: config.workers.headlessPairs,
     workers: Math.max(config.workers.headlessWorkerMin, Math.min(config.workers.headlessWorkerMax, os.cpus().length - config.workers.headlessWorkerReserve)),
+    skill: config.skill.level || 1,
+    evalOnly: false,
+    resetMoments: false,
   };
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
@@ -100,6 +120,9 @@ function readArgs() {
     else if (key === '--quick-every') { out.quickEvery = +val; i++; }
     else if (key === '--pairs') { out.pairs = +val; i++; }
     else if (key === '--workers') { out.workers = +val; i++; }
+    else if (key === '--skill') { out.skill = +val; i++; }
+    else if (key === '--eval-only') out.evalOnly = true;
+    else if (key === '--reset-moments') out.resetMoments = true;
   }
   return out;
 }
@@ -128,7 +151,7 @@ function makePool(count) {
         pump();
         return;
       }
-      if (msg.type === 'phase') {
+      if (msg.type === 'phase' || msg.type === 'scale') {
         if (slot.phaseWait) { const done = slot.phaseWait; slot.phaseWait = null; done(); }
         return;
       }
@@ -157,7 +180,7 @@ function makePool(count) {
     }));
     pump();
     const done = Promise.all(tasks).then((parts) => parts.flat().sort((a, b) => a.index - b.index));
-    const timeout = new Promise((_resolve, reject) => setTimeout(() => reject(new Error('worker batch timed out')), 120000));
+    const timeout = new Promise((_resolve, reject) => setTimeout(() => reject(new Error('worker batch timed out')), 300000));
     return Promise.race([done, timeout]);
   }
   function setPhase(phase) {
@@ -166,10 +189,34 @@ function makePool(count) {
       slot.worker.postMessage({ type: 'phase', phase });
     })));
   }
-  async function stop() {
-    await Promise.all(workers.map((slot) => slot.worker.terminate()));
+  function setScale(scale) {
+    return Promise.all(workers.map((slot) => new Promise((resolve) => {
+      slot.phaseWait = resolve;
+      slot.worker.postMessage({ type: 'scale', scale });
+    })));
   }
-  return { whenReady, run, setPhase, stop };
+  async function stop() {
+    await Promise.race([
+      Promise.all(workers.map((slot) => Promise.resolve(slot.worker.terminate()).catch(() => {}))),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]);
+  }
+  return { whenReady, run, setPhase, setScale, stop };
+}
+
+function skillPass(skill, row) {
+  const reach = config.skill.footReachMeters;
+  const align = Math.cos(config.skill.footReachRadians);
+  if (skill === 1) return row.windowFrames > 0 && row.windowStood === row.windowFrames;
+  if (skill === 2) {
+    return !!row.stoodUp && row.footL <= reach && row.footR <= reach && row.alignL >= align && row.alignR >= align;
+  }
+  if (skill === 3) return !!row.stoodUp && (row.steps || 0) >= config.skill.walkSteps;
+  return !!row.stoodUp && (row.cleared || 0) >= 1;
+}
+
+function skillKey(skill) {
+  return ['', 'stand', 'feet', 'assist', 'boxes'][skill] || 'stand';
 }
 
 function skillOk(kind, row) {
@@ -260,9 +307,9 @@ async function runMain() {
   const logPath = path.join(backupDir, 'train-log.txt');
   const statePath = path.join(backupDir, 'train-state.json');
   const statusPath = path.join(backupDir, 'status.json');
-  const { ElmanNetwork, EvolutionSearch } = await import('./src/net.js');
+  const { ElmanNetwork, EvolutionSearch, ResidualSearch, setOutputJoints } = await import('./src/net.js');
   const { makeSeededRandom, randomNormalSample } = await import('./src/utils.js');
-  const boxUrl = pathToFileURL(path.join(root, 'node_modules/phaser-box2d/dist/PhaserBox2D.min.js')).href;
+  const boxUrl = pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href;
   const Box2D = await import(boxUrl);
   const { createSim } = await import('./src/sim.js');
   const sim = createSim(Box2D);
@@ -301,6 +348,8 @@ async function runMain() {
       inputCount: config.net.inputCount,
       theta: Array.from(state.theta),
       bestEverTheta: Array.from(state.bestEverTheta),
+      residual: state.residualSearch ? Array.from(state.residualSearch.theta) : null,
+      shiftMeters: state.shiftMeters || 0,
     }, extra || {});
     fs.writeFileSync(full, JSON.stringify(payload));
     if (role === 'best-ever' || role === 'phase') bestFiles.push(name);
@@ -318,6 +367,18 @@ async function runMain() {
       bestSmooth: Number.isFinite(state.bestSmooth) ? state.bestSmooth : null,
       eliteScore: state.eliteScore,
       flatGens: state.flatGens || 0,
+      skill: state.skill || 1,
+      placeScale: state.placeScale || 0,
+      footRatio: state.footRatio > 0 ? state.footRatio : 0,
+      heldFoot: state.heldFoot > 0 ? state.heldFoot : 0,
+      shiftMeters: state.shiftMeters == null ? null : state.shiftMeters,
+      residual: state.residualSearch ? pack(state.residualSearch.theta) : null,
+      residualM: state.residualSearch ? pack(state.residualSearch.m) : null,
+      residualV: state.residualSearch ? pack(state.residualSearch.v) : null,
+      residualK: state.residualSearch ? state.residualSearch.k : 0,
+      bestResidual: state.bestResidual || null,
+      bestFootRate: state.bestFootRate || 0,
+      bestFootErr: state.bestFootErr || 0,
       theta: pack(state.theta),
       bestEverTheta: pack(state.bestEverTheta),
       m: pack(state.m),
@@ -333,7 +394,15 @@ async function runMain() {
     const data = JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
     const raw = data.bestTheta || data.theta;
     const theta = ElmanNetwork.copy(raw);
-    if (!theta) throw new Error('weights length ' + (raw && raw.length) + ' in ' + file);
+    if (!theta) {
+      log('weights length ' + (raw && raw.length) + ' in ' + file + ' does not match this net, fresh weights');
+      const fresh = new EvolutionSearch(randomNormal);
+      fresh.phase = config.curriculum.phases[0].id;
+      fresh.skill = opts.skill || 1;
+      fresh.bestEverScore = -1e9;
+      fresh.eliteScore = -1e9;
+      return { state: fresh, source: 'fresh', rawLength: raw ? raw.length : 0 };
+    }
     const state = new EvolutionSearch(randomNormal);
     state.theta = theta;
     state.bestEverTheta = theta.slice();
@@ -361,6 +430,27 @@ async function runMain() {
     state.k = saved.k || 0;
     state.gen = saved.gen || 0;
     state.phase = saved.phase || config.curriculum.phases[0].id;
+    state.skill = saved.skill || opts.skill || 1;
+    state.placeScale = saved.placeScale || 0;
+    state.footRatio = saved.footRatio > 0 ? saved.footRatio : 0;
+    state.heldFoot = saved.heldFoot > 0 ? saved.heldFoot : 0;
+    state.shiftMeters = Number.isFinite(+saved.shiftMeters) ? +saved.shiftMeters : null;
+    if (saved.residual && saved.residual.length) {
+      state.residualSearch = new ResidualSearch(randomNormal);
+      if (saved.residual.length === state.residualSearch.theta.length) {
+        state.residualSearch.theta.set(Float32Array.from(saved.residual));
+        if (saved.residualM && saved.residualM.length === state.residualSearch.m.length)
+          state.residualSearch.m.set(Float32Array.from(saved.residualM));
+        if (saved.residualV && saved.residualV.length === state.residualSearch.v.length)
+          state.residualSearch.v.set(Float32Array.from(saved.residualV));
+        state.residualSearch.k = saved.residualK || 0;
+      }
+    }
+    if (saved.bestResidual && saved.bestResidual.length) {
+      state.bestResidual = saved.bestResidual;
+      state.bestFootRate = saved.bestFootRate || 0;
+      state.bestFootErr = saved.bestFootErr || 0;
+    }
     state.drill = saved.drill || 0;
     state.bestEverScore = saved.bestEverScore ?? -1e9;
     if (Number.isFinite(+saved.bestSmooth)) state.bestSmooth = +saved.bestSmooth;
@@ -424,18 +514,29 @@ async function runMain() {
 
   async function oneGeneration(state) {
     const before = state.bestEverScore;
-    const generation = state.ask(null, opts.pairs, randomNormal);
+    const useResidual = (state.skill | 0) >= 2 && state.residualSearch;
+    const generation = useResidual
+      ? state.residualSearch.ask(opts.pairs, randomNormal)
+      : state.ask(null, opts.pairs, randomNormal);
+    const startMode = {
+      level: state.skill | 0,
+      shiftMeters: state.shiftMeters || 0,
+      full: !(state.shiftMeters > 0),
+    };
     const jobs = [];
     const trios = [];
     let index = 0;
     for (let child = 0; child < generation.weights.length; child++) {
-      if (child % 2 === 0) trios.push(sim.trainingStarts(random));
+      if (child % 2 === 0) trios.push(sim.trainingStarts(random, startMode));
       for (const start of trios[Math.floor(child / 2)]) {
         jobs.push({
           index: index++,
           kind: 'train',
-          weights: generation.weights[child],
-          options: Object.assign({}, start, { phase: child % config.cadence.actionEveryNFrames }),
+          weights: useResidual ? state.theta : generation.weights[child],
+          options: Object.assign({}, start, {
+            phase: child % config.cadence.actionEveryNFrames,
+            residual: useResidual ? generation.weights[child] : null,
+          }),
         });
       }
     }
@@ -448,7 +549,21 @@ async function runMain() {
     for (let child = 0; child < generation.weights.length; child++) {
       scores.push(sim.poseScore(raw, child * poseCount, poseCount, {}));
     }
-    state.tell(generation, scores);
+    if (useResidual) {
+      state.residualSearch.tell(generation, scores);
+      let mean = 0;
+      let best = -Infinity;
+      let stoodN = 0;
+      for (let i = 0; i < scores.length; i++) {
+        mean += scores[i].fitness;
+        if (scores[i].fitness > best) best = scores[i].fitness;
+        if (scores[i].stoodUp) stoodN++;
+      }
+      mean /= scores.length || 1;
+      state.hist.push({ mean, best, stood: stoodN / (scores.length || 1), start: 0 });
+      if (state.hist.length > 400) state.hist.shift();
+      state.gen++;
+    } else state.tell(generation, scores);
     if (state.anchorNote) {
       log(state.anchorNote);
       state.anchorNote = "";
@@ -460,7 +575,26 @@ async function runMain() {
     }
     const last = state.hist[state.hist.length - 1];
     const meanStance = scores.reduce((sum, row) => sum + (row.stance || 0), 0) / scores.length;
-    if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, start: last.start, stood: last.stood, gap: last.gap, stance: meanStance });
+    const meanAlive = scores.reduce((sum, row) => sum + (row.alive || 0), 0) / scores.length;
+    const meanFoot = scores.reduce((sum, row) => sum + (row.foot || 0), 0) / scores.length;
+    const meanClosed = scores.reduce((sum, row) => sum + (row.closed || 0), 0) / scores.length;
+    let meanLeaned = 0;
+    let stoodLeanN = 0;
+    let bestLean = 0;
+    let bestClosed = 0;
+    let bestSwing = 0;
+    for (let i = 0; i < scores.length; i++) {
+      const row = scores[i];
+      meanLeaned += row.leaned || 0;
+      if ((row.closed || 0) > bestSwing) bestSwing = row.closed || 0;
+      if (!row.stoodUp) continue;
+      stoodLeanN++;
+      if ((row.leaned || 0) > bestLean) bestLean = row.leaned || 0;
+      if ((row.closed || 0) > bestClosed) bestClosed = row.closed || 0;
+    }
+    meanLeaned /= scores.length;
+    const meanSteps = scores.reduce((sum, row) => sum + (row.steps || 0), 0) / scores.length;
+    if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, start: last.start, stood: last.stood, gap: last.gap, stance: meanStance, alive: meanAlive, foot: meanFoot, steps: meanSteps, closed: meanClosed, leaned: meanLeaned, bestLean, bestClosed, bestSwing, stoodLeanN });
     if (state.bestEverScore > before) {
       const file = saveBackup('best-ever', state);
       log('best-ever gen ' + state.gen + ' score ' + state.bestEverScore.toFixed(3) + ' ' + file);
@@ -503,6 +637,169 @@ async function runMain() {
     }, extra || {}), null, 2));
   }
 
+  function skillJobs(weights, skill, n, placeScale) {
+    const shift = state.shiftMeters || 0;
+    const mode = shift > 0
+      ? { full: false, level: skill, shiftMeters: shift }
+      : placeScale == null
+        ? { full: true, level: skill }
+        : { full: false, level: skill, placeScale, placeAssist: 0 };
+    const jobs = [];
+    for (let i = 0; i < n; i++) {
+      const rand = makeSeededRandom(config.eval.seed + skill * 10007 + i * 17);
+      const start = sim.fillTrainingStart({}, rand, mode);
+      if (state.residualSearch) start.residual = state.residualSearch.theta;
+      jobs.push({
+        index: i,
+        kind: 's' + skill,
+        weights,
+        options: Object.assign({ phase: i % config.cadence.actionEveryNFrames }, start),
+      });
+    }
+    return jobs;
+  }
+
+  function feetOfficial(skill) {
+    return skill !== 2 || !(state.shiftMeters > 0);
+  }
+
+  function keepResidual(latest) {
+    if (!state.residualSearch || (state.skill | 0) !== 2 || !latest) return;
+    const rate = latest.rate || 0;
+    const foot = latest.foot == null ? 1 : latest.foot;
+    const stood = latest.stood == null ? 0 : latest.stood;
+    const better = stood >= 0.9 && (rate > (state.bestFootRate || 0) + 1e-9 || (Math.abs(rate - (state.bestFootRate || 0)) < 1e-9 && foot < (state.bestFootErr || 1) - 0.002));
+    if (better) {
+      state.bestFootRate = rate;
+      state.bestFootErr = foot;
+      state.bestResidual = Array.from(state.residualSearch.theta);
+      log('kept residual ' + rate.toFixed(2) + ' foot ' + foot.toFixed(3));
+    } else if (state.bestResidual && state.bestResidual.length === state.residualSearch.theta.length) {
+      state.residualSearch.theta.set(Float32Array.from(state.bestResidual));
+      state.residualSearch.zeroMoments();
+      log('reverted residual, held was ' + rate.toFixed(2) + ' foot ' + foot.toFixed(3));
+    }
+  }
+
+  function growShift(latest) {
+    if ((state.skill | 0) !== 2 || !(state.shiftMeters > 0)) return false;
+    log('SHIFT ' + state.shiftMeters.toFixed(2) + ' ' + fmtSkill(latest));
+    if (latest.rate + 1e-9 >= config.eval.passRate.feet) {
+      const cur = state.shiftMeters;
+      state.shiftMeters = cur < 0.15 ? 0.18 : cur < 0.21 ? 0.24 : 0;
+      state.residualSearch.zeroMoments();
+      log('shift -> ' + (state.shiftMeters > 0 ? state.shiftMeters.toFixed(2) : 'full'));
+      saveBackup('shift', state, { eval: latest, shiftMeters: cur });
+    }
+    return true;
+  }
+
+  async function evaluateSkill(weights, skill, n, placeScale) {
+    const rows = await pool.run(skillJobs(weights, skill, n, placeScale));
+    if (rows.some((row) => !row || !Number.isFinite(row.fitness))) throw new Error('eval returned an empty score');
+    let ok = 0;
+    let stood = 0;
+    let windowSum = 0;
+    let footSum = 0;
+    let stepSum = 0;
+    let clearSum = 0;
+    let headSum = 0;
+    let stanceSum = 0;
+    for (const row of rows) {
+      if (skillPass(skill, row)) ok++;
+      if (row.stoodUp) stood++;
+      windowSum += row.windowFrames ? row.windowStood / row.windowFrames : 0;
+      footSum += ((row.footL || 0) + (row.footR || 0)) / 2;
+      stepSum += row.steps || 0;
+      clearSum += row.cleared || 0;
+      headSum += row.headHeight || 0;
+      stanceSum += row.stance || 0;
+    }
+    const count = rows.length;
+    return {
+      skill,
+      key: skillKey(skill),
+      n: count,
+      ok,
+      rate: count ? ok / count : 0,
+      stood: count ? stood / count : 0,
+      window: count ? windowSum / count : 0,
+      foot: count ? footSum / count : 0,
+      steps: count ? stepSum / count : 0,
+      cleared: count ? clearSum / count : 0,
+      head: count ? headSum / count : 0,
+      stance: count ? stanceSum / count : 0,
+    };
+  }
+
+  function fmtSkill(row) {
+    return row.key + ' ' + row.ok + '/' + row.n + '=' + row.rate.toFixed(2)
+      + ' stood ' + row.stood.toFixed(2)
+      + ' window ' + row.window.toFixed(2)
+      + ' foot ' + row.foot.toFixed(3)
+      + ' steps ' + row.steps.toFixed(2)
+      + ' boxes ' + row.cleared.toFixed(2)
+      + ' head ' + (row.head || 0).toFixed(2)
+      + ' stance ' + (row.stance || 0).toFixed(2);
+  }
+
+  function skillReached(row) {
+    return row && opts.evalN >= config.eval.officialMinN && row.rate >= config.eval.passRate[row.key];
+  }
+
+  let gateEval = null;
+
+  function reloadStand(state) {
+    const saved = JSON.parse(fs.readFileSync(path.join(backupDir, 'g200_s7p368_phase_1791767817432.json'), 'utf8'));
+    state.theta.set(Float32Array.from(saved.theta));
+    state.bestEverTheta.set(Float32Array.from(saved.bestEverTheta || saved.theta));
+    state.zeroMoments();
+    state.flatGens = 0;
+    state.heldFoot = 0.215;
+    state.footRatio = 0.97;
+    log('reloaded g200');
+  }
+
+  // Eight fresh shifts, shared by the child and the parent. One nominating episode does not count.
+  async function considerChild(state, weights, index, ratio) {
+    const jobs = [];
+    for (let i = 0; i < 8; i++) {
+      const start = sim.fillTrainingStart({}, random, { full: true, level: 2 });
+      const phase = i % config.cadence.actionEveryNFrames;
+      jobs.push({ index: i, kind: 'confirm', weights: state.theta, options: Object.assign({ phase }, JSON.parse(JSON.stringify(start))) });
+      jobs.push({ index: i + 8, kind: 'confirm', weights, options: Object.assign({ phase }, JSON.parse(JSON.stringify(start))) });
+    }
+    const rows = await pool.run(jobs);
+    let parentFoot = 0;
+    let childFoot = 0;
+    let childStood = 0;
+    for (let i = 0; i < 8; i++) {
+      parentFoot += rows[i].foot || 0;
+      childFoot += rows[i + 8].foot || 0;
+      if (rows[i + 8].stoodUp) childStood++;
+    }
+    parentFoot /= 8;
+    childFoot /= 8;
+    const stood = childStood / 8;
+    const ok = childFoot < parentFoot && stood >= 0.8;
+    log('check gen ' + state.gen + ' child ' + index + ' ratio ' + ratio.toFixed(3) + ' parent ' + parentFoot.toFixed(3) + ' child ' + childFoot.toFixed(3) + ' stood ' + stood.toFixed(2) + (ok ? ' PASS' : ' FAIL'));
+    if (!ok) return;
+    state.theta.set(weights);
+    state.bestEverTheta.set(state.theta);
+    state.zeroMoments();
+    const exam = await evaluateSkill(state.theta, 2, opts.evalN);
+    gateEval = exam;
+    evalLog.push({ gen: state.gen, skill: 2, who: 'adopt', eval: exam });
+    log('EVAL adopt ' + fmtSkill(exam));
+    if (!(exam.foot < state.heldFoot) || exam.stood < 0.8) {
+      reloadStand(state);
+      gateEval = null;
+      return;
+    }
+    state.heldFoot = exam.foot;
+    log('kept gen ' + state.gen + ' held foot ' + exam.foot.toFixed(3) + ' ' + saveBackup('adopt', state, { heldFoot: exam.foot }));
+  }
+
   let state;
   try {
     log('=== ' + (opts.fresh ? 'fresh' : 'resume') + ' workers ' + opts.workers + ' pairs ' + opts.pairs + ' evalN ' + opts.evalN + ' ===');
@@ -511,7 +808,8 @@ async function runMain() {
       pool.whenReady(),
       new Promise((_resolve, reject) => setTimeout(() => reject(new Error('workers did not start')), 60000)),
     ]);
-    setTrainingByPhases(true);
+    const startedAt = Date.now();
+    const timedOut = () => opts.minutes > 0 && Date.now() - startedAt > opts.minutes * 60000;
     if (opts.fresh) {
       fs.rmSync(statePath, { force: true });
       setTrainingPhase(config.curriculum.phases[0].id);
@@ -525,146 +823,168 @@ async function runMain() {
         state = loaded.state;
         log('no train-state, loaded ' + loaded.source + ' raw ' + loaded.rawLength);
       } else {
-        log('resumed gen ' + state.gen + ' phase ' + state.phase);
+        log('resumed gen ' + state.gen + ' skill ' + (state.skill || 1));
       }
-      setTrainingPhase(state.phase);
     }
-    await pool.setPhase(state.phase);
+    if (!(state.skill > 0)) state.skill = opts.skill || 1;
+    setSkill(state.skill);
+    if ((state.skill | 0) === 2) {
+      if (!(state.placeScale > 0)) state.placeScale = config.skill.placeScale || 0.2;
+      config.skill.placeScale = state.placeScale;
+      await pool.setScale(state.placeScale);
+      log('place scale ' + state.placeScale);
+      if (!(state.footRatio > 0)) state.footRatio = 0.97;
+      if (!(state.heldFoot > 0)) state.heldFoot = 0.215;
+      log('foot ratio ' + state.footRatio + ' held foot ' + state.heldFoot);
+    }
+    if (opts.resetMoments) {
+      state.m = new Float32Array(weightCount);
+      state.v = new Float32Array(weightCount);
+      state.k = 0;
+      state.flatGens = 0;
+      state.bestEverScore = -1e9;
+      state.bestSmooth = null;
+      log('cleared Adam moments');
+      await seedBest(state);
+    }
+    if (opts.evalOnly) {
+      const only = await evaluateSkill(state.theta, state.skill, opts.evalN);
+      log('EVAL-ONLY ' + fmtSkill(only) + (skillReached(only) ? ' PASS' : ' FAIL'));
+      fs.writeFileSync(path.join(backupDir, 'result.json'), JSON.stringify({ evalOnly: true, eval: only }, null, 2));
+    } else {
     if (opts.fresh || state.gen === 0) {
-      const baseline = await evaluate(state.theta, watchKinds(3), opts.evalN);
-      evalLog.push({ gen: state.gen, phase: 0, full: true, who: 'baseline', eval: baseline });
-      log('BASELINE ' + fmtEval(baseline));
+      const baseline = await evaluateSkill(state.theta, state.skill, opts.evalN);
+      evalLog.push({ gen: state.gen, skill: state.skill, who: 'baseline', eval: baseline });
+      log('BASELINE ' + fmtSkill(baseline));
       await seedBest(state);
       saveBackup('parent', state, { note: 'start' });
       saveTrainState(state);
       writeStatus(state, { baseline });
     }
 
-    const phaseCursor = Math.max(0, config.curriculum.phases.findIndex((item) => item.id === state.phase));
-    for (let phaseIndex = phaseCursor; phaseIndex < config.curriculum.phases.length; phaseIndex++) {
-      const phaseDef = config.curriculum.phases[phaseIndex];
-      const phase = phaseDef.id;
-      state.phase = phase;
-      setTrainingPhase(phase);
-      await pool.setPhase(phase);
+    for (let skill = state.skill; skill <= 4; skill++) {
+      state.skill = skill;
+      setSkill(skill);
       const gen0 = state.gen;
-      const budgetGens = phaseDef.generations;
       let latest = null;
-      log('PHASE ' + phaseDef.name + ' start gen ' + state.gen + ' for ' + budgetGens);
-      while (true) {
-        const doneGens = state.gen - gen0;
-        if (doneGens >= budgetGens) break;
+      setOutputJoints(null);
+      if (skill >= 2) {
+        if (!state.residualSearch) {
+          state.residualSearch = new ResidualSearch(randomNormal);
+          state.residualSearch.sigma = 0.04;
+          state.residualSearch.lr = 0.01;
+          if (state.shiftMeters == null) state.shiftMeters = skill === 2 ? 0.12 : 0;
+        }
+        if (skill > 2) state.shiftMeters = 0;
+        state.residualSearch.sigma = 0.012;
+        state.residualSearch.lr = 0.01;
+        if (!state.bestResidual) {
+          state.bestResidual = Array.from(state.residualSearch.theta);
+          state.bestFootRate = 0.55;
+          state.bestFootErr = 0.081;
+        }
+      }
+      log('SKILL ' + skill + ' ' + skillKey(skill) + ' start gen ' + state.gen + ' budget ' + opts.gens + ' bar ' + config.eval.passRate[skillKey(skill)] + (state.residualSearch && skill >= 2 ? ' residual ' + state.residualSearch.length + ' shift ' + (state.shiftMeters || 'full') : ''));
+      while (state.gen - gen0 < opts.gens && !timedOut()) {
         const tick = Date.now();
         await oneGeneration(state);
-        if (state.gen % 10 === 0) {
+        if (gateEval && skillReached(gateEval)) {
+          latest = gateEval;
+          gateEval = null;
+          break;
+        }
+        gateEval = null;
+        if (state.gen % 5 === 0 || state.gen - gen0 <= 3) {
           const last = curve[curve.length - 1];
           const sec = ((Date.now() - tick) / 1000).toFixed(2);
-          const pct = Math.round((state.mutationFraction || 0) * 100);
-          const mut = (state.mutationBoost || 1) > 1 ? ' mut x' + state.mutationBoost + (pct > 0 ? ' ' + pct + '%' : '') : '';
-          const began = last && Number.isFinite(last.start) ? last.start.toFixed(3) + ' → ' : '';
-          log('gen ' + state.gen + ' drill ' + (state.drill || 0) + ' mean ' + began + (last ? last.mean.toFixed(3) : '?') + ' best ' + (last ? last.best.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + ' stance ' + (last && last.stance != null ? last.stance.toFixed(2) : '?') + ' ever ' + state.bestEverScore.toFixed(3) + mut + ' ' + sec + 's');
-        }
-        if (opts.quickEvery > 0 && state.gen % opts.quickEvery === 0) {
-          const quickKinds = gateKeys(phase);
-          const quick = await evaluate(state.theta, quickKinds, opts.quickN);
-          evalLog.push({ gen: state.gen, phase, full: false, who: 'theta', eval: quick });
-          log('QUICK gen ' + state.gen + ' ' + fmtEval(quick));
-          const due = state.gen % (opts.quickEvery * config.eval.fullMultiple) === 0;
-          if (due || nearPass(phase, quick) || passed(phase, quick)) {
-            latest = await evaluate(state.theta, watchKinds(phase), opts.evalN);
-            evalLog.push({ gen: state.gen, phase, full: true, who: 'theta', eval: latest });
-            log('EVAL gen ' + state.gen + ' ' + fmtEval(latest));
-            writeStatus(state, { latest });
-            if (phase === 1 && opts.evalN >= config.eval.officialMinN) {
-              let nextDrill = state.drill || 0;
-              if (latest.stand && latest.stand.rate >= config.eval.passRate.stand) nextDrill = Math.max(nextDrill, 1);
-              if (nextDrill >= 1 && latest.ball && latest.ball.rate >= config.eval.passRate.ball) nextDrill = Math.max(nextDrill, 2);
-              if (nextDrill !== (state.drill || 0)) {
-                state.drill = nextDrill;
-                state.m = new Float32Array(weightCount);
-                state.v = new Float32Array(weightCount);
-                state.k = 0;
-                log('drill ' + state.drill);
-              }
-            }
-            if (opts.evalN >= config.eval.officialMinN && passed(phase, latest)) {
-              const file = saveBackup('phase', state, { eval: latest, passed: true, phase });
-              log('PASS phase ' + phase + ' ' + file);
-              latest.passed = true;
-            }
-          }
+          const alive = last && last.alive != null ? ' alive ' + last.alive.toFixed(2) : '';
+          const foot = last && last.foot != null ? ' foot ' + last.foot.toFixed(3) : '';
+          const closed = last && last.closed != null ? ' closed ' + last.closed.toFixed(3) : '';
+          const leaned = last && last.leaned != null ? ' leaned ' + last.leaned.toFixed(3) + ' swing ' + (last.bestSwing || 0).toFixed(3) + ' land ' + (last.bestClosed || 0).toFixed(3) + '/' + (last.stoodLeanN || 0) : '';
+          const steps = last && last.steps != null ? ' steps ' + last.steps.toFixed(2) : '';
+          log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
           saveTrainState(state);
         }
-      }
-      if (!(latest && latest.passed)) {
-        latest = await evaluate(state.theta, watchKinds(phase), opts.evalN);
-        evalLog.push({ gen: state.gen, phase, full: true, who: 'theta-final', eval: latest });
-        log('FINAL phase ' + phase + ' ' + fmtEval(latest));
-        if (opts.evalN >= config.eval.officialMinN && passed(phase, latest)) {
-          const file = saveBackup('phase', state, { eval: latest, passed: true, phase });
-          log('PASS phase ' + phase + ' ' + file);
-          latest.passed = true;
+        if (opts.quickEvery > 0 && state.gen % opts.quickEvery === 0) {
+          latest = await evaluateSkill(state.theta, skill, opts.evalN);
+          evalLog.push({ gen: state.gen, skill, who: 'theta', eval: latest });
+          log('EVAL gen ' + state.gen + ' ' + fmtSkill(latest));
+          writeStatus(state, { latest });
+          saveTrainState(state);
+          if (skill === 2) keepResidual(latest);
+          if (!feetOfficial(skill)) growShift(latest);
+          else if (skillReached(latest)) break;
+          if (skill === 2 && state.placeScale > 0 && state.placeScale < 0.999) {
+            const scaled = await evaluateSkill(state.theta, skill, opts.evalN, state.placeScale);
+            log('SCALE ' + state.placeScale.toFixed(2) + ' ' + fmtSkill(scaled));
+            if (scaled.rate >= config.eval.passRate.feet) {
+              state.placeScale = Math.min(1, Math.round((state.placeScale + 0.12) * 100) / 100);
+              config.skill.placeScale = state.placeScale;
+              state.m.fill(0);
+              state.v.fill(0);
+              state.k = 0;
+              state.flatGens = 0;
+              state.bestEverScore = -1e9;
+              state.bestSmooth = null;
+              await pool.setScale(state.placeScale);
+              await seedBest(state);
+              log('place scale -> ' + state.placeScale);
+              saveTrainState(state);
+            }
+          }
         }
       }
-      const ever = await evaluate(state.bestEverTheta, watchKinds(phase), opts.evalN);
-      evalLog.push({ gen: state.gen, phase, full: true, who: 'best-ever', eval: ever });
-      log('BESTEVER phase ' + phase + ' ' + fmtEval(ever));
+      if (!feetOfficial(skill) || !(latest && skillReached(latest))) {
+        latest = await evaluateSkill(state.theta, skill, opts.evalN);
+        log('FINAL skill ' + skill + ' ' + fmtSkill(latest));
+        if (skill === 2) keepResidual(latest);
+        if (!feetOfficial(skill)) growShift(latest);
+      }
+      let ever = null;
+      if (feetOfficial(skill) && !skillReached(latest) && !(state.residualSearch && skill >= 2)) {
+        ever = await evaluateSkill(state.bestEverTheta, skill, opts.evalN);
+        log('BESTEVER skill ' + skill + ' ' + fmtSkill(ever));
+        if (skillReached(ever)) {
+          state.theta.set(state.bestEverTheta);
+          latest = ever;
+          log('adopted best-ever for skill ' + skill);
+        }
+      }
       saveTrainState(state);
       writeStatus(state, { latest, bestEver: ever });
-      if (!(opts.evalN >= config.eval.officialMinN && latest && latest.passed)) {
-        const all = await evaluate(state.theta, watchKinds(3), opts.evalN);
-        evalLog.push({ gen: state.gen, phase, full: true, who: 'theta-all', eval: all });
-        log('ALL phase ' + phase + ' ' + fmtEval(all));
-        const result = {
-          passedPhase: phase - 1,
-          stoppedAt: phase,
-          trainingPhase: phase,
-          thresholds: config.eval.passRate,
-          evalN: opts.evalN,
-          dropMeters,
-          official: opts.evalN >= config.eval.officialMinN,
-          theta: all,
-          bestEver: ever,
-          bestFiles,
-          curveTail: curve.filter((_row, index) => index % 10 === 0).slice(-80),
-        };
-        fs.writeFileSync(path.join(backupDir, 'result.json'), JSON.stringify(result, null, 2));
-        log('phase ' + phaseDef.name + ' generations done, gate not met');
-      }
-      if (phaseIndex === config.curriculum.phases.length - 1) {
-        if (opts.evalN >= config.eval.officialMinN && latest && latest.passed) {
-          const all = await evaluate(state.theta, watchKinds(3), opts.evalN);
-          log('ALL phase 3 ' + fmtEval(all));
-          const result = {
-            passedPhase: 3,
-            stoppedAt: 3,
-            trainingPhase: 3,
-            thresholds: config.eval.passRate,
-            evalN: opts.evalN,
-            dropMeters,
-            official: opts.evalN >= config.eval.officialMinN,
-            theta: all,
-            bestEver: ever,
-            bestFiles,
-          };
-          fs.writeFileSync(path.join(backupDir, 'result.json'), JSON.stringify(result, null, 2));
-          log('DONE all phases');
-        }
+      const result = {
+        skill,
+        key: skillKey(skill),
+        passed: skillReached(latest),
+        thresholds: config.eval.passRate,
+        evalN: opts.evalN,
+        official: opts.evalN >= config.eval.officialMinN,
+        theta: latest,
+        bestEver: ever,
+        gen: state.gen,
+        bestFiles,
+      };
+      fs.writeFileSync(path.join(backupDir, 'result.json'), JSON.stringify(result, null, 2));
+      if (!feetOfficial(skill) || !skillReached(latest)) {
+        log('skill ' + skillKey(skill) + ' gate not met' + (feetOfficial(skill) ? '' : ' short shift ' + state.shiftMeters));
         break;
       }
-      state.theta = state.theta.slice();
+      const file = saveBackup('phase', state, { eval: latest, passed: true, skill });
+      log('PASS skill ' + skill + ' ' + skillKey(skill) + ' ' + fmtSkill(latest) + ' ' + file);
+      if (skill === 4) {
+        log('DONE all skills');
+        break;
+      }
       state.m = new Float32Array(weightCount);
       state.v = new Float32Array(weightCount);
       state.k = 0;
+      state.flatGens = 0;
       state.eliteScore = -1e9;
-      const nextPhase = config.curriculum.phases[phaseIndex + 1];
-      state.phase = nextPhase.id;
-      setTrainingPhase(state.phase);
-      await pool.setPhase(state.phase);
-      log('By phases: ' + nextPhase.name + ' (gen ' + state.gen + ')');
+      setSkill(skill + 1);
+      log('next skill ' + (skill + 1) + ' at gen ' + state.gen);
       await seedBest(state);
-      saveBackup('phase', state, { note: 'enter', phase: state.phase });
       saveTrainState(state);
+    }
     }
   } catch (error) {
     log('ERROR ' + (error && error.stack || error));

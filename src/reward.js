@@ -9,9 +9,12 @@ const termCount = config.net.rewardRowCount;
 const terms = [];
 for (let i = 0; i < config.targets.length; i++) {
   const id = config.targets[i].id;
+  const foot = id === "footR" || id === "footL";
+  const positionWeight = foot ? weight.footPosition : weight.targetPosition;
+  const span = foot ? config.skill.footSpanMeters : config.body.targetSpanMeters;
   terms.push({
     n: id + " position",
-    tip: "Distance from the " + id + " to its target. +" + weight.targetPosition + " on the mark, -" + weight.targetPosition + " at " + config.body.targetSpanMeters + " m. Zero while this target is off.",
+    tip: "Distance from the " + id + " to its target. +" + positionWeight + " on the mark, -" + positionWeight + " at " + span + " m. Zero while this target is off.",
     v: 0,
     scoreOnly: false,
   });
@@ -44,6 +47,28 @@ function angleErrorCos(targetAngle, partSin, partCos) {
   return targetCos * partCos + targetSin * partSin;
 }
 
+function footTarget(id) {
+  return id === "footR" || id === "footL";
+}
+
+// Distancia al mark y coseno del error de ángulo. align 1 es alineado.
+export function markError(measure, targetIndex) {
+  const spec = config.targets[targetIndex];
+  const target = measure && measure.targets && measure.targets[targetIndex];
+  const index = spec ? part[spec.part] : 0;
+  if (!spec || !target || !measure || !measure.partX) return { dist: Infinity, align: -1 };
+  const dx = (target.x || 0) - (measure.partX[index] || 0);
+  const dy = (target.y || 0) - (measure.partY[index] || 0);
+  const partCos = measure.partCos && measure.partCos[index];
+  const align = angleErrorCos(target.angle, (measure.partSin && measure.partSin[index]) || 0, partCos == null ? 1 : partCos);
+  return { dist: Math.hypot(dx, dy), align };
+}
+
+export function onMark(measure, targetIndex) {
+  const error = markError(measure, targetIndex);
+  return error.dist <= config.skill.footReachMeters && error.align >= Math.cos(config.skill.footReachRadians);
+}
+
 // Escribe el total. Si writeRows, también las filas fijas del panel. No crea objetos.
 function fillScore(measure, writeRows) {
   const targets = measure.targets && measure.targets.length === config.targets.length ? measure.targets : config.targets;
@@ -55,16 +80,19 @@ function fillScore(measure, writeRows) {
     const target = targets[i] || spec;
     const index = part[spec.part];
     const on = !!(target && target.on);
+    const foot = footTarget(spec.id);
     let position = 0;
     let rotation = 0;
     if (on) {
       const dx = (target.x || 0) - ((measure.partX && measure.partX[index]) || 0);
       const dy = (target.y || 0) - ((measure.partY && measure.partY[index]) || 0);
-      const closeness = 1 - 2 * clamp(Math.hypot(dx, dy) / config.body.targetSpanMeters, 0, 1);
-      position = weight.targetPosition * closeness;
+      const span = foot ? config.skill.footSpanMeters : config.body.targetSpanMeters;
+      const positionWeight = foot ? weight.footPosition : weight.targetPosition;
+      const closeness = 1 - 2 * clamp(Math.hypot(dx, dy) / span, 0, 1);
+      position = positionWeight * closeness;
       const partCos = measure.partCos && measure.partCos[index];
       rotation = weight.targetRotation * angleErrorCos(target.angle, (measure.partSin && measure.partSin[index]) || 0, partCos == null ? 1 : partCos);
-      ceiling += weight.targetPosition + weight.targetRotation;
+      ceiling += positionWeight + weight.targetRotation;
     }
     if (writeRows) {
       terms[row].v = position;

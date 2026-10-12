@@ -69,8 +69,8 @@ export const config = {
     headAxis, // Half the distance between the head capsule's circle centers.
     headHeightMeters: headCenterY, // Head center of the standing blueprint. The head-height input uses this.
     torsoHeightMeters: 1.14, // Lower-torso center of the standing blueprint.
-    waistForwardRadians: (35 * Math.PI) / 180, // Chest flexes this far toward the toes.
-    waistBackRadians: (20 * Math.PI) / 180, // Chest extends this far backward. Less than the forward bend.
+    waistForwardRadians: (12 * Math.PI) / 180, // Chest flexes this far toward the toes.
+    waistBackRadians: (6 * Math.PI) / 180, // Chest extends this far backward. Less than the forward bend.
     bodyRayMeters: 0.35, // Short rays from the body. 1 means nothing is within this distance of that face.
     targetSpanMeters: 2, // Target distance at which the position reward reaches its floor.
   },
@@ -92,8 +92,12 @@ export const config = {
   reward: {
     targetPosition: 1, // +this on the target, -this at targetSpanMeters. Only while that target is on.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on.
+    footPosition: 2, // Position weight of a foot target. Higher than the body, so a step ranks above holding still.
     headTouch: 2, // Subtracted when a training episode's head touches. The rest of the score stays, so a late brush still ranks above an early dive.
     motion: 0.02, // Subtracted times the mean |motor speed| / motorSpeedLimit. A held pose costs nothing. A joint at the speed limit costs this.
+    upright: 4, // Training only. Mean uprightness over every frame, so a later fall ranks above an early one.
+    alive: 8, // Training only. Fraction of frames isStanding. The stand criterion, scored across the whole episode.
+    step: 3, // Training only. Added once per assisted step reached, and only when the episode ends standing.
   },
   curriculum: {
     // Rows the Train menu and the headless run walk through. Each row lasts `generations`.
@@ -149,6 +153,31 @@ export const config = {
     downTiltSpanRadians: 0.55, // Extra random tilt added past the minimum.
     downDropMeters: 0.05, // Gap under a face-up or face-down start before it settles.
     downSettleFrames: 40, // Physics steps run before the episode clock, so a down start reaches the floor.
+  },
+  // Skill ladder the training start actually runs. The phase menu above is not this.
+  // 1 stand, 2 feet on a short step, 3 assisted steps, 4 those steps over a low box.
+  // Do not raise `level` until that skill's held-out eval has passed.
+  skill: {
+    level: 2,
+    trainSeconds: 6, // Scored training length. The held-out eval always uses episode.seconds.
+    stanceMeters: 0.11, // Half the rewarded split for standing. Feet spawn stacked; a legal stand needs them apart.
+    placeStanceMeters: 0.32, // Where each foot already is when it stands. One mark stays here; the other steps away.
+    footGroundMeters: 0.04, // Foot-center height once the sole is on the floor. Marks sit here, not at the drop height.
+    footSpanMeters: 0.5, // Foot position reward and foot dx/dy use this instead of targetSpanMeters.
+    placeMinMeters: 0.12, // Skill 2. Forward shift of the stance midpoint, in meters. Held-out eval uses 0.12–0.16 m.
+    placeMaxMeters: 0.16,
+    placeScale: 1, // Training shift uses the same 0.12–0.16 m forward range as the held-out eval.
+    placeAssist: 0, // Reserved. A joint shove knocked the stand over, so training does not push the foot.
+    stepMinMeters: 0.26, // Skills 3 and 4. One foot's step. Long enough that the box is not under the resting sole.
+    stepMaxMeters: 0.34,
+    stepTurnRadians: 0.25, // Max foot-mark rotation away from flat.
+    footReachMeters: 0.08, // A foot is on its mark inside this distance.
+    footReachRadians: 0.4, // And inside this angle error.
+    walkSteps: 3, // Assisted-walk pass: this many steps, then still standing.
+    planSteps: 4, // Steps offered in one walk or box episode. The wire format stores this many slots.
+    boxHeightMeters: 0.04, // Full height of a floor box. A flat foot has to lift over it.
+    boxHalfWidthMeters: 0.04,
+    boxAlong: 0.75, // Box center as a fraction of the step, measured from the foot's previous mark.
   },
   search: {
     explorationScale: 0.06, // Target-column noise never drops below this.
@@ -218,6 +247,9 @@ export const config = {
     nearPassSlack: 0.15, // A rate this close to the pass rate still triggers a full eval.
     passRate: {
       stand: 0.8,
+      feet: 0.6, // Both feet on the held-out marks, still standing. Chance of that without aiming is about 0.
+      assist: 0.5, // Several assisted steps and still standing.
+      boxes: 0.45, // Past at least one box, still standing.
       ball: 0.7,
       drop: 0.65,
       supine: 0.6,
@@ -261,6 +293,11 @@ export function setTrainingPhase(phase) {
 
 export function setTrainingByPhases(on) {
   config.curriculum.byPhases = !!on;
+}
+
+export function setSkill(level) {
+  const id = level | 0;
+  config.skill.level = id < 1 ? 1 : id > 4 ? 4 : id;
 }
 
 export function activeTrainingPhase() {

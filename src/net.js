@@ -128,12 +128,28 @@ for (let jointIndex = 0; jointIndex < search.trainableJointIndexes.length; joint
   if (joint >= 0 && joint < limbJoint.length) limbJoint[joint] = 1;
 }
 
+// Si está puesto, el ruido y Adam solo tocan esas salidas. El resto del vector queda en el checkpoint.
+let outputJointMask = null;
+
+export function setOutputJoints(indexes) {
+  if (!indexes) {
+    outputJointMask = null;
+    return;
+  }
+  outputJointMask = new Uint8Array(net.jointCount);
+  for (let i = 0; i < indexes.length; i++) {
+    const joint = indexes[i];
+    if (joint >= 0 && joint < outputJointMask.length) outputJointMask[joint] = 1;
+  }
+}
+
 // Cuánto ruido le toca a cada peso. El cuerpo casi no se mueve; los miembros y los targets, sí.
 // El ruido grande de los targets y del contacto de la cabeza solo cae en los pesos que multiplican esa entrada.
 // `boost` agranda ese ruido cuando el puntaje no mejora. sigmaCap lo corta. Cuello y muñecas siguen en 0.
 function explorationOf(index, scale, boost) {
   const extra = boost > 0 ? boost : 1;
   let sigma = search.bodyExplorationScale * extra;
+  if (outputJointMask && index < layout.outputBase) return 0;
   if (index < layout.outputBase) {
     const inFeedback = index >= layout.feedbackBase && index < layout.feedbackBase + layout.feedbackBlock;
     const readsInput = !inFeedback && (layout.feedforward ? index < layout.feedforwardBlock : index >= layout.recurrentBase);
@@ -148,7 +164,8 @@ function explorationOf(index, scale, boost) {
     }
   } else {
     const joint = Math.floor((index - layout.outputBase) / (layout.recurrent + 1));
-    sigma = limbJoint[joint] ? search.limbExplorationScale * extra : 0;
+    const allowed = outputJointMask ? outputJointMask[joint] : limbJoint[joint];
+    sigma = allowed ? search.limbExplorationScale * extra : 0;
   }
   const cap = search.sigmaCap;
   return sigma > 0 && cap > 0 ? Math.min(cap, sigma) : sigma;
@@ -502,5 +519,143 @@ export class EvolutionSearch {
         this.flatGens = 0;
       }
     }
+  }
+}
+
+// Red chica de las piernas. El prior de equilibrio no se toca. Unos cientos de pesos, no miles.
+export const residualInputs = 12;
+export const residualHidden = 16;
+export const residualOutputs = 6;
+
+export function residualWeightCount() {
+  return residualHidden * (residualInputs + 1) + residualOutputs * (residualHidden + 1);
+}
+
+export class ResidualNet {
+  constructor(weights) {
+    const count = residualWeightCount();
+    this.weights = weights && weights.length === count ? weights : new Float32Array(count);
+    this.hidden = new Float32Array(residualHidden);
+    this.out = new Float32Array(residualOutputs);
+  }
+
+  forward(input) {
+    const weights = this.weights;
+    let cursor = 0;
+    for (let unit = 0; unit < residualHidden; unit++) {
+      let sum = weights[cursor++];
+      for (let i = 0; i < residualInputs; i++) sum += weights[cursor++] * input[i];
+      this.hidden[unit] = Math.tanh(sum);
+    }
+    for (let joint = 0; joint < residualOutputs; joint++) {
+      let sum = weights[cursor++];
+      for (let unit = 0; unit < residualHidden; unit++) sum += weights[cursor++] * this.hidden[unit];
+      this.out[joint] = Math.tanh(sum);
+    }
+  }
+}
+
+// La misma búsqueda antitética y Adam, solo sobre la red chica. Sigma uniforme.
+export class ResidualSearch {
+  constructor(randomNormal) {
+    const length = residualWeightCount();
+    this.theta = new Float32Array(length);
+    this.m = new Float32Array(length);
+    this.v = new Float32Array(length);
+    this.k = 0;
+    this.gen = 0;
+    this.sigma = 0.08;
+    this.lr = 0.02;
+    this.length = length;
+    this.noiseStore = [];
+    this.childStore = [];
+    this.noiseRefs = [];
+    this.weightRefs = [];
+    this.values = [];
+    this.order = [];
+    this.rank = [];
+    this.gradient = new Float32Array(length);
+    const self = this;
+    this.compareFitness = (a, b) => self.values[a] - self.values[b];
+    if (randomNormal) this.randomNormal = randomNormal;
+  }
+
+  zeroMoments() {
+    this.m.fill(0);
+    this.v.fill(0);
+    this.k = 0;
+  }
+
+  ask(count, randomNormal) {
+    const length = this.length;
+    const draw = randomNormal || this.randomNormal;
+    while (this.noiseStore.length < count) this.noiseStore.push(new Float32Array(length));
+    while (this.childStore.length < count * 2) this.childStore.push(new Float32Array(length));
+    this.noiseRefs.length = count;
+    this.weightRefs.length = count * 2;
+    const sigma = this.sigma;
+    for (let pair = 0; pair < count; pair++) {
+      const direction = this.noiseStore[pair];
+      const plus = this.childStore[pair * 2];
+      const minus = this.childStore[pair * 2 + 1];
+      for (let i = 0; i < length; i++) {
+        direction[i] = draw();
+        const step = sigma * direction[i];
+        plus[i] = this.theta[i] + step;
+        minus[i] = this.theta[i] - step;
+      }
+      this.noiseRefs[pair] = direction;
+      this.weightRefs[pair * 2] = plus;
+      this.weightRefs[pair * 2 + 1] = minus;
+    }
+    return { count, weights: this.weightRefs, noise: this.noiseRefs };
+  }
+
+  tell(generation, scores) {
+    const count = generation.count;
+    const values = this.values;
+    values.length = scores.length;
+    for (let i = 0; i < scores.length; i++) values[i] = scores[i].fitness;
+    const length = this.length;
+    const children = count * 2;
+    const order = this.order;
+    order.length = children;
+    for (let i = 0; i < children; i++) order[i] = i;
+    order.sort(this.compareFitness);
+    const rank = this.rank;
+    rank.length = children;
+    const span = Math.max(1, children - 1);
+    for (let place = 0; place < children; place++) rank[order[place]] = place / span - 0.5;
+    let low = Infinity;
+    let high = -Infinity;
+    for (let i = 0; i < children; i++) {
+      if (values[i] < low) low = values[i];
+      if (values[i] > high) high = values[i];
+    }
+    if (high > low) {
+      const gradient = this.gradient;
+      gradient.fill(0);
+      const sigma = this.sigma;
+      for (let pair = 0; pair < count; pair++) {
+        const plus = values[2 * pair];
+        const minus = values[2 * pair + 1];
+        if (plus === minus) continue;
+        const difference = rank[2 * pair] - rank[2 * pair + 1];
+        const direction = generation.noise[pair];
+        for (let i = 0; i < length; i++) gradient[i] += difference * direction[i] / sigma;
+      }
+      const stepIndex = ++this.k;
+      const b1 = 0.9;
+      const b2 = 0.999;
+      const fix1 = 1 - Math.pow(b1, stepIndex);
+      const fix2 = 1 - Math.pow(b2, stepIndex);
+      for (let i = 0; i < length; i++) {
+        const estimate = gradient[i] / count;
+        this.m[i] = b1 * this.m[i] + (1 - b1) * estimate;
+        this.v[i] = b2 * this.v[i] + (1 - b2) * estimate * estimate;
+        this.theta[i] += (this.lr * (this.m[i] / fix1)) / (Math.sqrt(this.v[i] / fix2) + 1e-8);
+      }
+    }
+    this.gen++;
   }
 }

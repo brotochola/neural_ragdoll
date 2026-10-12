@@ -1,7 +1,7 @@
 import * as Box2D from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
 import { createSim } from "./sim.js";
 import { config, setTrainingPhase } from "../config.js";
-import { HEADER, TASK_HEADER, resultIndex } from "./task-buffer.js";
+import { HEADER, TASK_HEADER, STEP_SLOTS, BOX_SLOTS, resultIndex } from "./task-buffer.js";
 
 const sim = createSim(Box2D);
 const world = sim.build();
@@ -28,6 +28,10 @@ const options = {
   ballFrame: null,
   ballSide: 1,
   ballSpeed: 0,
+  skill: 1,
+  steps: [],
+  boxes: [],
+  place: null,
 };
 
 function readOptions(f32, cursor) {
@@ -64,6 +68,30 @@ function readOptions(f32, cursor) {
       target.angle = c;
     }
   }
+  options.skill = f32[cursor + 37] || 0;
+  const stepCount = f32[cursor + 38] | 0;
+  options.steps.length = 0;
+  let plan = cursor + 39;
+  for (let s = 0; s < STEP_SLOTS; s++) {
+    const foot = f32[plan++];
+    const dx = f32[plan++];
+    const dy = f32[plan++];
+    const turn = f32[plan++];
+    if (s < stepCount) options.steps.push({ foot, dx, dy, turn });
+  }
+  const boxCount = f32[plan++] | 0;
+  options.boxes.length = 0;
+  for (let b = 0; b < BOX_SLOTS; b++) {
+    const dx = f32[plan++];
+    const halfW = f32[plan++];
+    const halfH = f32[plan++];
+    const dir = f32[plan++];
+    if (b < boxCount) options.boxes.push({ dx, halfW, halfH, dir });
+  }
+  const placeFoot = f32[plan++];
+  const placeExtra = f32[plan++];
+  const placeTurn = f32[plan++];
+  options.place = placeFoot >= 0 ? { foot: placeFoot | 0, extra: placeExtra, turn: placeTurn } : null;
 }
 
 postMessage("ready");

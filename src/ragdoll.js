@@ -195,11 +195,11 @@ export class RagDoll2D {
       parts.push(part);
       return parts.length - 1;
     };
-    const addCapsule = (centerX, centerY, axisX, axisY, radius, density = 70) => {
+    const addCapsule = (centerX, centerY, axisX, axisY, radius, density = 70, friction = 2) => {
       const created = CreateCapsule({
         worldId, type: dynamicBody, position: vector(centerX, centerY),
         center1: vector(-axisX, -axisY), center2: vector(axisX, axisY),
-        radius, density, friction: 2, groupIndex: -1,
+        radius, density, friction, groupIndex: -1,
       });
       const length = 2 * Math.hypot(axisX, axisY);
       const area = Math.PI * radius * radius + length * 2 * radius;

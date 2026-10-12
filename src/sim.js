@@ -1,7 +1,13 @@
 // Ragdoll body, sensing, and one episode. The network and the reward live in their own files.
 import { config, activeTrainingPhase } from "../config.js";
-import { scoreDecision, scoreTotal, isStanding } from "./reward.js";
-import { ElmanNetwork } from "./net.js";
+import {
+  scoreDecision,
+  scoreTotal,
+  isStanding,
+  onMark,
+  markError,
+} from "./reward.js";
+import { ElmanNetwork, ResidualNet } from "./net.js";
 import { clamp, makeSeededRandom, randomNormalSample } from "./utils.js";
 import { RagDoll2D, faceRaySpecs, facePartName } from "./ragdoll.js";
 
@@ -96,14 +102,22 @@ function buildObservationLabels() {
         tip:
           "Horizontal distance from the " +
           spec.id +
-          " to its target, divided by the target span. 0 while that target is off.",
+          " to its target, divided by " +
+          (spec.id === "footR" || spec.id === "footL"
+            ? "the foot span"
+            : "the target span") +
+          ". 0 while that target is off.",
       },
       {
         name: spec.id + " dy",
         tip:
           "Vertical distance from the " +
           spec.id +
-          " to its target, divided by the target span. 0 while that target is off.",
+          " to its target, divided by " +
+          (spec.id === "footR" || spec.id === "footL"
+            ? "the foot span"
+            : "the target span") +
+          ". 0 while that target is off.",
       },
       {
         name: spec.id + " esin",
@@ -151,54 +165,303 @@ export const thrownKinds = [
   { name: "Weight 25 kg", radius: 0.16, density: 310, color: 0x9aa3b8 },
 ];
 
-export function fillTrainingStart(out, randomSource) {
+function targetSlot(id) {
+  for (let i = 0; i < config.targets.length; i++)
+    if (config.targets[i].id === id) return i;
+  return 0;
+}
+
+function signed(randomSource, span) {
+  return (randomSource() * 2 - 1) * span;
+}
+
+function ensureTargets(out) {
+  let list = out.targets;
+  if (!list || list.length !== config.targets.length) {
+    list = [];
+    for (let i = 0; i < config.targets.length; i++) {
+      list.push({ on: true, x: 0, y: 0, angle: 0, dx: 0, dy: 0, turn: 0 });
+    }
+    out.targets = list;
+  }
+  return list;
+}
+
+// Los pies nacen uno encima del otro. La marca los separa para que el premio y pararse coincidan.
+function fillStandFeet(list, randomSource) {
+  const half = config.skill.stanceMeters;
+  const slip = config.start.targetJitterMeters;
+  const turn = config.start.targetJitterRadians;
+  const right = list[targetSlot("footR")];
+  const left = list[targetSlot("footL")];
+  right.dx = half + signed(randomSource, slip);
+  left.dx = -half + signed(randomSource, slip);
+  right.dy = 0;
+  left.dy = 0;
+  right.turn = signed(randomSource, turn);
+  left.turn = signed(randomSource, turn);
+}
+
+// Un paso corto de los dos pies, el mismo para los dos gemelos. La cabeza sigue al medio.
+function fillPlaceFeet(out, list, randomSource, scale, shiftMeters) {
+  const skill = config.skill;
+  const half = skill.placeStanceMeters || skill.stanceMeters;
+  // Los dos pies se corren juntos. scale < 1 acorta el paso. La eval oficial pasa 1.
+  const s = scale == null ? 1 : scale;
+  const extra =
+    shiftMeters > 0
+      ? shiftMeters
+      : s *
+        (skill.placeMinMeters +
+          randomSource() * (skill.placeMaxMeters - skill.placeMinMeters));
+  const rolled = randomSource() < 0.5 ? -1 : 1;
+  // El paso largo oficial solo va hacia +x. Un shift fijo conserva el signo, así 0.12 y 0.16 no cambian.
+  const sign = shiftMeters > 0 ? rolled : 1;
+  const right = list[targetSlot("footR")];
+  const left = list[targetSlot("footL")];
+  right.dx = half;
+  left.dx = -half;
+  right.dy = 0;
+  left.dy = 0;
+  right.turn = 0;
+  left.turn = 0;
+  out.place = {
+    foot: targetSlot(sign < 0 ? "footL" : "footR"),
+    extra: sign * extra,
+    turn: 0,
+  };
+}
+
+// Pasos alternados. El plan queda en el arranque: reset no sortea otro.
+function fillWalk(out, list, randomSource, boxes) {
+  const skill = config.skill;
+  const dir = randomSource() < 0.5 ? -1 : 1;
+  const step =
+    skill.stepMinMeters +
+    randomSource() * (skill.stepMaxMeters - skill.stepMinMeters);
+  const half = skill.placeStanceMeters || skill.stanceMeters;
+  const rightIndex = targetSlot("footR");
+  const leftIndex = targetSlot("footL");
+  let posR = half;
+  let posL = -half;
+  const firstRight = randomSource() < 0.5;
+  const count = Math.min(skill.planSteps | 0, 4);
+  const steps = [];
+  const boxList = [];
+  for (let i = 0; i < count; i++) {
+    const right = firstRight ? i % 2 === 0 : i % 2 === 1;
+    const prev = right ? posR : posL;
+    if (right) posR += dir * step;
+    else posL += dir * step;
+    const next = right ? posR : posL;
+    steps.push({
+      foot: right ? rightIndex : leftIndex,
+      dx: next,
+      dy: 0,
+      turn: signed(randomSource, skill.stepTurnRadians),
+    });
+    if (boxes) {
+      boxList.push({
+        dx: prev + (next - prev) * skill.boxAlong,
+        halfW: skill.boxHalfWidthMeters,
+        halfH: skill.boxHeightMeters / 2,
+        dir,
+      });
+    }
+  }
+  out.steps = steps;
+  out.boxes = boxes ? boxList : null;
+  const right = list[rightIndex];
+  const left = list[leftIndex];
+  right.dx = firstRight ? steps[0].dx : half;
+  left.dx = firstRight ? -half : steps[0].dx;
+  right.dy = 0;
+  left.dy = 0;
+  right.turn = firstRight ? steps[0].turn : 0;
+  left.turn = firstRight ? 0 : steps[0].turn;
+}
+
+export function fillTrainingStart(out, randomSource, mode) {
+  const level = mode && mode.level ? mode.level | 0 : config.skill.level | 0;
+  const full = !!(mode && mode.full);
+  const seconds = full
+    ? config.episode.seconds
+    : config.skill.trainSeconds || config.episode.seconds;
   out.push = 0;
   out.amp = 0;
   out.period = config.body.platformPeriodSeconds;
   out.phaseShift = 0;
-  out.frames = config.episode.frames;
+  out.frames = Math.max(1, Math.round(seconds * config.physics.hz));
   out.task = "live";
   out.pose = "up";
   out.failOnHead = true;
   out.settle = 0;
   out.ballFrame = null;
   out.goalX = null;
-  out.tilt = (randomSource() * 2 - 1) * config.start.uprightTiltRadians;
+  out.skill = level;
+  out.steps = null;
+  out.boxes = null;
+  out.place = null;
+  out.placeAssist =
+    mode && mode.placeAssist != null
+      ? mode.placeAssist
+      : full
+        ? 0
+        : config.skill.placeAssist || 0;
+  out.tilt = signed(randomSource, config.start.uprightTiltRadians);
   out.drop = config.start.uprightDropMeters;
-  out.tilt += (randomSource() * 2 - 1) * config.episode.startTiltJitterRadians;
+  out.tilt += signed(randomSource, config.episode.startTiltJitterRadians);
   out.drop += randomSource() * config.episode.startDropJitterMeters;
-  out.shiftX = (randomSource() * 2 - 1) * config.episode.startShiftMeters;
-  // El sandbox no entra. Las cinco partes se premian cerca de donde nacen en este episodio.
+  out.shiftX = signed(randomSource, config.episode.startShiftMeters);
+  // El sandbox no entra. El nivel decide las marcas, y el par comparte este mismo sorteo.
+  const list = ensureTargets(out);
   const meters = config.start.targetJitterMeters;
   const radians = config.start.targetJitterRadians;
-  let list = out.targets;
-  if (!list || list.length !== config.targets.length) {
-    list = [];
-    for (let i = 0; i < config.targets.length; i++) list.push({ on: true, x: 0, y: 0, angle: 0, dx: 0, dy: 0, turn: 0 });
-    out.targets = list;
-  }
-  for (let i = 0; i < config.targets.length; i++) {
+  for (let i = 0; i < list.length; i++) {
     const target = list[i];
     target.on = true;
-    target.dx = (randomSource() * 2 - 1) * meters;
-    target.dy = (randomSource() * 2 - 1) * meters;
-    target.turn = (randomSource() * 2 - 1) * radians;
+    target.dx = signed(randomSource, meters);
+    target.dy = signed(randomSource, meters);
+    target.turn = signed(randomSource, radians);
   }
+  if (level <= 1) fillStandFeet(list, randomSource);
+  else if (level === 2) {
+    const scale = full
+      ? 1
+      : mode && mode.placeScale != null
+        ? mode.placeScale
+        : config.skill.placeScale == null
+          ? 1
+          : config.skill.placeScale;
+    fillPlaceFeet(out, list, randomSource, scale, mode && mode.shiftMeters);
+  } else fillWalk(out, list, randomSource, level >= 4);
   return out;
 }
 
+// La cabeza y las manos se paran arriba del medio de los pies, así caminar no las deja en el origen.
+function plantBodyTargets(options) {
+  const targets = options && options.targets;
+  if (!targets) return;
+  const right = targets[targetSlot("footR")];
+  const left = targets[targetSlot("footL")];
+  const mid = ((right.x || 0) + (left.x || 0)) / 2;
+  for (let i = 0; i < 3; i++) targets[i].x = mid;
+}
+
+function applyStep(options, step) {
+  const target = options.targets[step.foot];
+  target.x = (target.baseX || 0) + step.dx;
+  target.y = config.skill.footGroundMeters;
+  target.angle = step.turn || 0;
+  target.on = true;
+  plantBodyTargets(options);
+}
+
+// El siguiente pie aparece cuando este ya está en la marca y el cuerpo sigue parado.
+// Cuando ya está quieto, un pie se queda y el otro recibe el paso sorteado.
+function armPlace(episode) {
+  const place = episode.options.place;
+  if (!place || episode.placeArmed) return;
+  if ((episode.upStreak || 0) < (episode.options.armAt || 30)) return;
+  episode.placeArmed = true;
+  episode.placeArmFrame = episode.frame;
+  const measure = episode.measure;
+  const targets = episode.options.targets;
+  const feet = [
+    [targetSlot("footL"), config.partIndex.footLeft],
+    [targetSlot("footR"), config.partIndex.footRight],
+  ];
+  for (let i = 0; i < feet.length; i++) {
+    const slot = feet[i][0];
+    const part = feet[i][1];
+    const target = targets[slot];
+    target.x = measure.partX[part] || 0;
+    target.baseX = target.x;
+    target.y = config.skill.footGroundMeters;
+    target.angle = Math.atan2(
+      measure.partSin[part] || 0,
+      measure.partCos[part] || 0,
+    );
+    target.on = true;
+  }
+  const extra = place.extra || 0;
+  targets[targetSlot("footL")].x += extra;
+  targets[targetSlot("footR")].x += extra;
+  episode.placeExtra = extra;
+  episode.phaseFrame = episode.frame;
+  plantBodyTargets(episode.options);
+}
+
+function maybeAdvance(episode) {
+  const steps = episode.options.steps;
+  if (!steps || !steps.length) return;
+  const cursor = episode.stepCursor || 0;
+  if (cursor >= steps.length) return;
+  if (!isStanding(episode.measure)) return;
+  if (!onMark(episode.measure, steps[cursor].foot)) return;
+  episode.stepCursor = cursor + 1;
+  episode.stepsDone = episode.stepCursor;
+  const next = steps[episode.stepCursor];
+  if (next) {
+    applyStep(episode.options, next);
+    episode.placeExtra = next.foot === targetSlot("footR") ? 1 : -1;
+  }
+  episode.phaseFrame = episode.frame;
+}
+
+function armWalk(episode) {
+  if ((episode.options.skill | 0) < 3 || episode.phaseFrame > 0) return;
+  const steps = episode.options.steps;
+  if (!steps || !steps.length || (episode.upStreak || 0) < 30) return;
+  const step = steps[episode.stepCursor || 0];
+  if (!step) return;
+  episode.phaseFrame = episode.frame;
+  episode.placeExtra = step.foot === targetSlot("footR") ? 1 : -1;
+}
+
+function boxesCleared(episode) {
+  const live = episode.liveBoxes;
+  if (!live || !live.length) return 0;
+  const measure = episode.measure;
+  const left = measure.partX[config.partIndex.footLeft];
+  const right = measure.partX[config.partIndex.footRight];
+  let count = 0;
+  for (let i = 0; i < live.length; i++) {
+    const box = live[i];
+    const past =
+      box.dir > 0
+        ? left > box.far || right > box.far
+        : left < box.far || right < box.far;
+    if (past) count++;
+  }
+  return count;
+}
+
 // Escribe la marca del mundo: la parte ya colocada, más el corrimiento que sorteó el par.
+// Los pies quedan a la altura del suelo. El drop los deja en el aire y esa marca no se puede pisar.
 function stampTrainTargets(measure, options) {
   const source = options && options.targets;
   if (!source) return;
   for (let i = 0; i < source.length && i < config.targets.length; i++) {
     const target = source[i];
     if (!target.on) continue;
-    const index = config.partIndex[config.targets[i].part];
-    target.x = (measure.partX[index] || 0) + (target.dx || 0);
-    target.y = (measure.partY[index] || 0) + (target.dy || 0);
-    target.angle = Math.atan2(measure.partSin[index] || 0, measure.partCos[index] || 0) + (target.turn || 0);
+    const spec = config.targets[i];
+    const index = config.partIndex[spec.part];
+    const foot = spec.id === "footR" || spec.id === "footL";
+    if (foot) {
+      target.baseX = measure.partX[index] || 0;
+      target.x = target.baseX + (target.dx || 0);
+      target.y = config.skill.footGroundMeters;
+      target.angle = target.turn || 0;
+    } else {
+      target.x = (measure.partX[index] || 0) + (target.dx || 0);
+      target.y = (measure.partY[index] || 0) + (target.dy || 0);
+      target.angle =
+        Math.atan2(measure.partSin[index] || 0, measure.partCos[index] || 0) +
+        (target.turn || 0);
+    }
   }
+  if ((options.skill || 0) >= 2) plantBodyTargets(options);
 }
 
 export function poseScore(rows, offset, count, out) {
@@ -209,6 +472,12 @@ export function poseScore(rows, offset, count, out) {
   let stance = 0;
   let headImpact = 0;
   let stoodUp = true;
+  let alive = 0;
+  let steps = 0;
+  let foot = 0;
+  let reach = 0;
+  let closed = 0;
+  let leaned = 0;
   const last = offset + count;
   for (let i = offset; i < last; i++) {
     const row = rows[i];
@@ -217,6 +486,12 @@ export function poseScore(rows, offset, count, out) {
     end += row.end || 0;
     gap += row.gap || 0;
     stance += row.stance || 0;
+    alive += row.alive || 0;
+    steps += row.steps || 0;
+    foot += row.foot || 0;
+    reach += row.reach || 0;
+    closed += row.closed || 0;
+    leaned += row.leaned || 0;
     if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
     if (!row.stoodUp) stoodUp = false;
   }
@@ -231,6 +506,12 @@ export function poseScore(rows, offset, count, out) {
   out.headImpact = headImpact;
   out.stoodUp = stoodUp;
   out.up = stoodUp;
+  out.alive = alive / n;
+  out.steps = steps / n;
+  out.foot = foot / n;
+  out.reach = reach / n;
+  out.closed = closed / n;
+  out.leaned = leaned / n;
   return out;
 }
 
@@ -243,8 +524,10 @@ export function createSim(box) {
     b2Body_SetTransform,
     b2MakeRot,
     b2Body_SetLinearVelocity,
+    b2Body_GetLinearVelocity,
     b2Body_SetAngularVelocity,
     b2Body_SetAwake,
+    b2Body_ApplyForceToCenter,
     b2RevoluteJoint_GetAngle,
     b2RevoluteJoint_SetMotorSpeed,
     CreateCircle,
@@ -253,6 +536,7 @@ export function createSim(box) {
     b2Body_GetContactData,
   } = box;
   const dynamicBody = b2BodyType.b2_dynamicBody;
+  const staticBody = b2BodyType.b2_staticBody;
   const vector = (x, y) => new b2Vec2(x, y);
   const placed = [];
   // Box2D guarda el vector y la rotación que le pasamos. Uno solo compartido pega todas las partes juntas.
@@ -489,11 +773,52 @@ export function createSim(box) {
     return predicted;
   }
 
+  function spawnStaticBox(world, x, halfW, halfH) {
+    const created = CreateBoxPolygon({
+      worldId: world.worldId,
+      type: staticBody,
+      position: vector(x, halfH),
+      size: vector(halfW, halfH),
+      friction: 2,
+    });
+    const id = created.bodyId;
+    world.thrownIds.push(id);
+    world.thrownShapes.push(world.shapeOf(id));
+    return id;
+  }
+
+  // Caja quieta en el camino del paso. dx es relativo al pie izquierdo en el arranque.
+  function placeSkillBoxes(episode) {
+    const boxes = episode.options.boxes;
+    const live = episode.liveBoxes;
+    live.length = 0;
+    if (!boxes || !boxes.length) return;
+    const origin = episode.measure.partX[config.partIndex.footLeft] || 0;
+    for (let i = 0; i < boxes.length; i++) {
+      const box = boxes[i];
+      const x = origin + box.dx;
+      episode.objects.push(
+        spawnStaticBox(episode.world, x, box.halfW, box.halfH),
+      );
+      live.push({
+        far: x + box.dir * box.halfW,
+        dir: box.dir || 1,
+        x,
+        halfW: box.halfW,
+      });
+    }
+  }
+
   class Episode {
     constructor(world, weights, tilt, drop, options = {}) {
+      console.log("episode constructor", options, this);
       this.free = false;
       this.world = world;
       this.network = new ElmanNetwork(weights);
+      this.residual = new ResidualNet();
+      this.residualIn = new Float32Array(12);
+      this.legAdd = new Float32Array(config.net.jointCount);
+      this.legBase = new Float32Array(config.net.jointCount);
       this.startSamples = rewardSamples(config.episode.startWindowSeconds);
       this.endRing = new Float32Array(
         rewardSamples(config.episode.endWindowSeconds),
@@ -501,6 +826,7 @@ export function createSim(box) {
       this.input = new Float32Array(config.net.inputCount);
       this.previousJointAngle = new Float32Array(config.net.jointCount);
       this.objects = [];
+      this.liveBoxes = [];
       this.measure = {
         partX: world.px,
         partY: world.py,
@@ -567,6 +893,10 @@ export function createSim(box) {
       if (network.compressed.length) network.compressed.fill(0);
       if (network.feedback.length) network.feedback.fill(0);
       network.action.fill(0);
+      const rawResidual = this.options.residual;
+      if (rawResidual && rawResidual.length === this.residual.weights.length)
+        this.residual.weights.set(rawResidual);
+      else this.residual.weights.fill(0);
       this.frame = 0;
       this.startSum = 0;
       this.startCount = 0;
@@ -581,6 +911,31 @@ export function createSim(box) {
       this.headHit = false;
       this.motionSum = 0;
       this.motionCount = 0;
+      this.lifeSum = 0;
+      this.lifeCount = 0;
+      this.uprightSum = 0;
+      this.stepCursor = 0;
+      this.placeArmed = false;
+      this.placeExtra = 0;
+      this.placeArmFrame = 0;
+      this.phaseFrame = 0;
+      this.legLocked = false;
+      this.gap0 = null;
+      this.gapCloseSum = 0;
+      this.gapCloseCount = 0;
+      this.bodyGap0 = null;
+      this.bodyCloseSum = 0;
+      this.airPart = -1;
+      this.airGap = 0;
+      this.swingPeak = 0;
+      this.swingClose = 0;
+      this.footGap = 0;
+      this.torsoDown = false;
+      this.stepsDone = 0;
+      this.windowStood = 0;
+      this.windowFrames = 0;
+      this.endedStanding = false;
+      this.liveBoxes.length = 0;
       this.previousRewardTotal = 0;
       this.ballThrown = false;
       this.endedUp = false;
@@ -601,7 +956,10 @@ export function createSim(box) {
           world.joints[i].id,
         );
       fillMeasure(world, this.measure);
-      if (this.options.failOnHead) stampTrainTargets(this.measure, this.options);
+      if (this.options.failOnHead) {
+        stampTrainTargets(this.measure, this.options);
+        placeSkillBoxes(this);
+      }
       this.measure.targets = episodeTargets(this.options);
       castMeasureRays(world, this.measure);
     }
@@ -659,7 +1017,10 @@ export function createSim(box) {
           input[cursor++] = 0;
           continue;
         }
-        const span = config.body.targetSpanMeters;
+        const span =
+          spec.id === "footR" || spec.id === "footL"
+            ? config.skill.footSpanMeters
+            : config.body.targetSpanMeters;
         input[cursor++] = clamp(
           ((target.x || 0) - measure.partX[index]) / span,
           -1,
@@ -712,6 +1073,8 @@ export function createSim(box) {
         this.startSum += total;
         this.startCount++;
       }
+      this.lifeSum += total;
+      this.lifeCount++;
       this.endRing[this.endCursor] = total;
       this.endCursor++;
       if (this.endCursor >= this.endRing.length) this.endCursor = 0;
@@ -730,6 +1093,7 @@ export function createSim(box) {
       const measure = this.measure;
       const standing = isStanding(measure);
       this.fallen = measure.bodyOn || measure.torsoCos < 0.25;
+      if ((measure.torsoCos || 0) < 0.25) this.torsoDown = true;
       if (standing) {
         this.upStreak++;
         this.stoodFrames++;
@@ -743,6 +1107,20 @@ export function createSim(box) {
           -(measure.headVelocityY || 0),
         );
       }
+      const height = clamp(
+        measure.headHeight / config.body.standingHeadMeters,
+        0,
+        1.25,
+      );
+      this.uprightSum += Math.max(0, measure.torsoCos || 0) * height;
+      const total = this.options.frames || config.episode.frames;
+      const endFrames = Math.round(
+        config.episode.endWindowSeconds * config.physics.hz,
+      );
+      if (this.frame >= total - endFrames) {
+        this.windowFrames++;
+        if (standing) this.windowStood++;
+      }
     }
     step() {
       const frame = this.frame + (this.options.phase || 0);
@@ -750,6 +1128,9 @@ export function createSim(box) {
       this.measure.targets = episodeTargets(this.options);
       fillMeasure(this.world, this.measure);
       this.notePose();
+      armPlace(this);
+      armWalk(this);
+      maybeAdvance(this);
       if (
         this.options.ballFrame != null &&
         this.frame === this.options.ballFrame &&
@@ -780,6 +1161,7 @@ export function createSim(box) {
           config.cadence.rewardFrameOffset
       )
         this.evaluate();
+      this.noteGap();
       this.applyMotors();
       this.stepPhysics();
       this.frame++;
@@ -787,17 +1169,532 @@ export function createSim(box) {
         this.frame >= (this.options.frames || config.episode.frames) &&
         !this.free
       ) {
+        this.endedStanding = isStanding(this.measure);
         this.endedUp = this.upStreak >= 15;
         return true;
       }
       return false;
     }
+    // El reloj lo pone el episodio. La red chica solo dice cómo mover cadera, rodilla y tobillo.
+    blendLegs() {
+      const add = this.legAdd;
+      add.fill(0);
+      if (!this.options || (this.options.skill | 0) < 2) return;
+      if (!this.placeArmed) return;
+      const farMark = Math.abs(this.placeExtra || 0) > 0.18;
+      if (this.frame === this.phaseFrame) {
+        this.legBase.set(this.action);
+        this.legLocked = true;
+        this.stepXLeft = this.measure.partX[config.partIndex.footLeft] || 0;
+        this.rewind = 0;
+        this.extraAt = 0;
+        this.extraDecided = 0;
+        this.extraElapsed = 0;
+        this.extraWhich = 0;
+        this.leadDownFrame = 0;
+        this.leadWasUp = 0;
+        this.pulse2Dx = null;
+        this.pulse2FootL = null;
+        this.pulse2FootR = null;
+        this.pulse2LeanSign = 0;
+        this.place3At = 0;
+        this.place3Which = 0;
+        this.place3Dx = null;
+        this.place3FootL = null;
+        this.place3FootR = null;
+        if (this.options.replayRight) {
+          this.swingX0 = this.measure.partX[config.partIndex.torso] || 0;
+          this.swingL = null;
+          this.swingR = null;
+          this.restWait = 0;
+          this.restOk = 0;
+          this.place3In = 0;
+          this.place3Err0 = 0;
+          this.replayWhy = "";
+          if (this.options.boxes) placeSkillBoxes(this);
+        }
+      }
+      const single = (this.options.skill | 0) >= 3;
+      const lead = (this.placeExtra || 0) >= 0 ? 1 : -1;
+      const first = this.options.leadFlip ? -lead : lead;
+      const extraPulses = this.options.retries | 0;
+      const rightFar = farMark && (this.placeExtra || 0) > 0;
+      const span0 = rightFar ? 40 : this.options.spanFrames || 80;
+      const span1 = this.options.span2Frames || span0;
+      const rewindSpan = 40;
+      const wall = Math.max(0, this.frame - this.phaseFrame);
+      if (!this.leadDownFrame && wall > 12) {
+        const leadPart =
+          first > 0 ? config.partIndex.footRight : config.partIndex.footLeft;
+        const y = this.measure.partY[leadPart] || 0;
+        if (y > 0.06) this.leadWasUp = 1;
+        if (this.leadWasUp && y < 0.05) this.leadDownFrame = this.frame;
+      }
+      // El segundo desliz arranca cuando el primer pie que se alzó vuelve al suelo.
+      // Solo si falta más de 8 cm y la marca pasa de 18 cm. 0.12 y 0.16 no lo usan.
+      const footDown =
+        this.leadDownFrame === this.frame && wall >= span0 + span1;
+      const before150 = farMark && this.frame === 145;
+      if (
+        !single &&
+        !this.extraAt &&
+        this.frame < 150 &&
+        (footDown || before150)
+      ) {
+        const episodeFrames = this.options.frames || 360;
+        const err = (slot, part) => {
+          const target = this.options.targets && this.options.targets[slot];
+          return (target ? target.x : 0) - (this.measure.partX[part] || 0);
+        };
+        const eL = err(targetSlot("footL"), config.partIndex.footLeft);
+        const eR = err(targetSlot("footR"), config.partIndex.footRight);
+        const gap = Math.max(Math.abs(eL), Math.abs(eR));
+        const dir = (this.placeExtra || 0) >= 0 ? 1 : -1;
+        const room = this.frame + 80 <= episodeFrames - 90;
+        if (room && farMark && dir > 0 && gap > 0.08 && (eL + eR) * dir > 0) {
+          this.extraAt = this.frame;
+          this.extraElapsed = wall;
+          this.extraWhich = 1;
+          this.pulse2LeanSign = -1;
+        }
+      }
+      let elapsed = wall;
+      const slideSpan = 80;
+      const placeSpan = 32;
+      if (this.extraAt) {
+        const into = this.frame - this.extraAt;
+        const placeInto =
+          this.place3At > 0 ? this.frame - this.place3At : placeSpan;
+        const busy = into < slideSpan || placeInto < placeSpan;
+        elapsed = busy ? this.extraElapsed : span0 + span1 + rewindSpan + 1;
+      }
+      let phase = 1;
+      let which = first;
+      let holding = false;
+      let index = 0;
+      if (single || elapsed < span0) {
+        index = 0;
+        phase = Math.min(1, elapsed / span0);
+        which = first;
+        if (single && elapsed >= span0) {
+          which = 0;
+          holding = true;
+          this.legLocked = false;
+        }
+      } else if (elapsed < span0 + span1) {
+        index = 1;
+        phase = (elapsed - span0) / span1;
+        which = -first;
+      } else if (
+        !single &&
+        !this.extraAt &&
+        (this.placeExtra || 0) < 0 &&
+        elapsed < span0 + span1 + rewindSpan
+      ) {
+        if (!this.rewind) {
+          const slide =
+            (this.measure.partX[config.partIndex.footLeft] || 0) -
+            (this.stepXLeft || 0);
+          this.rewind = slide < 0.16 ? 1 : -1;
+        }
+        if (this.rewind > 0) {
+          index = 2;
+          phase = (elapsed - span0 - span1) / rewindSpan;
+          which = 1;
+          this.legLocked = true;
+        } else {
+          which = 0;
+          phase = 1;
+          holding = true;
+          this.legLocked = false;
+        }
+      } else if (
+        extraPulses > 0 &&
+        elapsed < span0 + span1 + extraPulses * span0
+      ) {
+        index = 2;
+        phase = ((elapsed - span0 - span1) % span0) / span0;
+        const miss = (slot, part) => {
+          const target = this.options.targets && this.options.targets[slot];
+          return Math.abs(
+            (target ? target.x : 0) - (this.measure.partX[part] || 0),
+          );
+        };
+        const left = miss(targetSlot("footL"), config.partIndex.footLeft);
+        const right = miss(targetSlot("footR"), config.partIndex.footRight);
+        if (Math.max(left, right) <= 0.08) {
+          which = 0;
+          holding = true;
+          this.legLocked = false;
+        } else which = left >= right ? -1 : 1;
+      } else {
+        which = 0;
+        phase = 1;
+        holding = true;
+        this.legLocked = false;
+      }
+      if (this.extraAt) {
+        const into = this.frame - this.extraAt;
+        const pelvis = this.measure.partX[config.partIndex.torso] || 0;
+        if (into === 0) {
+          this.pulse2X0 = pelvis;
+          this.pulse2Foot = this.extraWhich || 0;
+          const shift = (this.placeExtra || 0) >= 0 ? 1 : -1;
+          this.pulse2Shift = shift;
+          this.pulse2Lean = this.pulse2LeanSign || 0;
+          this.pulse2Sin = 0;
+          this.pulse2SinN = 0;
+          this.pulse2FootL0 =
+            this.measure.partX[config.partIndex.footLeft] || 0;
+          this.pulse2FootR0 =
+            this.measure.partX[config.partIndex.footRight] || 0;
+        }
+        if (into === slideSpan - 1) {
+          const missOf = (slot, part) => {
+            const target = this.options.targets && this.options.targets[slot];
+            return Math.abs(
+              (target ? target.x : 0) - (this.measure.partX[part] || 0),
+            );
+          };
+          this.pulse2ErrL = missOf(
+            targetSlot("footL"),
+            config.partIndex.footLeft,
+          );
+          this.pulse2ErrR = missOf(
+            targetSlot("footR"),
+            config.partIndex.footRight,
+          );
+        }
+        if (into === slideSpan && !this.place3At) {
+          this.place3At = -1;
+          if (
+            this.extraWhich > 0 &&
+            (this.pulse2ErrR || 0) > 0.08 &&
+            (this.pulse2ErrL || 0) <= 0.06
+          ) {
+            this.place3At = this.frame;
+            for (const i of [5, 6, 7, 11, 12, 13]) {
+              const joint = this.world.joints[i];
+              const angle = b2RevoluteJoint_GetAngle(joint.id);
+              const span = angle >= 0 ? joint.hi : -joint.lo;
+              this.legBase[i] = span ? clamp(angle / span, -1, 1) : 0;
+            }
+            this.place3Which = 1;
+            this.place3Lean = 0;
+            this.place3X0 = pelvis;
+            this.place3L0 = this.measure.partX[config.partIndex.footLeft] || 0;
+            this.place3R0 = this.measure.partX[config.partIndex.footRight] || 0;
+          }
+        }
+        const placeInto = this.place3At > 0 ? this.frame - this.place3At : -1;
+        if (into >= 0 && into < slideSpan) {
+          index = 3;
+          phase = into / slideSpan;
+          which = this.extraWhich || 0;
+          holding = false;
+          this.legLocked = true;
+          this.pulse2Sin += this.measure.torsoSin || 0;
+          this.pulse2SinN = (this.pulse2SinN || 0) + 1;
+          if (into === slideSpan - 1) {
+            this.pulse2Dx = pelvis - (this.pulse2X0 || 0);
+            this.pulse2FootL =
+              (this.measure.partX[config.partIndex.footLeft] || 0) -
+              (this.pulse2FootL0 || 0);
+            this.pulse2FootR =
+              (this.measure.partX[config.partIndex.footRight] || 0) -
+              (this.pulse2FootR0 || 0);
+          }
+        } else if (
+          placeInto >= 0 &&
+          placeInto < placeSpan &&
+          this.place3At > 0
+        ) {
+          const shoved = pelvis - (this.place3X0 || 0);
+          if (shoved > 0.04 || shoved < -0.22) {
+            this.place3Dx = shoved;
+            this.place3FootL =
+              (this.measure.partX[config.partIndex.footLeft] || 0) -
+              (this.place3L0 || 0);
+            this.place3FootR =
+              (this.measure.partX[config.partIndex.footRight] || 0) -
+              (this.place3R0 || 0);
+            this.place3At = -1;
+          } else {
+            index = 4;
+            phase = placeInto / placeSpan;
+            which = this.place3Which || 0;
+            holding = false;
+            this.legLocked = true;
+            if (placeInto === placeSpan - 1) {
+              this.place3Dx = shoved;
+              this.place3FootL =
+                (this.measure.partX[config.partIndex.footLeft] || 0) -
+                (this.place3L0 || 0);
+              this.place3FootR =
+                (this.measure.partX[config.partIndex.footRight] || 0) -
+                (this.place3R0 || 0);
+            }
+          }
+        }
+      }
+      // Segundo paso: la rodilla derecha flexiona 0.05 rad más, el mismo largo. Luego el apoyo del pie derecho.
+      if (
+        this.options.replayRight &&
+        !single &&
+        (this.placeExtra || 0) > 0 &&
+        !this.extraAt &&
+        wall >= span0
+      ) {
+        const pelvis = this.measure.partX[config.partIndex.torso] || 0;
+        const missOf = (slot, part) => {
+          const target = this.options.targets && this.options.targets[slot];
+          return Math.abs(
+            (target ? target.x : 0) - (this.measure.partX[part] || 0),
+          );
+        };
+        const left = missOf(targetSlot("footL"), config.partIndex.footLeft);
+        const right = missOf(targetSlot("footR"), config.partIndex.footRight);
+        if (this.swingL == null) {
+          this.swingL = left;
+          this.swingR = right;
+          this.swingDx = pelvis - (this.swingX0 || 0);
+        }
+        const snapLegs = () => {
+          for (const i of [5, 6, 7, 11, 12, 13]) {
+            const joint = this.world.joints[i];
+            const angle = b2RevoluteJoint_GetAngle(joint.id);
+            const span = angle >= 0 ? joint.hi : -joint.lo;
+            this.legBase[i] = span ? clamp(angle / span, -1, 1) : 0;
+          }
+        };
+        const placeInto = this.place3At > 0 ? this.frame - this.place3At : -1;
+        if (placeInto >= 0 && placeInto < placeSpan) {
+          const shoved = pelvis - (this.place3X0 || 0);
+          if (left <= 0.08) this.place3In = 1;
+          const leftAway =
+            this.place3In && left > (this.place3Err0 || 0) + 0.04;
+          const back = shoved < -0.22;
+          if (leftAway || back) {
+            this.place3Dx = shoved;
+            this.place3FootL =
+              (this.measure.partX[config.partIndex.footLeft] || 0) -
+              (this.place3L0 || 0);
+            this.place3FootR =
+              (this.measure.partX[config.partIndex.footRight] || 0) -
+              (this.place3R0 || 0);
+            this.replayWhy =
+              leftAway && back ? "left+back" : leftAway ? "left" : "back";
+            this.place3At = -1;
+            which = 0;
+            holding = true;
+            this.legLocked = false;
+          } else {
+            index = 4;
+            phase = placeInto / placeSpan;
+            which = 1;
+            holding = false;
+            this.legLocked = true;
+            if (placeInto === placeSpan - 1) {
+              this.place3Dx = shoved;
+              this.place3FootL =
+                (this.measure.partX[config.partIndex.footLeft] || 0) -
+                (this.place3L0 || 0);
+              this.place3FootR =
+                (this.measure.partX[config.partIndex.footRight] || 0) -
+                (this.place3R0 || 0);
+              this.replayWhy = "place";
+              this.place3At = -1;
+            }
+          }
+        } else if (this.place3At === -1) {
+          which = 0;
+          holding = true;
+          this.legLocked = false;
+        } else {
+          const speed = Math.abs(
+            this.measure.partVelocityX[config.partIndex.torso] || 0,
+          );
+          which = 0;
+          holding = true;
+          this.legLocked = false;
+          if (speed < 0.15 || (this.restWait || 0) >= 90) {
+            this.restOk = speed < 0.15 ? 1 : 0;
+            this.restN = this.restWait || 0;
+            if (right > 0.08) {
+              this.place3At = this.frame;
+              snapLegs();
+              this.place3Which = 1;
+              this.place3X0 = pelvis;
+              this.place3L0 =
+                this.measure.partX[config.partIndex.footLeft] || 0;
+              this.place3R0 =
+                this.measure.partX[config.partIndex.footRight] || 0;
+              this.place3Err0 = left;
+              this.place3In = left <= 0.08 ? 1 : 0;
+              index = 4;
+              phase = 0;
+              which = 1;
+              holding = false;
+              this.legLocked = true;
+            } else {
+              this.replayWhy = "near";
+              this.place3At = -1;
+            }
+          } else this.restWait = (this.restWait || 0) + 1;
+        }
+      }
+      const swingGate = holding
+        ? 0
+        : Math.sin(Math.PI * Math.max(0, Math.min(1, phase)));
+      const holdGate = holding ? 0.25 : 0;
+      if (!holding && which !== 0) {
+        const tuned = this.options.kneeAmp;
+        let amp = tuned ? (which > 0 ? tuned.right : tuned.left) : 0.4;
+        if (index === 4) amp = 0;
+        else if (this.options.replayRight && which > 0) amp = 0.4 + 0.05 / 2.4;
+        else if (!tuned && which < 0 && (this.placeExtra || 0) > 0) amp = 0.43;
+        const support = tuned && tuned.support != null ? tuned.support : 0.1;
+        add[which > 0 ? 12 : 6] = -amp * swingGate;
+        const extraBend = this.options.extraBend || 0;
+        if (extraBend && phase > 0.45) {
+          const part =
+            which > 0 ? config.partIndex.footRight : config.partIndex.footLeft;
+          const slot = targetSlot(which > 0 ? "footR" : "footL");
+          const target = this.options.targets && this.options.targets[slot];
+          const miss = target
+            ? Math.abs((target.x || 0) - (this.measure.partX[part] || 0))
+            : 0;
+          if (miss > (this.options.extraAt || 0.09))
+            add[which > 0 ? 12 : 6] -= extraBend * swingGate;
+        }
+        if (support && index !== 4)
+          add[which > 0 ? 6 : 12] = -support * swingGate;
+        const ankleAmp = this.options.ankleAmp || 0;
+        if (ankleAmp) add[which > 0 ? 13 : 7] = ankleAmp * swingGate;
+        if (index === 4) add[13] = -swingGate;
+        const hip = tuned ? (which > 0 ? tuned.hipR || 0 : tuned.hipL || 0) : 0;
+        if (hip) add[which > 0 ? 11 : 5] = hip * swingGate;
+        if (index >= 2 && tuned && tuned.retryHip)
+          add[which > 0 ? 11 : 5] += tuned.retryHip * swingGate;
+        const steer = this.options.steer || 0;
+        if (steer) {
+          const dir = (this.placeExtra || 0) >= 0 ? 1 : -1;
+          add[which > 0 ? 11 : 5] += dir * steer * swingGate;
+        }
+        const waist = this.options.waist == null ? -0.05 : this.options.waist;
+        if (waist && index !== 4) {
+          const dir = (this.placeExtra || 0) >= 0 ? 1 : -1;
+          const leanSign =
+            index === 3 && this.pulse2LeanSign
+              ? this.pulse2LeanSign
+              : dir * (waist < 0 ? -1 : 1);
+          add[0] += leanSign * Math.abs(waist) * swingGate;
+        }
+        const gain = this.options.hipGain || 0;
+        if (gain) {
+          const part =
+            which > 0 ? config.partIndex.footRight : config.partIndex.footLeft;
+          const slot = targetSlot(which > 0 ? "footR" : "footL");
+          const target = this.options.targets && this.options.targets[slot];
+          const err = target
+            ? (target.x || 0) - (this.measure.partX[part] || 0)
+            : 0;
+          const sign = this.options.hipFlip && which < 0 ? -1 : 1;
+          add[which > 0 ? 11 : 5] =
+            clamp(sign * err * gain, -0.2, 0.2) * swingGate;
+        }
+      }
+      if (holding && this.options.holdKnee) {
+        const held = -0.4 * this.options.holdKnee;
+        add[6] = held;
+        add[12] = held;
+      }
+      // Con caja, el pie izquierdo se alza solo mientras pasa sobre ella. La cadera derecha no entra.
+      if (this.options.boxes && this.options.replayRight) {
+        const box = this.liveBoxes && this.liveBoxes[0];
+        const footX = this.measure.partX[config.partIndex.footLeft] || 0;
+        const half = (box && box.halfW) || 0.04;
+        const pad = 0.04;
+        const lift =
+          this.options.boxLift == null ? 0.182 : this.options.boxLift;
+        if (
+          box &&
+          lift &&
+          footX > box.x - half - pad &&
+          footX < box.x + half + pad
+        )
+          add[5] += lift;
+      }
+      const push = this.options.pushN || 0;
+      if (push && swingGate > 0) {
+        const dir = (this.placeExtra || 0) >= 0 ? 1 : -1;
+        b2Body_ApplyForceToCenter(
+          this.world.parts[config.partIndex.torso].id,
+          vector(dir * push * swingGate, 0),
+          true,
+        );
+      }
+      if (!(this.options.residual && this.options.residual.length)) return;
+      const measure = this.measure;
+      const targets = this.options.targets;
+      const swingRight = which > 0;
+      const swingPart = swingRight
+        ? config.partIndex.footRight
+        : config.partIndex.footLeft;
+      const stayPart = swingRight
+        ? config.partIndex.footLeft
+        : config.partIndex.footRight;
+      const swingSlot = targetSlot(swingRight ? "footR" : "footL");
+      const staySlot = targetSlot(swingRight ? "footL" : "footR");
+      const swing = targets && targets[swingSlot];
+      const stay = targets && targets[staySlot];
+      const input = this.residualIn;
+      input[0] = swing
+        ? ((swing.x || 0) - (measure.partX[swingPart] || 0)) / 0.5
+        : 0;
+      input[1] = swing
+        ? ((swing.y || 0) - (measure.partY[swingPart] || 0)) / 0.5
+        : 0;
+      input[2] = stay
+        ? ((stay.x || 0) - (measure.partX[stayPart] || 0)) / 0.5
+        : 0;
+      input[3] = which;
+      input[4] = phase;
+      input[5] = measure.torsoSin || 0;
+      input[6] = measure.torsoCos || 0;
+      input[7] = measure.touch[config.partIndex.footLeft] ? 1 : 0;
+      input[8] = measure.touch[config.partIndex.footRight] ? 1 : 0;
+      input[9] = measure.stanceWidth || 0;
+      input[10] = (measure.centerVelocityX || 0) / 2;
+      input[11] = (measure.headHeight || 0) / config.body.standingHeadMeters;
+      this.residual.forward(input);
+      const legs =
+        which > 0
+          ? [11, 12, 13]
+          : which < 0
+            ? [5, 6, 7]
+            : [5, 6, 7, 11, 12, 13];
+      const from =
+        which > 0 ? [3, 4, 5] : which < 0 ? [0, 1, 2] : [0, 1, 2, 3, 4, 5];
+      const scale = swingGate + holdGate;
+      if (!(scale > 0)) return;
+      for (let i = 0; i < legs.length; i++)
+        add[legs[i]] += 0.1 * scale * this.residual.out[from[i]];
+    }
     applyMotors() {
+      this.blendLegs();
       const limit = config.episode.motorSpeedLimit || 1;
       let speedSum = 0;
       for (let i = 0; i < config.net.jointCount; i++) {
         const joint = this.world.joints[i];
-        const command = this.action[i];
+        const leg =
+          this.legLocked &&
+          (i === 5 || i === 6 || i === 7 || i === 11 || i === 12 || i === 13);
+        const command = clamp(
+          (leg ? this.legBase[i] : this.action[i]) + (this.legAdd[i] || 0),
+          -1,
+          1,
+        );
         const target = command * (command >= 0 ? joint.hi : -joint.lo);
         const speed = clamp(
           config.episode.motorGain *
@@ -811,6 +1708,70 @@ export function createSim(box) {
       this.motionSum += speedSum / (config.net.jointCount * limit);
       this.motionCount++;
     }
+    // Un pie en el aire cuenta si el tronco y la cabeza siguen arriba y ese pie se acerca a su marca.
+    noteGap() {
+      if (!this.options.place || !this.placeArmed) return;
+      const measure = this.measure;
+      const targets = this.options.targets;
+      const feet = [
+        [targetSlot("footL"), config.partIndex.footLeft],
+        [targetSlot("footR"), config.partIndex.footRight],
+      ];
+      let gap = 0;
+      for (let i = 0; i < feet.length; i++) {
+        const target = targets[feet[i][0]];
+        const part = feet[i][1];
+        const dx = (target.x || 0) - (measure.partX[part] || 0);
+        const dy = (target.y || 0) - (measure.partY[part] || 0);
+        gap += Math.hypot(dx, dy);
+      }
+      gap /= 2;
+      this.footGap = gap;
+      if (this.gap0 == null) this.gap0 = gap;
+      this.gapCloseSum += this.gap0 - gap;
+      this.gapCloseCount++;
+      const mid =
+        ((targets[targetSlot("footL")].x || 0) +
+          (targets[targetSlot("footR")].x || 0)) /
+        2;
+      const bodyGap = Math.abs((measure.centerX || 0) - mid);
+      if (this.bodyGap0 == null) this.bodyGap0 = bodyGap;
+      this.bodyCloseSum += this.bodyGap0 - bodyGap;
+      const upright =
+        (measure.torsoCos || 0) >
+          Math.cos(config.body.standingTorsoAngleRadians) &&
+        measure.headHeight > config.body.standingHeadMeters &&
+        !measure.touch[config.partIndex.head] &&
+        !measure.bodyOn;
+      const leftOn = !!measure.touch[config.partIndex.footLeft];
+      const rightOn = !!measure.touch[config.partIndex.footRight];
+      let air = -1;
+      if (upright && leftOn && !rightOn) air = 1;
+      else if (upright && rightOn && !leftOn) air = 0;
+      const footDx = (index) => {
+        const slot = feet[index][0];
+        const part = feet[index][1];
+        return Math.abs((targets[slot].x || 0) - (measure.partX[part] || 0));
+      };
+      if (air >= 0) {
+        if (this.airPart !== air) {
+          this.airPart = air;
+          this.airGap = footDx(air);
+        }
+        const gained = this.airGap - footDx(air);
+        if (gained > this.swingPeak) this.swingPeak = gained;
+        return;
+      }
+      if (this.airPart < 0) return;
+      const landed = !!measure.touch[feet[this.airPart][1]];
+      if (landed && upright) {
+        const gained = this.airGap - footDx(this.airPart);
+        if (gained > this.swingPeak) this.swingPeak = gained;
+        // Por debajo de 1 cm es el mismo ruido de estar quieto. No separa al padre.
+        if (gained > 0.01) this.swingClose += gained;
+      }
+      this.airPart = -1;
+    }
     stepPhysics() {
       b2World_Step(
         this.world.worldId,
@@ -821,11 +1782,27 @@ export function createSim(box) {
     get fitnessValue() {
       const end = this.windowMean(true);
       const start = this.windowMean(false);
-      let fitness = end - Math.max(0, start - end);
+      // El final de 3 s no separa a los que se caen antes. El promedio de todo el episodio sí.
+      const life = this.lifeCount ? this.lifeSum / this.lifeCount : end;
+      const body = this.options.failOnHead ? life : end;
+      let fitness = body - Math.max(0, start - body);
       if (!this.options.failOnHead) return fitness;
       if (this.headHit) fitness -= config.reward.headTouch;
       if (this.motionCount)
         fitness -= config.reward.motion * (this.motionSum / this.motionCount);
+      const frames = this.frame || 1;
+      fitness += config.reward.upright * (this.uprightSum / frames);
+      fitness += config.reward.alive * (this.stoodFrames / frames);
+      if ((this.options.skill | 0) >= 2) {
+        // Caer, cabeza en el piso, torso abajo, o no volver a los dos pies: por debajo de quedarse quieto.
+        if (this.headHit || this.torsoDown || !this.endedUp) return 0;
+        // Quietos en los dos pies vale 1. El pie que se acercó en el aire, y lo que quedó al final, valen más.
+        const stayed =
+          this.gap0 == null ? 0 : Math.max(0, this.gap0 - this.footGap - 0.01);
+        fitness = 1 + 8 * stayed;
+        if ((this.options.skill | 0) >= 3)
+          fitness += config.reward.step * (this.stepsDone || 0);
+      }
       return fitness;
     }
     get stats() {
@@ -844,6 +1821,22 @@ export function createSim(box) {
           this.options.goalX == null
             ? 0
             : Math.abs(this.options.goalX - (this.measure.centerX || 0)),
+        steps: this.stepsDone || 0,
+        windowStood: this.windowStood || 0,
+        windowFrames: this.windowFrames || 0,
+        cleared: boxesCleared(this),
+        footL: markError(this.measure, targetSlot("footL")).dist,
+        footR: markError(this.measure, targetSlot("footR")).dist,
+        alignL: markError(this.measure, targetSlot("footL")).align,
+        alignR: markError(this.measure, targetSlot("footR")).align,
+        alive: this.frame ? this.stoodFrames / this.frame : 0,
+        foot:
+          (markError(this.measure, targetSlot("footL")).dist +
+            markError(this.measure, targetSlot("footR")).dist) /
+          2,
+        reach: Math.abs(this.placeExtra || 0),
+        closed: this.swingPeak || 0,
+        leaned: this.gapCloseCount ? this.bodyCloseSum / this.gapCloseCount : 0,
       };
     }
     get weights() {
@@ -941,8 +1934,8 @@ export function createSim(box) {
     return started;
   }
 
-  function trainingStarts(randomSource) {
-    return [fillTrainingStart({}, randomSource)];
+  function trainingStarts(randomSource, mode) {
+    return [fillTrainingStart({}, randomSource, mode || null)];
   }
 
   function varyStart(base, randomSource) {
