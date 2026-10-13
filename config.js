@@ -227,9 +227,10 @@ export const config = {
   // Revolute spring on the 14 motor joints. This Box2D build has no target angle, so the
   // spring pulls each joint back to the pose it was built in. The speed motor still runs.
   joint: {
-    hertz: 20,
-    kneeHertz: 6, // Softer than the rest. 20 Hz held the knee straight against the motor, so a step never left the ground.
-    dampingRatio: 0.7,
+    hertz: 2,
+    hipHertz: 2, // 0 turns the hip spring off. A passed 0 used to fall through to joint.hertz, so the thigh stayed held down.
+    kneeHertz: 2, // Softer than the rest. 20 Hz held the knee straight against the motor, so a step never left the ground.
+    dampingRatio: 6.66,
   },
   contact: {
     weight: 1, // Per group, times the group's share. The four leg rows share one weight, so the worst case stays 4 * weight.
@@ -395,8 +396,8 @@ export const config = {
     adamBeta1: 0.9, // Adam first-moment decay.
     adamBeta2: 0.999, // Adam second-moment decay.
     adamEpsilon: 1e-8, // Added under the Adam denominator.
-    hiddenInitScale: 10.12, // Fresh hidden weights are a gaussian times this.
-    outputInitScale: 10.04, // Fresh joint-output weights are a gaussian times this.
+    hiddenInitScale: 0, // A new parent is all zeros, so tanh is 0 and every joint starts at the standing pose.
+    outputInitScale: 0, // Same for the joint outputs. A wide gaussian saturates tanh and locks each joint at a random stop.
     randomHiddenScale: 11, //0.26, // Random-weights button. Gaussian scale of a trained hidden block.
     randomOutputScale: 11.22, // Random-weights button. Gaussian scale of a trained joint-output block.
     // How close to the marker a child must be before it can become the parent. Required only

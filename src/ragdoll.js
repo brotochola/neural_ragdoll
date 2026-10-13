@@ -270,11 +270,13 @@ export class RagDoll2D {
     const addJoint = (partA, partB, worldX, worldY, lower, upper, torque, hertz) => {
       const a = parts[partA];
       const b = parts[partB];
+      // A passed 0 turns the spring off. The old check treated 0 as "missing" and used joint.hertz.
+      const springHertz = hertz == null ? cfg.joint.hertz : hertz;
       const created = CreateRevoluteJoint({
         worldId, bodyIdA: a.id, bodyIdB: b.id,
         anchorA: vector(worldX - a.cx, worldY - a.cy), anchorB: vector(worldX - b.cx, worldY - b.cy),
         lowerAngle: lower, upperAngle: upper, enableLimit: true, enableMotor: true, motorSpeed: 0, maxMotorTorque: torque,
-        enableSpring: true, hertz: hertz > 0 ? hertz : cfg.joint.hertz, dampingRatio: cfg.joint.dampingRatio,
+        enableSpring: springHertz > 0, hertz: springHertz, dampingRatio: cfg.joint.dampingRatio,
       });
       joints.push({
         id: created.jointId, lo: lower, hi: upper, n: Math.max(-lower, upper),
@@ -302,7 +304,7 @@ export class RagDoll2D {
       addJoint(1, base, 0, 1.48, -2, 2.5, 70);
       addJoint(base, base + 1, 0, 1.2, 0, 2.4, 50);
       addJoint(base + 1, base + 2, 0, 0.94, -1, 1, 25);
-      addJoint(0, base + 3, 0, 0.96, -0.7, 2.4, 140);
+      addJoint(0, base + 3, 0, 0.96, -0.7, 2.4, 140, cfg.joint.hipHertz);
       addJoint(base + 3, base + 4, 0, 0.52, -2.4, 0, 140, cfg.joint.kneeHertz);
       addJoint(base + 4, base + 5, 0, 0.1, -0.6, 0.6, 60);
       joints[joints.length - 5].mark = "elbow";
