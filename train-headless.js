@@ -1,7 +1,7 @@
 ﻿// One headless loop: same sim, net, reward, and config as the page.
-// La escalera ahora es de ORDENES, no de pasos: 1 pararse, 2 la cabeza a la orden que le
-// mandan, 3 las manos, 4 los pies, 5 los cinco a la vez. Un nivel pasa cuando el net esta
-// parado y los targets de ese grupo estan dentro de su tolerancia (5 cm y 0.2 rad).
+// The ladder is commands, not steps: 1 stand, 2 the head to the command it is given,
+// 3 the hands, 4 the feet, 5 all five at once. A level passes when the net is standing
+// and that group's targets are inside their tolerance.
 // Rates are config.eval.passRate. Official when --eval-n >= config.eval.officialMinN.
 import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import fs from 'node:fs';
@@ -43,6 +43,14 @@ async function runWorker() {
       parentPort.postMessage({ type: 'gains' });
       return;
     }
+    if (msg.type === 'stop') {
+      if (workerEpisode) workerEpisode.cleanup();
+      workerEpisode = null;
+      if (workerWorld) sim.destroyWorld(workerWorld);
+      workerWorld = null;
+      parentPort.postMessage({ type: 'stopped' });
+      return;
+    }
     if (msg.type !== 'run') return;
     try {
       const results = msg.jobs.map((job) => runEpisode(sim, job, isStanding));
@@ -59,20 +67,20 @@ let workerWorld = null;
 function runEpisode(sim, job, isStanding) {
   const options = job.options || {};
   const weights = job.weights instanceof Float32Array ? job.weights : Float32Array.from(job.weights);
-  // A FRESH WORLD PER EPISODE. Box2D warm-starts every contact from the impulse it applied
-  // last step, and that cache survives a body transform reset. Reusing one world gave a
-  // different answer depending on how many episodes ran in it before, which made the official
-  // evaluation depend on the worker count.
-  sim.destroyWorld(workerWorld);
-  workerWorld = sim.build();
+  // ONE world per worker for its whole life, rebuilt before every episode. A reset alone is not
+  // enough: Box2D keeps per-body solver state across a reset, so a reused world answered
+  // differently depending on how many episodes had run in it, and the official evaluation
+  // changed with the worker count. See sim.runOneEpisode.
+  if (!workerWorld) workerWorld = sim.build();
+  else workerWorld.rebuild();
   workerEpisode = new sim.Episode(workerWorld, weights, options.tilt || 0, options.drop || 0, options);
   const startGap = options.goalX == null ? null : Math.abs(options.goalX - (workerEpisode.measure.centerX || 0));
-  while (!workerEpisode.step());
+  while (!workerEpisode.advanceOneFrame());
   const stats = workerEpisode.stats;
   const measure = workerEpisode.measure;
   const standing = isStanding(measure);
   const headHeight = measure.headHeight || 0;
-  // Error de cada target contra su orden, para poder medir obediencia y no solo "estuvo parado".
+  // Each target's error against its command, so obedience can be measured and not only "it was standing".
   const errors = {};
   for (let t = 0; t < config.targets.length; t++) {
     const error = markError(measure, t);
@@ -117,6 +125,7 @@ function runEpisode(sim, job, isStanding) {
     closed: stats.closed || 0,
     leaned: stats.leaned || 0,
     headHit: workerEpisode.headHit ? 1 : 0,
+    trace: options.trace ? workerEpisode.trace : undefined,
   };
 }
 
@@ -128,7 +137,7 @@ function readArgs() {
     evalN: config.eval.headlessN,
     quickN: config.eval.quickN,
     quickEvery: config.eval.quickEvery,
-    pairs: config.workers.headlessPairs,
+    pairs: config.workers.pairs,
     workers: Math.max(config.workers.headlessWorkerMin, Math.min(config.workers.headlessWorkerMax, os.cpus().length - config.workers.headlessWorkerReserve)),
     skill: config.skill.level || 1,
     evalOnly: false,
@@ -151,10 +160,11 @@ function readArgs() {
     else if (key === '--quick-every') { out.quickEvery = +val; i++; }
     else if (key === '--pairs') { out.pairs = +val; i++; }
     else if (key === '--workers') { out.workers = +val; i++; }
-    else if (key === '--skill') { out.skill = +val; i++; }
+    else if (key === '--skill') { out.skill = +val; out.skillSet = true; i++; }
     else if (key === '--eval-only') out.evalOnly = true;
+    else if (key === '--trace') out.trace = true;
     else if (key === '--reset-moments') out.resetMoments = true;
-    // --gains hand=0.5, o --gains body=0 para sacar cabeza y manos, o feet=0 para los pies.
+    // --gains hand=0.5, or --gains body=0 to drop the head and hands, or feet=0 for the feet.
     else if (key === '--gains') {
       const aliases = {
         head: ['head'],
@@ -261,26 +271,37 @@ function makePool(count) {
   }
   async function stop() {
     await Promise.race([
-      Promise.all(workers.map((slot) => Promise.resolve(slot.worker.terminate()).catch(() => {}))),
+      Promise.all(workers.map((slot) => new Promise((resolve) => {
+        const timer = setTimeout(resolve, 2000);
+        function onStop(msg) {
+          if (!msg || msg.type !== 'stopped') return;
+          slot.worker.off('message', onStop);
+          clearTimeout(timer);
+          resolve();
+        }
+        slot.worker.on('message', onStop);
+        slot.worker.postMessage({ type: 'stop' });
+      }))),
       new Promise((resolve) => setTimeout(resolve, 2000)),
     ]);
+    await Promise.all(workers.map((slot) => Promise.resolve(slot.worker.terminate()).catch(() => {})));
   }
   return { whenReady, run, setPhase, setScale, setGains, stop };
 }
 
-// Que grupos manda este nivel. 'none' es pararse, 'all' es el examen final.
+// Which groups this level commands. 'none' is standing, 'all' is the final exam.
 function commandGroup(skill) {
   return config.commands[skill | 0] || 'none';
 }
 
-// Que grupo es cada target. 'hand' son los dos brazos.
+// Which group each target is. 'hand' is both arms.
 function groupOfId(id) {
   return id === 'head' ? 'head' : id === 'footR' || id === 'footL' ? 'foot' : 'hand';
 }
 
-// Un target "obedece" si esta dentro de su tolerancia. Las tolerancias son las mismas para
-// los cinco: 8 cm y 0.4 rad. Los que no reciben orden quedan en el neutral, asi que se cumplen
-// solos: la barra de cada nivel es la del grupo nuevo, y 'all' es la de los cinco.
+// A target "obeys" when it is inside its tolerance. The tolerances are the same idea for
+// all five. The ones that receive no command sit on the neutral, so they pass on their
+// own: each level's bar is the new group, and 'all' is all five.
 function obeys(row, spec) {
   if (!targetGain(spec.id)) return true;
   const error = row.errors && row.errors[spec.id];
@@ -293,9 +314,9 @@ function obeys(row, spec) {
 function skillPass(skill, row) {
   const group = commandGroup(skill);
   if (group === 'none') {
-    // "Parado" es una FRACCION de la ventana final, no los 180 frames sin uno menos. Antes era
-    // windowStood === windowFrames: un solo tropiezo en tres segundos echaba el episodio, y la
-    // barra no media "se para" sino "no parpadea nunca". Ver config.eval.standWindowShare.
+    // "Standing" is a FRACTION of the final window, not all 180 frames with none missing.
+    // It used to be windowStood === windowFrames: one stumble in three seconds failed the
+    // episode, so the bar measured "never blinks" rather than "stands". See config.eval.standWindowShare.
     const frames = row.windowFrames || 0;
     if (!(frames > 0) || !row.stoodUp) return false;
     return row.windowStood / frames >= config.eval.standWindowShare;
@@ -414,8 +435,8 @@ function fmtEval(ev) {
 
 async function runMain() {
   const opts = readArgs();
-  // Los cinco targets: qué peso tiene cada grupo en el premio, y cuánto pesa el grupo entero
-  // en el fitness. Con --gains se prueba un subconjunto sin tocar el archivo.
+  // The five targets: how much each group weighs in the reward, and how much the whole
+  // group weighs in the fitness. --gains tries a subset without editing the file.
   if (opts.gains) Object.assign(config.targetGains, opts.gains);
   if (opts.residualSearch) config.skill.residualSearch = true;
   if (opts.gateTargets) config.eval.gateTargets = true;
@@ -430,6 +451,7 @@ async function runMain() {
   const boxUrl = pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href;
   const Box2D = await import(boxUrl);
   const { createSim } = await import('./src/sim.js');
+  const { runGeneration, trainingMode, evalMode } = await import('./src/training.js');
   const sim = createSim(Box2D);
   const random = makeSeededRandom(7);
   const randomNormal = () => randomNormalSample(random);
@@ -512,8 +534,8 @@ async function runMain() {
   }
 
   function loadPolicy() {
-    // --from carga un checkpoint explicito. Es la via para seguir desde una red que ya
-    // paso una barra, en vez de arrancar de cero o retomar el ultimo train-state.
+    // --from loads an explicit checkpoint. That is how a run continues from a net that
+    // already passed a bar, instead of starting fresh or resuming the last train-state.
     if (opts.from) {
       const saved = JSON.parse(fs.readFileSync(opts.from, 'utf8'));
       const raw = saved.theta;
@@ -603,12 +625,12 @@ async function runMain() {
     if (Array.isArray(saved.curve)) curve.push(...saved.curve);
     if (Array.isArray(saved.evalLog)) evalLog.push(...saved.evalLog);
     if (Array.isArray(saved.bestFiles)) bestFiles.push(...saved.bestFiles);
-    // El fitness cambio de escala: un bestEverScore guardado de antes ya no comparable.
-    // Se tira abajo y se vuelve a sembrar, si no el padre nunca supera su propio record.
+    // The fitness changed scale: a saved bestEverScore is no longer comparable.
+    // It is thrown out and reseeded, or the parent never beats its own record.
     const version = saved.fitnessVersion;
     if (version !== config.reward.version) {
-      log('fitness version ' + (version == null ? 'sin version' : version) + ' -> ' + config.reward.version
-        + ', record anterior (' + state.bestEverScore + ') no comparable, se vuelve a sembrar');
+      log('fitness version ' + (version == null ? 'none' : version) + ' -> ' + config.reward.version
+        + ', previous record (' + state.bestEverScore + ') is not comparable, reseeding');
       state.bestEverScore = -1e9;
       state.bestSmooth = null;
       state.eliteScore = -1e9;
@@ -639,12 +661,12 @@ async function runMain() {
           goalX: side * config.eval.walkGoalMeters,
           goalY: 0,
           shiftX: kind === 'walk' ? 0 : jitter() * config.eval.shiftMeters,
-          // Sin esto el episodio no marca nada y las diez filas del premio quedan mirando el
-          // blueprint, no la pose de arranque. El eval mide igual, pero el fitness salía raro.
+          // Without this the episode plants nothing and the reward rows look at the
+          // blueprint, not the start pose. The eval measures the same way, but the fitness came out odd.
           failOnHead: true,
           skill: 0,
-          // Marcas planas, sin sortear nada: la lista se arma a mano para no correrse la
-          // secuencia de rand y dejar el mismo set de eval que antes.
+          // Flat marks, nothing drawn: the list is built by hand so rand is not advanced
+          // and the eval set stays the one it was.
           targets: config.targets.map(() => ({ on: true, x: 0, y: 0, angle: 0, dx: 0, dy: 0, turn: 0 })),
         };
         if (kind === 'supine' || kind === 'prone') {
@@ -683,66 +705,39 @@ async function runMain() {
     // twelve hand-built numbers and never sees a target column, so it can never be the one
     // learning to aim a hand. config.skill.residualSearch turns the old behaviour back on.
     const useResidual = config.skill.residualSearch && (state.skill | 0) >= 2 && state.residualSearch;
-    const generation = useResidual
-      ? state.residualSearch.ask(opts.pairs, randomNormal)
-      : state.ask(null, opts.pairs, randomNormal);
-    const startMode = {
-      level: state.skill | 0,
-      shiftMeters: state.shiftMeters || 0,
-      full: !(state.shiftMeters > 0),
-      // La RAMPA DE DURACION. Pedirle a la busqueda que aprenda a no caerse durante 6 s desde la
-      // generacion 0 es pedirle un control de equilibrio de 6 s sin ningun peldao. Arranca en
-      // rampStartSeconds y llega a episode.seconds en rampGenerations. El PREMIO no cambia:
-      // siguen siendo las mismas diez filas, solo que sobre un episodio mas corto. El eval
-      // (evaluateSkill) siempre corre el episodio entero.
-      seconds: trainingSeconds(state.gen),
-    };
-    const jobs = [];
-    const trios = [];
-    let index = 0;
-    for (let child = 0; child < generation.weights.length; child++) {
-      if (child % 2 === 0) trios.push(sim.trainingStarts(random, startMode));
-      for (const start of trios[Math.floor(child / 2)]) {
-        jobs.push({
-          index: index++,
-          kind: 'train',
-          weights: useResidual ? state.theta : generation.weights[child],
-          options: Object.assign({}, start, {
-            phase: child % config.cadence.actionEveryNFrames,
-            // El residual congelado entra igual en train y en eval: si sirve, sirve en los dos.
-            residual: useResidual
-              ? generation.weights[child]
-              : state.residualSearch
-                ? state.residualSearch.theta
-                : null,
-          }),
-        });
-      }
-    }
-    const raw = await pool.run(jobs);
-    if (raw.length !== jobs.length || raw.some((score) => !score || !Number.isFinite(score.fitness))) {
-      throw new Error('training returned an empty score');
-    }
-    const poseCount = trios[0].length;
-    const scores = [];
-    for (let child = 0; child < generation.weights.length; child++) {
-      scores.push(sim.poseScore(raw, child * poseCount, poseCount, {}));
-    }
-    if (useResidual) {
-      state.residualSearch.tell(generation, scores);
-      let mean = 0;
-      let best = -Infinity;
-      let stoodN = 0;
-      for (let i = 0; i < scores.length; i++) {
-        mean += scores[i].fitness;
-        if (scores[i].fitness > best) best = scores[i].fitness;
-        if (scores[i].stoodUp) stoodN++;
-      }
-      mean /= scores.length || 1;
-      state.hist.push({ mean, best, stood: stoodN / (scores.length || 1), start: 0 });
-      if (state.hist.length > 400) state.hist.shift();
-      state.gen++;
-    } else state.tell(generation, scores);
+    const { generation, scores } = await runGeneration({
+      ask: () => useResidual
+        ? state.residualSearch.ask(opts.pairs, randomNormal)
+        : state.ask(null, opts.pairs, randomNormal),
+      random,
+      mode: trainingMode(state.skill | 0, state.gen, state.shiftMeters || 0),
+      runJobs: (jobs) => pool.run(jobs),
+      decorate(job, child, asked) {
+        if (useResidual) {
+          job.weights = state.theta;
+          job.options.residual = asked.weights[child];
+        } else if (state.residualSearch) job.options.residual = state.residualSearch.theta;
+      },
+      tell(asked, rows) {
+        if (!useResidual) {
+          state.tell(asked, rows);
+          return;
+        }
+        state.residualSearch.tell(asked, rows);
+        let mean = 0;
+        let best = -Infinity;
+        let stoodN = 0;
+        for (let i = 0; i < rows.length; i++) {
+          mean += rows[i].fitness;
+          if (rows[i].fitness > best) best = rows[i].fitness;
+          if (rows[i].stoodUp) stoodN++;
+        }
+        mean /= rows.length || 1;
+        state.hist.push({ mean, best, stood: stoodN / (rows.length || 1), start: 0 });
+        if (state.hist.length > 400) state.hist.shift();
+        state.gen++;
+      },
+    });
     if (state.anchorNote) {
       log(state.anchorNote);
       state.anchorNote = "";
@@ -778,13 +773,13 @@ async function runMain() {
       const file = saveBackup('best-ever', state);
       log('best-ever gen ' + state.gen + ' score ' + state.bestEverScore.toFixed(3) + ' ' + file);
     }
-    // El padre cambio en esta generacion? Si esto dice 0 por un rato largo, la poblacion esta
-    // explorando alrededor de un padre fijo y el promedio sube por ruido, no por aprendizaje.
+    // Did the parent change this generation? If this stays 0 for a long stretch, the
+    // population is exploring around a fixed parent and the average rises from noise, not learning.
     if (state.parentMoves > reportedParentMoves) {
-      log('padre ' + state.parentMoves + ' cambios (ultimo: ' + (state.parentMoveNote || '?') + ')');
+      log('parent ' + state.parentMoves + ' changes (last: ' + (state.parentMoveNote || '?') + ')');
       reportedParentMoves = state.parentMoves;
     } else if (state.gen % 25 === 0 && state.parentMoves === 0) {
-      log('AVISO: el padre no cambio NUNCA. ' + (state.parentMoveNote || ''));
+      log('WARNING: the parent has never changed. ' + (state.parentMoveNote || ''));
     }
     if (state.gen % 100 === 0) saveBackup('parent', state);
   }
@@ -827,20 +822,20 @@ async function runMain() {
     }, extra || {}), null, 2));
   }
 
-  // El set de eval: mismas semillas para cada nivel, nivel entero, sin la rampa vieja de
-// placeScale. La orden sale de config.commands[skill].
-//
-// secondsHere es lo UNICO que diferencia el eval del entrenamiento: el eval SIEMPRE corre el
-// episodio entero, aunque la rampa de entrenamiento este en 1.5 s. Si el eval acortara el
-// episodio estariamos approveando una red que solo sabe pararse un segundo y medio.
-function skillJobs(weights, skill, n, secondsHere) {
-    const mode = secondsHere > 0
-      ? { full: true, level: skill, seconds: secondsHere }
-      : { full: true, level: skill };
+  // The eval set: the same seeds for each level, the whole level, without the old placeScale ramp.
+  // The command comes from config.commands[skill].
+  //
+  // secondsHere is the ONLY difference between eval and training: the eval ALWAYS runs the
+  // whole episode, even while the training ramp is at 1.5 s. If the eval shortened the
+  // episode we would be passing a net that can only stand for a second and a half.
+function skillJobs(weights, skill, n, secondsHere, trace) {
+    const mode = evalMode(skill);
+    if (secondsHere > 0) mode.seconds = secondsHere;
     const jobs = [];
     for (let i = 0; i < n; i++) {
       const rand = makeSeededRandom(config.eval.seed + skill * 10007 + i * 17);
       const start = sim.fillTrainingStart({}, rand, mode);
+      if (trace) start.trace = true;
       if (state.residualSearch) start.residual = state.residualSearch.theta;
       jobs.push({
         index: i,
@@ -852,21 +847,17 @@ function skillJobs(weights, skill, n, secondsHere) {
     return jobs;
   }
 
-  // La RAMPA DE DURACION. Ver startMode arriba.
-  function trainingSeconds(gen) {
-    const skill = config.skill;
-    const full = config.episode.seconds;
-    const start = skill.rampStartSeconds || 0;
-    const gens = skill.rampGenerations | 0;
-    if (!(start > 0) || !(gens > 0) || gen >= gens) return full;
-    return start + ((full - start) * gen) / gens;
-  }
-
-  async function evaluateSkill(weights, skill, n) {
-    const rows = await pool.run(skillJobs(weights, skill, n, 0));
+  async function evaluateSkill(weights, skill, n, trace) {
+    const rows = await pool.run(skillJobs(weights, skill, n, 0, trace));
     if (rows.some((row) => !row || !Number.isFinite(row.fitness))) throw new Error('eval returned an empty score');
+    if (trace) {
+      const samples = rows.map((row) => row.trace || []);
+      fs.writeFileSync(path.join(backupDir, 'trace.json'), JSON.stringify(samples));
+      log('trace ' + samples.length + ' episodes -> backups/trace.json');
+    }
     let ok = 0;
     let stood = 0;
+    let fitnessSum = 0;
     let windowSum = 0;
     let footSum = 0;
     let stepSum = 0;
@@ -881,6 +872,7 @@ function skillJobs(weights, skill, n, secondsHere) {
     for (const row of rows) {
       if (skillPass(skill, row)) ok++;
       if (row.stoodUp) stood++;
+      fitnessSum += row.fitness;
       windowSum += row.windowFrames ? row.windowStood / row.windowFrames : 0;
       footSum += ((row.footL || 0) + (row.footR || 0)) / 2;
       stepSum += row.steps || 0;
@@ -893,7 +885,7 @@ function skillJobs(weights, skill, n, secondsHere) {
         bodySum += row.bodyTargets;
         bodyN++;
       }
-      // Obediencia por grupo: que fraccion de los targets de cada grupo esta en su marca.
+      // Obedience per group: what fraction of that group's targets are on their mark.
       for (const spec of config.targets) {
         const group = groupOfId(spec.id);
         const error = row.errors && row.errors[spec.id];
@@ -909,6 +901,7 @@ function skillJobs(weights, skill, n, secondsHere) {
       key: skillKey(skill),
       n: count,
       ok,
+      fitness: count ? fitnessSum / count : 0,
       rate: count ? ok / count : 0,
       stood: count ? stood / count : 0,
       window: count ? windowSum / count : 0,
@@ -928,6 +921,7 @@ function skillJobs(weights, skill, n, secondsHere) {
 
   function fmtSkill(row) {
     return row.key + ' ' + row.ok + '/' + row.n + '=' + row.rate.toFixed(2)
+      + ' fitness ' + (row.fitness || 0).toFixed(4)
       + ' stood ' + row.stood.toFixed(2)
       + ' window ' + row.window.toFixed(2)
       + ' foot ' + row.foot.toFixed(3)
@@ -937,7 +931,7 @@ function skillJobs(weights, skill, n, secondsHere) {
       + ' stance ' + (row.stance || 0).toFixed(2)
       + ' headMark ' + (row.headMark == null ? 0 : row.headMark).toFixed(3)
       + ' handMark ' + (row.handMark == null ? 0 : row.handMark).toFixed(3)
-      + ' obedece c' + Math.round((row.headObey || 0) * 100)
+      + ' obey h' + Math.round((row.headObey || 0) * 100)
       + ' m' + Math.round((row.handObey || 0) * 100)
       + ' p' + Math.round((row.footObey || 0) * 100);
   }
@@ -1003,7 +997,7 @@ function skillJobs(weights, skill, n, secondsHere) {
   try {
     log('=== ' + (opts.fresh ? 'fresh' : 'resume') + ' workers ' + opts.workers + ' pairs ' + opts.pairs + ' evalN ' + opts.evalN + ' ===');
     log('thresholds ' + JSON.stringify(config.eval.passRate) + ' dropM ' + dropMeters.toFixed(2) + ' impact<' + config.search.headImpactQuiet + ' walkClose ' + config.eval.walkClosingMeters);
-    log('targets gains ' + targetGainText() + ' targetMean ' + config.reward.targetMean + ' fail ' + config.reward.fail
+    log('targets gains ' + targetGainText() + ' targetMean ' + config.reward.targetMean
       + ' residualSearch ' + (config.skill.residualSearch ? 'on (main net frozen)' : 'off (main net trains)')
       + ' gateTargets ' + (config.eval.gateTargets ? 'on' : 'off'));
     await Promise.race([
@@ -1029,9 +1023,10 @@ function skillJobs(weights, skill, n, secondsHere) {
         log('resumed gen ' + state.gen + ' skill ' + (state.skill || 1));
       }
     }
-    if (!(state.skill > 0)) state.skill = opts.skill || 1;
+    if (opts.skillSet) state.skill = opts.skill;
+    else if (!(state.skill > 0)) state.skill = opts.skill || 1;
     setSkill(state.skill);
-    log('skill ' + state.skill + ' (' + skillKey(state.skill) + ') comanda ' + commandGroup(state.skill));
+    log('skill ' + state.skill + ' (' + skillKey(state.skill) + ') commands ' + commandGroup(state.skill));
     if (state.reseed) {
       state.reseed = false;
       await seedBest(state);
@@ -1048,7 +1043,7 @@ function skillJobs(weights, skill, n, secondsHere) {
       await seedBest(state);
     }
     if (opts.evalOnly) {
-      const only = await evaluateSkill(state.theta, state.skill, opts.evalN);
+      const only = await evaluateSkill(state.theta, state.skill, opts.evalN, opts.trace);
       log('EVAL-ONLY ' + fmtSkill(only) + (skillReached(only) ? ' PASS' : ' FAIL'));
       fs.writeFileSync(path.join(backupDir, 'result.json'), JSON.stringify({ evalOnly: true, eval: only }, null, 2));
     } else {
@@ -1068,9 +1063,9 @@ function skillJobs(weights, skill, n, secondsHere) {
       const gen0 = state.gen;
       let latest = null;
       setOutputJoints(null);
-      // El residual congelado se crea una vez y queda como prior de las piernas. Con la
-      // escalera de ordenes el gait escrito esta apagado, asi que el residual casi no hace
-      // nada: el net maneja las piernas entero.
+      // The frozen residual is created once and kept as a leg prior. With the command
+      // ladder the scripted gait is off, so the residual barely does anything: the net
+      // handles the legs itself.
       if (skill >= 2 && !state.residualSearch) {
         state.residualSearch = new ResidualSearch(randomNormal);
         state.residualSearch.sigma = 0.012;
@@ -1078,10 +1073,10 @@ function skillJobs(weights, skill, n, secondsHere) {
         if (state.shiftMeters == null) state.shiftMeters = 0;
         if (!state.bestResidual) state.bestResidual = Array.from(state.residualSearch.theta);
       }
-      log('SKILL ' + skill + ' ' + skillKey(skill) + ' comanda ' + commandGroup(skill) +
+      log('SKILL ' + skill + ' ' + skillKey(skill) + ' commands ' + commandGroup(skill) +
         ' start gen ' + state.gen + ' budget ' + opts.gens +
         ' barra ' + config.eval.passRate[skillKey(skill)] +
-        (config.skill.scriptedLegs ? ' gait escrito ON' : ' gait escrito OFF') +
+        (config.skill.scriptedLegs ? ' scripted gait ON' : ' scripted gait OFF') +
         ' gains ' + targetGainText());
       while (state.gen - gen0 < opts.gens && !timedOut()) {
         const tick = Date.now();
@@ -1143,13 +1138,13 @@ function skillJobs(weights, skill, n, secondsHere) {
       };
       fs.writeFileSync(path.join(backupDir, 'result.json'), JSON.stringify(result, null, 2));
       if (!skillReached(latest)) {
-        log('gate de ' + skillKey(skill) + ' no alcanzado ' + fmtSkill(latest));
+        log('gate ' + skillKey(skill) + ' not reached ' + fmtSkill(latest));
         break;
       }
       const file = saveBackup('phase', state, { eval: latest, passed: true, skill });
       log('PASS skill ' + skill + ' ' + skillKey(skill) + ' ' + fmtSkill(latest) + ' ' + file);
       if (skill === 5) {
-        log('DONE la escalera entera: los cinco targets con orden');
+        log('DONE the whole ladder: all five targets under command');
         break;
       }
       state.m = new Float32Array(weightCount);
@@ -1169,9 +1164,9 @@ function skillJobs(weights, skill, n, secondsHere) {
     process.exitCode = 1;
   } finally {
     await pool.stop();
-    // Los workers son threads, no procesos: si alguno no llega a terminar mantiene el event
-    // loop vivo y el script no sale nunca. Esto es un CLI, asi que se sale explicito.
-    // El retraso le da a stdout el tiempo de volcar.
+    // The workers are threads, not processes: one that does not exit keeps the event
+    // loop alive and the script never ends. This is a CLI, so it exits on purpose.
+    // The delay gives stdout time to flush.
     setTimeout(() => process.exit(process.exitCode || 0), 300);
   }
 }

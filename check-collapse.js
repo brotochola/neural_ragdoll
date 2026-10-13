@@ -52,16 +52,17 @@ for (const pose of poses) {
   start.tilt = pose.tilt;
   start.drop = pose.drop;
   start.settle = pose.tilt ? 60 : 0;
-  const episode = new sim.Episode(sim.build(), theta, 0, 0, start);
-  episode.reset(theta, 0, 0, start);
+  // A fresh world per pose, like every scored episode. The constructor already resets.
+  const world = sim.build();
+  const episode = new sim.Episode(world, theta, 0, 0, start);
   // Se avanza hasta que la pose se acomode, y se congela el reloj: el frame no avanza mas,
   // asi que el episodio no termina y el doll queda congelado en esa pose.
-  for (let i = 0; i < (pose.tilt ? 90 : 30); i++) episode.step();
+  for (let i = 0; i < (pose.tilt ? 90 : 30); i++) episode.advanceOneFrame();
   episode.frame = frames - 2;
   let sum = 0;
   let n = 0;
   let stoodFrames = 0;
-  while (!episode.step()) {
+  while (!episode.advanceOneFrame()) {
     const total = scoreTotal(episode.measure);
     if (!Number.isFinite(total)) nan = true;
     sum += total;
@@ -78,6 +79,7 @@ for (const pose of poses) {
     rows: scoreByTarget(episode.measure).map((row) => ({ id: row.id, position: row.position, rotation: row.rotation })),
   });
   episode.cleanup();
+  sim.destroyWorld(world);
 }
 
 console.log('las diez filas en la POSE, sin red y sin terminos de supervivencia:');

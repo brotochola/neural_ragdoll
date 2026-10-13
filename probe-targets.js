@@ -86,7 +86,6 @@ function commandedMagnitude(start, t) {
 // mueve la cadera si el pie va para el otro lado, la rodilla para levantarlo del piso.
 const LEG_HIPS = [9, 11];
 const LEG_KNEES = [10, 12];
-const LEG_ANKLES = [13, 12]; // el tobillo derecho shares slot: se resuelve abajo
 
 function oracleLegs(episode) {
   const original = episode.applyMotors.bind(episode);
@@ -135,8 +134,8 @@ function episodeSpecs(n) {
 
 const specs = episodeSpecs(opts.n);
 
-// Los mundos se crean una sola vez y se reciclan con reset(). Box2D no aguanta
-// que se le creen cientos en una corrida, y además es más rápido.
+// One world per pool slot. Pools still call reset(), because the oracle hooks applyMotors and a
+// mid-episode swap would drop them. Scored training never reuses a world; see sim.runOneEpisode.
 const pool = [];
 for (let w = 0; w < Math.min(8, specs.length); w++)
   pool.push(new sim.Episode(sim.build(), theta, 0, 0, {}));
@@ -173,7 +172,7 @@ function runPool(count) {
     const restore = opts.oracle ? oracleNeck(episode, opts.oracle) : null;
     const restoreLegs = opts.oracle === 2 || opts.legOracle ? oracleLegs(episode) : null;
     episode.reset(theta, start.tilt || 0, start.drop || 0, start);
-    while (!episode.step());
+    while (!episode.advanceOneFrame());
     if (restore) restore();
     if (restoreLegs) restoreLegs();
     const stats = episode.stats;

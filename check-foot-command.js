@@ -67,11 +67,14 @@ for (let i = 1; i <= N; i++) {
     full: true,
     level: LEVEL,
   });
-  const episode = sim.runOneEpisode(weights, start);
-  const footAtStart = null;
+  // A fresh world per seed, like every scored episode. This one needs the foot position both
+  // at the start and at the end, so it steps the episode itself instead of using runOneEpisode.
+  const world = sim.build();
+  const episode = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, start);
+  const footAtStart = episode.measure.partX[footPart];
   const y0 = episode.measure.partY[footPart] - start.targets[footSlot].y;
   const orden = Math.abs(start.targets[footSlot].dx || 0);
-  while (!episode.step());
+  while (!episode.advanceOneFrame());
   const drift = episode.measure.partX[footPart] - footAtStart;
   const errX = (start.targets[footSlot].x || 0) - episode.measure.partX[footPart];
   const errY = (start.targets[footSlot].y || 0) - episode.measure.partY[footPart];
@@ -89,6 +92,7 @@ for (let i = 1; i <= N; i++) {
     errY.toFixed(3).padStart(9) + err.toFixed(3).padStart(9),
   );
   episode.cleanup();
+  sim.destroyWorld(world);
 }
 
 const mean = (key) => sum[key] / N;

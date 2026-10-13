@@ -1,9 +1,9 @@
-// Corre la búsqueda y los workers de simulación. El hilo de la página solo dibuja el muñeco.
+// Runs the search and the simulation workers. The page thread only draws the doll.
 import { EvolutionSearch } from "./net.js";
-import { config, setTrainingPhase } from "../config.js";
-import { fillTrainingStart, poseScore } from "./sim.js";
+import { config, setTrainingPhase, setSkill, applySearchNumbers } from "../config.js";
 import { bytesFor, writeTasks, readScore, resultIndex } from "./task-buffer.js";
 import { makeSeededRandom, randomNormalSample } from "./utils.js";
+import { runGeneration, trainingMode, generationPairs } from "./training.js";
 
 const random = makeSeededRandom(7);
 const randomNormal = () => randomNormalSample(random);
@@ -11,17 +11,54 @@ const randomNormal = () => randomNormalSample(random);
 let paused = true;
 let epoch = 0;
 let phase = config.curriculum.phase;
+let trainSpec = null;
 let state = null;
 const slots = [];
-const taskPool = [];
-const startPool = [];
-const posePool = [];
-const liveTasks = [];
-const liveScores = [];
 const scorePool = [];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function snapshotStart(options) {
+  if (!options) return null;
+  const source = options.targets || [];
+  const targets = [];
+  for (let i = 0; i < source.length; i++) {
+    const target = source[i] || {};
+    targets.push({
+      on: target.on !== false,
+      dx: target.dx || 0,
+      dy: target.dy || 0,
+      turn: target.turn || 0,
+      cx: target.cx || 0,
+      cy: target.cy || 0,
+      ca: target.ca || 0,
+      x: target.x || 0,
+      y: target.y || 0,
+      angle: target.angle || 0,
+    });
+  }
+  return {
+    tilt: options.tilt || 0,
+    drop: options.drop || 0,
+    shiftX: options.shiftX || 0,
+    stance: options.stance || 0,
+    failOnHead: !!options.failOnHead,
+    commands: options.commands || "",
+    placed: !!options.placed,
+    targets,
+  };
+}
+
+function browserMode(search) {
+  const mode = trainingMode(config.skill.level, search.gen || 0, 0);
+  if (trainSpec && Array.isArray(trainSpec.targets)) {
+    mode.placed = trainSpec.targets;
+    mode.jitter = +trainSpec.jitter || 0;
+    mode.randomStart = trainSpec.randomStart !== false;
+  }
+  return mode;
 }
 
 function scoreRow(index) {
@@ -135,35 +172,24 @@ function evaluatePopulation(items) {
 }
 
 async function oneGeneration(search, runEpoch) {
-  const generation = search.ask(null, Math.max(config.workers.browserPairMin, slots.length), randomNormal);
-  const childCount = generation.weights.length;
-  const pairCount = childCount >> 1;
-  while (taskPool.length < childCount) taskPool.push({ index: 0, weights: null, phase: 0, options: null });
-  while (startPool.length < pairCount) startPool.push({});
-  while (posePool.length < childCount) posePool.push({ fitness: 0, f: 0, start: 0, end: 0, gap: 0, stance: 0, headImpact: 0, stoodUp: false, up: false });
-  liveTasks.length = childCount;
-  for (let child = 0; child < childCount; child++) {
-    const pair = child >> 1;
-    if ((child & 1) === 0) {
-      fillTrainingStart(startPool[pair], random);
-    }
-    const task = taskPool[child];
-    task.index = child;
-    task.weights = generation.weights[child];
-    task.phase = child % config.cadence.actionEveryNFrames;
-    task.options = startPool[pair];
-    liveTasks[child] = task;
-  }
-  const run = await evaluatePopulation(liveTasks);
-  const rows = run.ordered;
-  for (let i = 0; i < rows.length; i++) {
-    if (!rows[i] || !Number.isFinite(rows[i].fitness)) throw new Error("A worker returned an empty score");
-  }
-  liveScores.length = childCount;
-  for (let child = 0; child < childCount; child++) liveScores[child] = poseScore(rows, child, 1, posePool[child]);
-  const tellStart = performance.now();
-  search.tell(generation, liveScores);
-  const tellMs = performance.now() - tellStart;
+  let run = null;
+  let tellMs = 0;
+  let preview = null;
+  await runGeneration({
+    ask: () => search.ask(null, generationPairs(), randomNormal),
+    random,
+    mode: browserMode(search),
+    runJobs: async (jobs) => {
+      preview = snapshotStart(jobs[0] && jobs[0].options);
+      run = await evaluatePopulation(jobs);
+      return run.ordered;
+    },
+    tell: (generation, scores) => {
+      const tellStart = performance.now();
+      search.tell(generation, scores);
+      tellMs = performance.now() - tellStart;
+    },
+  });
   const row = search.hist[search.hist.length - 1];
   const theta = search.theta.slice();
   const bestGenTheta = search.bestGenTheta.slice();
@@ -172,6 +198,8 @@ async function oneGeneration(search, runEpoch) {
   const v = search.v.slice();
   const note = search.anchorNote;
   search.anchorNote = "";
+  const scouted = !!search.lastScouted;
+  search.lastScouted = false;
   return {
     type: "generation",
     epoch: runEpoch,
@@ -189,6 +217,8 @@ async function oneGeneration(search, runEpoch) {
     timings: run.timings,
     sendMs: run.sendMs,
     tellMs,
+    preview,
+    scouted,
     theta,
     bestGenTheta,
     bestEverTheta,
@@ -202,7 +232,26 @@ onmessage = (event) => {
   const data = event.data;
   if (!data) return;
   if (data.type === "pause") { paused = !!data.paused; return; }
-  if (data.type === "targets") return;
+  if (data.type === "targets") {
+    trainSpec = {
+      targets: Array.isArray(data.targets) ? data.targets : [],
+      jitter: +data.jitter || 0,
+      randomStart: data.randomStart !== false,
+    };
+    return;
+  }
+  if (data.type === "skill") {
+    setSkill(data.level);
+    return;
+  }
+  if (data.type === "scout") {
+    if (state) state.handScout = true;
+    return;
+  }
+  if (data.type === "search") {
+    applySearchNumbers(data.values);
+    return;
+  }
   if (data.type === "phase") {
     phase = data.phase;
     setTrainingPhase(phase);
@@ -213,6 +262,14 @@ onmessage = (event) => {
     paused = !!data.paused;
     phase = data.phase;
     setTrainingPhase(phase);
+    if (data.search) applySearchNumbers(data.search);
+    if (Array.isArray(data.targets)) {
+      trainSpec = {
+        targets: data.targets,
+        jitter: +data.jitter || 0,
+        randomStart: data.randomStart !== false,
+      };
+    }
     state = adopt(data.state);
   }
 };

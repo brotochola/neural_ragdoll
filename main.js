@@ -10,7 +10,7 @@ import {
   b2DebugDraw,
 } from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
 import * as Box2D from "https://cdn.jsdelivr.net/npm/phaser-box2d@1.1.0/dist/PhaserBox2D.min.js";
-import { config } from "./config.js";
+import { config, applySearchNumbers } from "./config.js";
 import { scoreDecision, isStanding } from "./src/reward.js";
 import { ElmanNetwork, EvolutionSearch } from "./src/net.js";
 import {
@@ -85,10 +85,23 @@ export class NeuralRagDollWorld {
       angle: item.angle,
       placed: item.on,
     }));
-    this.targetColors = [0xffd166, 0xff6b6b, 0x7aa2ff, 0x43d9ad, 0xc084fc];
+    this.trainMode = false;
+    this.trainSaved = false;
+    this.jitter = 0.05;
+    this.randomStart = true;
+    this.trainMarks = config.targets.map((item) => ({
+      on: item.part === "head",
+      x: item.x,
+      y: item.y,
+      angle: item.angle || 0,
+      placed: item.part === "head",
+    }));
+    this.targetColors = [0xffd166, 0xff7a18, 0xb14dff, 0x3dff6a, 0x2ec8ff];
     this.targetDrag = null;
     this.fillTargetToggles();
     this.restoreUi();
+    this.restoreSearch();
+    this.fillSearchKnobs();
 
     this.doll = new RagDoll2D(Box2D, config);
     this.world = this.doll;
@@ -105,6 +118,32 @@ export class NeuralRagDollWorld {
       this.saveSession();
       this.postOrchestrator({ type: "pause", paused: this.paused });
       this.logEvent(this.paused ? "training paused" : "training started");
+    };
+    this.$("skillLevel").onchange = () => this.saveUi();
+    this.$("scoutOnce").onclick = () => {
+      if (!this.orchestrator) return;
+      this.scoutPending = true;
+      this.postOrchestrator({ type: "scout" });
+      if (this.state) this.paintTraining();
+    };
+    this.$("playMode").onchange = () => {
+      this.trainMode = this.$("playMode").value === "train";
+      this.syncTrainBoxes();
+      this.paintTargetToggles();
+      this.syncEpisodeTargets();
+      if (this.trainMode) this.postTraining();
+      this.saveUi();
+    };
+    this.$("trainJitter").oninput = () => {
+      this.jitter = +this.$("trainJitter").value || 0;
+      this.paintJitter();
+      this.saveUi();
+      if (this.trainSaved) this.postTraining();
+    };
+    this.$("randomStart").onchange = () => {
+      this.randomStart = this.$("randomStart").checked;
+      this.saveUi();
+      if (this.trainSaved) this.postTraining();
     };
     window.addEventListener("pagehide", () => {
       this.saveSession();
@@ -276,6 +315,7 @@ export class NeuralRagDollWorld {
       "viewRays",
       "viewColliders",
       "objectKind",
+      "showTrainPose",
     ]) {
       this.$(id).addEventListener("change", () => this.saveUi());
     }
@@ -378,7 +418,7 @@ export class NeuralRagDollWorld {
         const scaleNow = this.view.scale || 100;
         const groundNow = this.view.groundY || this.app.screen.height * 0.78;
         const point = this.worldPoint(screen.x, screen.y, scaleNow, groundNow);
-        const target = this.targets[this.targetDrag.index];
+        const target = this.markList()[this.targetDrag.index];
         const spec = config.targets[this.targetDrag.index];
         if (this.targetDrag.mode === "turn")
           target.angle = Math.atan2(point.y - target.y, point.x - target.x);
@@ -439,7 +479,7 @@ export class NeuralRagDollWorld {
         if (!this.hold) this.resetEpisode();
       } else {
         const stepStart = performance.now();
-        const ended = this.episode.step();
+        const ended = this.episode.advanceOneFrame();
         stepSum += performance.now() - stepStart;
         stepCount++;
         if (ended) this.hold = 60;
@@ -470,6 +510,7 @@ export class NeuralRagDollWorld {
     this.drawThrown();
     this.drawRays();
     this.drawTargets();
+    this.drawTrainPreview();
     this.drawColliders();
     this.drawChart();
     this.renderMs = performance.now() - renderStart;
@@ -499,7 +540,7 @@ export class NeuralRagDollWorld {
           (Math.abs(
             Math.atan2(
               this.episode.measure.torsoSin || 0,
-              this.episode.measure.torsoCos || 1,
+              this.episode.measure.torsoCos ?? 1,
             ),
           ) *
             180) /
@@ -554,7 +595,8 @@ export class NeuralRagDollWorld {
           corners[k * 2] = this.toX(x + rot.x);
           corners[k * 2 + 1] = this.toY(y + rot.y);
         }
-        throws.poly(corners).fill(thrown.kind.color);
+        // Pixi no copia el array: si reusamos boxPoly, todas las cajas quedan en la ultima.
+        throws.poly(corners.slice()).fill(thrown.kind.color);
       } else
         throws
           .circle(this.toX(x), this.toY(y), thrown.kind.radius * scale)
@@ -609,18 +651,122 @@ export class NeuralRagDollWorld {
     else this.orchestrator.postMessage(message);
   }
 
-  targetPacket() {
-    const out = [];
-    const list = this.targets || [];
-    for (let i = 0; i < list.length; i++) {
-      const item = list[i];
-      out.push({ on: !!item.on, x: item.x, y: item.y, angle: item.angle });
+  searchValues() {
+    const out = {};
+    const search = config.search;
+    const keys = Object.keys(search);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (typeof search[key] === "number") out[key] = search[key];
     }
     return out;
   }
 
+  restoreSearch() {
+    let saved;
+    try {
+      saved = JSON.parse(localStorage.getItem("ragdoll-search") || "null");
+    } catch (error) {
+      return;
+    }
+    applySearchNumbers(saved);
+  }
+
+  fillSearchKnobs() {
+    const tips = {
+      explorationScale: "Floor of the noise on the weights that read the target columns. The decaying noise never goes below this, so the search keeps trying the five marks even late in a run.",
+      explorationFloor: "Starting size of the target-column noise. It decays with the generation count, and the noise actually used is the larger of that decay and explorationScale.",
+      explorationHalfLifeGenerations: "How many generations it takes for the decaying target noise to fall to half. A smaller number makes the search get quieter faster.",
+      stagnationGenerations: "Generations without a new Best ever before the large noise can start. The Plateau row says Stagnation at this count. One new Best ever subtracts this many generations from the count.",
+      stagnationBoost: "Multiplier on the noise of the scout pairs at the first plateau, and again after each further stretch of stagnationGenerations. Scout once uses this same multiplier.",
+      stagnationBoostCap: "Largest multiplier the plateau is allowed to reach. sigmaCap can stop a weight sooner than this.",
+      sigmaCap: "No single weight is noised by more than this, scout or not. At the plateau cap the scouts sit near a trained weight instead of jumping past it.",
+      recordWindow: "How many recent generations are averaged to decide Best ever. The average is of the parent’s children, not of the single best child. A window that is not full yet does not set a record.",
+      recordMargin: "The record average must beat the previous Best ever by at least this much. A smaller margin accepts tinier improvements and resets the plateau sooner.",
+      bestEverPairs: "Extra pairs copied from Best ever and noised with the small noise. 0 turns them off. They are added on top of the parent’s pairs.",
+      bestEverAdoptMargin: "During Stagnation, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. A scout never becomes the parent.",
+      stagnationMutateCap: "Share of the parent’s pairs that get the large noise once Stagnation starts, and when you press Scout once. 0.2 is one pair in five. 0 keeps every pair on the small noise, except Scout once still scouts one pair.",
+      limbExplorationScale: "Noise on the shoulder, elbow, hip, knee, and ankle outputs. The waist, neck, and wrists use this too while they are in the trainable list.",
+      skipExplorationScale: "Noise on the shortcut from the target columns straight to the joint outputs. Those weights start at zero. A large value here shakes every joint and the doll stops being able to stand.",
+      bodyExplorationScale: "Noise on the hidden weights. Kept small so balance can shift without rewriting the whole net.",
+      learningRate: "Adam’s step size at generation 0. Each generation moves the parent by about this much in the direction the children ranked. It then decays.",
+      learningRateFloor: "Adam’s step size never falls below this, no matter how many generations have passed.",
+      learningRateHalfLifeGenerations: "How many generations it takes for Adam’s step size to fall to half, down to learningRateFloor.",
+      revertAfterGenerations: "A plateau this long copies Best ever back onto the parent and clears Adam’s memory. 0 leaves the parent where it wandered.",
+      adamBeta1: "How fast Adam forgets the direction of recent steps. Closer to 1 remembers longer. 0.9 is the usual first-moment decay.",
+      adamBeta2: "How fast Adam forgets the size of recent steps. Closer to 1 remembers longer. 0.999 is the usual second-moment decay.",
+      adamEpsilon: "A tiny number added under Adam’s division so a weight that has never moved does not divide by zero.",
+      hiddenInitScale: "A brand new parent draws its hidden weights from a gaussian of this width. Restart from scratch uses it. A run that is already going does not.",
+      outputInitScale: "A brand new parent draws its joint-output weights from a gaussian of this width. Restart from scratch uses it. A run that is already going does not.",
+      randomHiddenScale: "The Random weights button replaces the hidden block with a gaussian of this width, the scale of a trained network rather than a fresh one.",
+      randomOutputScale: "The Random weights button replaces the joint-output block with a gaussian of this width.",
+      goalCloseEnoughMeters: "In a situation that has a marker, a child must be at least this close to it before it can become the parent. The five target levels have no marker, so they ignore this.",
+      eliteMissingGapMeters: "Distance assumed when a score has no marker. It only matters for the marker check, which the target levels skip.",
+      headImpactQuiet: "A stand counts as quiet when the fastest the head was moving downward stays below this, in meters per second.",
+    };
+    const root = this.$("searchKnobList");
+    const search = config.search;
+    const keys = Object.keys(search);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (typeof search[key] !== "number") continue;
+      const label = document.createElement("label");
+      const tip = tips[key] || key;
+      const name = document.createElement("span");
+      name.textContent = key;
+      name.title = tip;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.step = "any";
+      input.value = String(search[key]);
+      input.title = tip;
+      input.oninput = () => {
+        const value = +input.value;
+        if (!Number.isFinite(value)) return;
+        applySearchNumbers({ [key]: value });
+        try {
+          localStorage.setItem("ragdoll-search", JSON.stringify(this.searchValues()));
+        } catch (error) {
+          /* a quota error still leaves this generation's number in memory */
+        }
+        this.postOrchestrator({ type: "search", values: this.searchValues() });
+        if (this.state) this.paintTraining();
+      };
+      label.append(name, input);
+      root.appendChild(label);
+    }
+  }
+
+  markList() {
+    return this.trainMode ? this.trainMarks : this.targets;
+  }
+
+  paintJitter() {
+    const cm = Math.round((this.jitter || 0) * 100);
+    this.$("jitterVal").textContent = cm + " cm";
+  }
+
+  postTraining() {
+    this.trainSaved = true;
+    const spec = this.trainSpec();
+    this.postOrchestrator({ type: "targets", ...spec });
+  }
+
+  trainSpec() {
+    return {
+      targets: this.trainMarks.map((item) => ({
+        on: !!item.on,
+        x: item.x || 0,
+        y: item.y || 0,
+        angle: item.angle || 0,
+      })),
+      jitter: this.jitter,
+      randomStart: this.randomStart,
+    };
+  }
+
   postTargets() {
-    this.postOrchestrator({ type: "targets", targets: this.targetPacket() });
+    if (this.trainMode) this.postTraining();
   }
 
   searchPacket() {
@@ -660,17 +806,17 @@ export class NeuralRagDollWorld {
     if (!this.orchestrator || !this.state) return;
     this.epoch = (this.epoch || 0) + 1;
     const sent = this.searchPacket();
-    this.postOrchestrator(
-      {
-        type: "replace",
-        epoch: this.epoch,
-        paused: this.paused,
-        phase: config.curriculum.phase,
-        targets: this.targetPacket(),
-        state: sent.packet,
-      },
-      sent.transfer,
-    );
+    const message = {
+      type: "replace",
+      epoch: this.epoch,
+      paused: this.paused,
+      phase: config.curriculum.phase,
+      state: sent.packet,
+    };
+    if (this.trainSaved) Object.assign(message, this.trainSpec());
+    message.search = this.searchValues();
+    this.scoutPending = false;
+    this.postOrchestrator(message, sent.transfer);
   }
 
   onOrchestrator(data) {
@@ -692,6 +838,7 @@ export class NeuralRagDollWorld {
     state.gen = data.gen || 0;
     state.k = data.k || 0;
     state.flatGens = data.flatGens || 0;
+    if (data.scouted) this.scoutPending = false;
     state.mutationBoost = data.mutationBoost || 1;
     state.mutationFraction = data.mutationFraction || 0;
     state.bestEverScore = data.bestEverScore;
@@ -705,6 +852,7 @@ export class NeuralRagDollWorld {
     this.sendMs = data.sendMs;
     this.tellMs = data.tellMs;
     this.workerTiming = data.timings || [];
+    if (data.preview) this.trainPreview = this.sim.previewStart(this.world, data.preview);
     if (data.anchorNote) this.logEvent(data.anchorNote);
     this.visit.trained = true;
     const finished = state.hist[state.hist.length - 1];
@@ -839,7 +987,9 @@ export class NeuralRagDollWorld {
       ],
       [
         "Plateau",
-        "Generations since the 20-generation average fitness last reached a new high. " +
+        "Generations since the 20-generation average fitness last reached a new high. The row says Stagnation once the count reaches " +
+          every +
+          ". " +
           (config.search.stagnationMutateCap > 0
             ? "At " +
               every +
@@ -987,10 +1137,19 @@ export class NeuralRagDollWorld {
     this.setStatus(1, arrow);
     this.setStatus(2, last ? last.best.toFixed(2) : "–");
     this.setStatus(3, everText);
-    this.setStatus(4, flat + " gens");
+    const stagnant = every > 0 && flat >= every;
+    this.setStatus(
+      4,
+      stagnant ? "Stagnation · " + flat : flat + " / " + (every > 0 ? every : "–"),
+    );
+    if (this.statusTips[4]) this.statusTips[4].classList.toggle("stagnant", stagnant);
     this.setStatus(
       5,
-      "x" + boost + (pct > 0 ? " · " + pct + "%" : "") + anchorText,
+      (this.scoutPending ? "scout next · " : "") +
+        "x" +
+        boost +
+        (pct > 0 ? " · " + pct + "%" : "") +
+        anchorText,
     );
     this.setStatus(6, this.formatMs(this.sendMs));
     this.setStatus(7, handoffText);
@@ -1019,22 +1178,26 @@ export class NeuralRagDollWorld {
           " workers. A pair is two ragdolls. They share a starting pose and try opposite small changes. More pairs means more ragdolls here.",
       );
   }
+  seatIfNew(target, spec) {
+    if (!target.on || target.placed || !this.episode) return;
+    const part = config.partIndex[spec.part];
+    const measure = this.episode.measure;
+    target.x = measure.partX[part];
+    target.y = measure.partY[part];
+    target.angle = Math.atan2(measure.partSin[part], measure.partCos[part]);
+    target.placed = true;
+  }
+
   applyTrainGroup(id) {
     const on = this.$(id).checked;
     const group =
       id === "trainHead" ? "head" : id === "trainFeet" ? "foot" : "hand";
+    const list = this.markList();
     config.targets.forEach((spec, index) => {
       if (!spec.id.startsWith(group)) return;
-      const target = this.targets[index];
+      const target = list[index];
       target.on = on;
-      if (on && !target.placed && this.episode) {
-        const part = config.partIndex[spec.part];
-        const measure = this.episode.measure;
-        target.x = measure.partX[part];
-        target.y = measure.partY[part];
-        target.angle = Math.atan2(measure.partSin[part], measure.partCos[part]);
-        target.placed = true;
-      }
+      this.seatIfNew(target, spec);
     });
     this.paintTargetToggles();
     this.postTargets();
@@ -1042,9 +1205,10 @@ export class NeuralRagDollWorld {
   }
 
   syncTrainBoxes() {
+    const list = this.markList();
     const on = (name) => {
       const index = config.targets.findIndex((spec) => spec.id === name);
-      return !!(this.targets[index] && this.targets[index].on);
+      return !!(list[index] && list[index].on);
     };
     this.$("trainHead").checked = on("head");
     this.$("trainFeet").checked = on("footL") && on("footR");
@@ -1124,21 +1288,11 @@ export class NeuralRagDollWorld {
             ". Drag it to tell the doll where you want that foot. This one lives on the floor, in world coordinates.";
       const input = document.createElement("input");
       input.type = "checkbox";
-      input.checked = this.targets[index].on;
+      input.checked = this.markList()[index].on;
       input.onchange = () => {
-        const target = this.targets[index];
+        const target = this.markList()[index];
         target.on = input.checked;
-        if (target.on && !target.placed && this.episode) {
-          const part = config.partIndex[spec.part];
-          const measure = this.episode.measure;
-          target.x = measure.partX[part];
-          target.y = measure.partY[part];
-          target.angle = Math.atan2(
-            measure.partSin[part],
-            measure.partCos[part],
-          );
-          target.placed = true;
-        }
+        this.seatIfNew(target, spec);
         this.syncTrainBoxes();
         this.postTargets();
         this.saveUi();
@@ -1150,16 +1304,18 @@ export class NeuralRagDollWorld {
 
   paintTargetToggles() {
     const inputs = this.$("targetRow").querySelectorAll("input");
-    for (let i = 0; i < inputs.length && i < this.targets.length; i++)
-      inputs[i].checked = !!this.targets[i].on;
+    const list = this.markList();
+    for (let i = 0; i < inputs.length && i < list.length; i++)
+      inputs[i].checked = !!list[i].on;
   }
 
   pickTarget(point) {
     let best = null;
     let bestDist = Infinity;
     const stick = 0.34;
-    for (let i = 0; i < this.targets.length; i++) {
-      const target = this.targets[i];
+    const list = this.markList();
+    for (let i = 0; i < list.length; i++) {
+      const target = list[i];
       if (!target.on) continue;
       const tipX = target.x + Math.cos(target.angle) * stick;
       const tipY = target.y + Math.sin(target.angle) * stick;
@@ -1178,19 +1334,111 @@ export class NeuralRagDollWorld {
   }
 
   drawTargets() {
+    this.ensureGhosts();
     const stick = 0.34;
-    for (let i = 0; i < this.targets.length; i++) {
-      const target = this.targets[i];
-      if (!target.on) continue;
+    const parts = this.doll.parts;
+    const list = this.markList();
+    for (let i = 0; i < list.length; i++) {
+      const target = list[i];
+      const sprite = this.sandboxMarks && this.sandboxMarks[i];
+      if (!target.on) {
+        if (sprite) sprite.visible = false;
+        continue;
+      }
+      if (sprite) {
+        const part = parts[config.partIndex[config.targets[i].part]];
+        this.placeGhost(sprite, target.x, target.y, target.angle || 0, part);
+        sprite.alpha = 0.5;
+      }
       const color = this.targetColors[i];
       const x = this.toX(target.x);
       const y = this.toY(target.y);
       const tipX = this.toX(target.x + Math.cos(target.angle) * stick);
       const tipY = this.toY(target.y + Math.sin(target.angle) * stick);
-      this.throws.moveTo(x, y).lineTo(tipX, tipY).stroke({ width: 3, color });
-      this.throws.circle(tipX, tipY, 6).fill(color);
-      this.throws.circle(x, y, 9).fill(color);
-      this.throws.circle(x, y, 9).stroke({ width: 2, color: 0xffffff });
+      this.throws.moveTo(x, y).lineTo(tipX, tipY).stroke({ width: 2, color, alpha: 0.7 });
+      this.throws.circle(tipX, tipY, 5).fill(color);
+    }
+  }
+
+  ensureGhosts() {
+    if (this.poseGhosts || !this.doll.partSprites) return;
+    this.poseLayer = new PIXI.Container();
+    this.poseLayer.zIndex = 0;
+    this.dollView.addChildAt(this.poseLayer, 0);
+    this.poseGhosts = [];
+    const sprites = this.doll.partSprites;
+    const count = this.doll.parts.length;
+    for (let i = 0; i < count; i++) {
+      const src = sprites[i];
+      if (!src) {
+        this.poseGhosts.push(null);
+        continue;
+      }
+      const ghost = new PIXI.Sprite(src.texture);
+      ghost.anchor.set(0.5);
+      ghost.alpha = 0.22;
+      ghost.tint = src.tint;
+      ghost.visible = false;
+      this.poseLayer.addChild(ghost);
+      this.poseGhosts.push(ghost);
+    }
+    this.markLayer = new PIXI.Container();
+    this.app.stage.addChildAt(this.markLayer, this.app.stage.getChildIndex(this.throws));
+    this.sandboxMarks = [];
+    this.previewMarks = [];
+    for (let i = 0; i < config.targets.length; i++) {
+      const src = sprites[config.partIndex[config.targets[i].part]];
+      const sandbox = new PIXI.Sprite(src.texture);
+      sandbox.anchor.set(0.5);
+      sandbox.alpha = 0.5;
+      sandbox.tint = src.tint;
+      sandbox.visible = false;
+      this.markLayer.addChild(sandbox);
+      this.sandboxMarks.push(sandbox);
+      const preview = new PIXI.Sprite(src.texture);
+      preview.anchor.set(0.5);
+      preview.alpha = 0.5;
+      preview.tint = src.tint;
+      preview.visible = false;
+      this.markLayer.addChild(preview);
+      this.previewMarks.push(preview);
+    }
+  }
+
+  placeGhost(sprite, x, y, angle, part) {
+    const scale = this.view.scale || 1;
+    sprite.position.set(this.toX(x), this.toY(y));
+    sprite.rotation = -angle;
+    sprite.width = part.hx * 2 * scale;
+    sprite.height = part.hy * 2 * scale;
+    sprite.visible = true;
+  }
+
+  drawTrainPreview() {
+    this.ensureGhosts();
+    if (!this.poseGhosts) return;
+    const show = this.$("showTrainPose").checked && this.trainPreview;
+    const preview = this.trainPreview;
+    const parts = this.doll.parts;
+    for (let i = 0; i < this.poseGhosts.length; i++) {
+      const ghost = this.poseGhosts[i];
+      if (!ghost) continue;
+      if (!show) {
+        ghost.visible = false;
+        continue;
+      }
+      this.placeGhost(ghost, preview.x[i], preview.y[i], preview.angle, parts[i]);
+      ghost.alpha = 0.22;
+    }
+    for (let i = 0; i < this.previewMarks.length; i++) {
+      const sprite = this.previewMarks[i];
+      const mark = show && preview.marks[i];
+      if (!mark || !mark.on) {
+        sprite.visible = false;
+        continue;
+      }
+      this.placeGhost(sprite, mark.x, mark.y, mark.angle, parts[config.partIndex[mark.part]]);
+      sprite.alpha = 0.5;
     }
   }
 
@@ -1262,11 +1510,16 @@ export class NeuralRagDollWorld {
     }
   }
 
+  syncEpisodeTargets() {
+    if (!this.episode || !this.episode.options) return;
+    this.episode.options.targets = this.markList();
+  }
+
   episodeOptions() {
     const pose = this.$("startPose").value;
     const shared = {
       frames: 1e9,
-      targets: this.targets,
+      targets: this.markList(),
       amp: 0,
       period: 8,
       phaseShift: 0,
@@ -1276,6 +1529,7 @@ export class NeuralRagDollWorld {
         tilt: (Math.random() * 2 - 1) * 0.1,
         drop: 0.12,
         settle: 0,
+        stance: config.skill.stanceMeters,
       });
     const sign = pose === "prone" ? -1 : 1;
     return Object.assign(shared, {
@@ -2351,7 +2605,20 @@ export class NeuralRagDollWorld {
           speed: this.$("speed").value,
           phaseStartGen: this.phaseStartGen,
           curriculumPhase: config.curriculum.phase,
+          skillLevel: this.$("skillLevel").value,
+          showTrainPose: this.$("showTrainPose").checked,
+          playMode: this.trainMode ? "train" : "sandbox",
+          jitter: this.jitter,
+          randomStart: this.randomStart,
+          trainSaved: this.trainSaved,
           targets: this.targets.map((item) => ({
+            on: !!item.on,
+            x: item.x,
+            y: item.y,
+            angle: item.angle,
+            placed: !!item.placed,
+          })),
+          trainMarks: this.trainMarks.map((item) => ({
             on: !!item.on,
             x: item.x,
             y: item.y,
@@ -2421,6 +2688,36 @@ export class NeuralRagDollWorld {
       }
     }
     if (saved.paused === false) this.paused = false;
+    pick("skillLevel", saved.skillLevel);
+    this.$("showTrainPose").checked = !!saved.showTrainPose;
+    if (saved.playMode === "train" || saved.playMode === "sandbox") {
+      this.$("playMode").value = saved.playMode;
+      this.trainMode = saved.playMode === "train";
+    }
+    if (Number.isFinite(+saved.jitter)) {
+      this.jitter = Math.min(0.2, Math.max(0, +saved.jitter));
+      this.$("trainJitter").value = String(this.jitter);
+      this.paintJitter();
+    }
+    if (saved.randomStart != null) {
+      this.randomStart = !!saved.randomStart;
+      this.$("randomStart").checked = this.randomStart;
+    }
+    this.trainSaved = !!saved.trainSaved;
+    if (Array.isArray(saved.trainMarks)) {
+      saved.trainMarks.forEach((item, index) => {
+        const target = this.trainMarks[index];
+        if (!target || !item) return;
+        target.on = !!item.on;
+        if (Number.isFinite(+item.x)) target.x = +item.x;
+        if (Number.isFinite(+item.y)) target.y = +item.y;
+        if (Number.isFinite(+item.angle)) target.angle = +item.angle;
+        target.placed = !!item.placed;
+      });
+      this.trainSaved = true;
+    }
+    this.paintTargetToggles();
+    this.syncTrainBoxes();
   }
 
   networkFromJson(data) {

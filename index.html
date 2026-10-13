@@ -67,11 +67,32 @@
         <div id="status">Starting…</div>
         <div class="controls">
           <button id="pause" title="Starts the search. The doll on screen keeps moving. This choice is remembered when you reopen the page.">Start training</button>
+          <button id="scoutOnce" title="The next generation scouts a share of its pairs with the large noise, without waiting for the plateau. Scouts do not replace the parent.">Scout once</button>
+          <label class="ctrl" title="Sandbox: dragging marks only moves the doll on screen. Train: the marks you drag are what the search scores.">Mode
+            <select id="playMode">
+              <option value="sandbox">Sandbox</option>
+              <option value="train">Train</option>
+            </select>
+          </label>
+          <label class="ctrl" title="The page search does not take a skill from here. Head, hands, and feet choose what it scores. The headless run keeps its own ladder.">Ramp
+            <select id="skillLevel">
+              <option value="1">1 Stand</option>
+              <option value="2" selected>2 Head</option>
+              <option value="3">3 Hands</option>
+              <option value="4">4 Feet</option>
+              <option value="5">5 All</option>
+            </select>
+          </label>
+          <label class="ctrl" title="Draws the start pose the search is scoring, behind the marks you place."><input id="showTrainPose" type="checkbox"> Show training pose</label>
           <button id="restart" title="Throws away this session, including saved networks, and starts from random weights.">Restart from scratch</button>
           <button id="randomWeights" title="Replaces the parent with random weights at the scale of a trained network and shows that network. Training continues from it.">Random weights</button>
-          <label class="ctrl" title="Scores the head mark on the sandbox doll. Training places its own head mark and its own gain, see config.targetGains. This box does not change training."><input id="trainHead" type="checkbox" checked> Head</label>
-          <label class="ctrl" title="Scores both foot marks on the sandbox doll. Training places its own foot marks. This box does not change training."><input id="trainFeet" type="checkbox"> Feet</label>
-          <label class="ctrl" title="Scores both hand marks on the sandbox doll. Training places its own hand marks, and since training starts the neck and the wrists are trainable again, those marks are reachable. This box does not change training."><input id="trainHands" type="checkbox"> Hands</label>
+          <label class="ctrl" title="In Train mode this mark is scored. In Sandbox it only scores the doll on screen."><input id="trainHead" type="checkbox" checked> Head</label>
+          <label class="ctrl" title="In Train mode both foot marks are scored. In Sandbox they only score the doll on screen."><input id="trainFeet" type="checkbox"> Feet</label>
+          <label class="ctrl" title="In Train mode both hand marks are scored. In Sandbox they only score the doll on screen."><input id="trainHands" type="checkbox"> Hands</label>
+          <label class="ctrl" title="Each episode nudges a placed mark by up to this many centimeters, and turns it a little. 0 leaves the mark exactly where you put it.">Jitter <span id="jitterVal">5 cm</span>
+            <input id="trainJitter" type="range" min="0" max="0.2" step="0.01" value="0.05">
+          </label>
+          <label class="ctrl" title="On: the body starts with the small tilt and shift it already had. Off: it starts standing on your marks."><input id="randomStart" type="checkbox" checked> Random start</label>
           <label class="ctrl" title="How often the best network of the session is kept, when its score beats the previous save.">Save best every
             <select id="snapshotEvery">
               <option value="100" selected>100 generations</option>
@@ -82,6 +103,10 @@
           <input id="loadNetworkFile" type="file" accept=".json,application/json" hidden>
           <button id="saveFolder" title="Pick a folder once. New backups of the parent and of Best ever are written there until you reload.">Save folder</button>
           <button id="log" title="Opens a list of what happened in this visit: generations, loads, pauses.">Log</button>
+          <details id="searchKnobs">
+            <summary title="Numbers from config.search. The next generation uses them. The headless run keeps the file.">Search</summary>
+            <div id="searchKnobList"></div>
+          </details>
         </div>
     </aside>
   </div>

@@ -21,7 +21,7 @@ for (let i = 0; i < 20; i++) {
   const start = sim.fillTrainingStart({}, makeSeededRandom(config.eval.seed + skill * 10007 + i * 17), { full: false, level: 2, shiftMeters: 0.16 });
   if (start.place && start.place.extra < 0) start.place.extra = -start.place.extra;
   episode.reset(theta, start.tilt || 0, start.drop || 0, start);
-  while (!episode.step());
+  while (!episode.advanceOneFrame());
   const targets = episode.options.targets;
   const step2 = 0.12 + makeSeededRandom(config.eval.seed + 5000 + i * 17)() * 0.04;
   targets[3].x += step2;
@@ -32,7 +32,7 @@ for (let i = 0; i < 20; i++) {
   targets[2].x = mid;
   episode.options.replayRight = 1;
   episode.phaseFrame = episode.frame;
-  for (let n = 0; n < 360; n++) episode.step();
+  for (let n = 0; n < 360; n++) episode.advanceOneFrame();
   const s = episode.stats;
   const up = !!s.stoodUp;
   const both = up && s.footL <= 0.08 && s.footR <= 0.08;

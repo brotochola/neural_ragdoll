@@ -1,12 +1,17 @@
-// Un ArrayBuffer por envío. La cabecera, los pesos y los scores van en el mismo buffer.
-// El main lo transfiere, el worker lo devuelve. Nadie lo toca mientras está del otro lado.
+// One ArrayBuffer per send. The header, the weights, and the scores share it.
+// The main thread transfers it and the worker sends it back. Neither side touches it
+// while the other owns it.
+
+import { config } from "../config.js";
 
 export const HEADER = 3;
-// 17 de la situación, 20 de las cinco marcas, el plan del paso, y el paso de un pie (índice, metros, giro).
-// planSteps del config es 4. Si pasa de 4, el cable se queda con los primeros.
+// 17 situation floats, 20 for the five marks, the step plan, and one foot placement
+// (index, meters, turn). config.skill.planSteps is 4. A longer plan keeps the first four.
 export const STEP_SLOTS = 4;
 export const BOX_SLOTS = 4;
-export const TASK_HEADER = 17 + 20 + 2 + STEP_SLOTS * 4 + 1 + BOX_SLOTS * 4 + 3;
+// command index, stance, then cx/cy/ca for each of the five marks.
+export const COMMAND_FLOATS = 2 + 5 * 3;
+export const TASK_HEADER = 17 + 20 + 2 + STEP_SLOTS * 4 + 1 + BOX_SLOTS * 4 + 3 + COMMAND_FLOATS;
 export const RESULT_STRIDE = 8;
 
 export function bytesFor(taskCount, weightCount) {
@@ -82,6 +87,21 @@ export function writeTasks(buffer, tasks, weightCount) {
     f32[plan++] = place ? place.foot : -1;
     f32[plan++] = place ? place.extra || 0 : 0;
     f32[plan++] = place ? place.turn || 0 : 0;
+    const command = options.placed ? 6 : config.commands.indexOf(options.commands || "");
+    f32[plan++] = command < 0 ? 0 : command;
+    f32[plan++] = options.stance || 0;
+    for (let t = 0; t < 5; t++) {
+      const target = targets[t] || {};
+      if (options.placed) {
+        f32[plan++] = target.x || 0;
+        f32[plan++] = target.y || 0;
+        f32[plan++] = target.angle || 0;
+      } else {
+        f32[plan++] = target.cx || 0;
+        f32[plan++] = target.cy || 0;
+        f32[plan++] = target.ca || 0;
+      }
+    }
     f32.set(task.weights, cursor + TASK_HEADER);
     cursor += TASK_HEADER + weightCount;
   }

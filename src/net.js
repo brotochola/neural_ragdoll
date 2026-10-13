@@ -1,12 +1,12 @@
-// Red de Elman y la búsqueda de un solo padre.
-// El estado oculto guarda una fracción del paso anterior. La acción anterior entra por una capa de feedback a esa memoria.
-// La acción es la tanh de una capa lineal. Los pesos, el estado oculto y la acción viven en Float32Array. No hay tensores.
+// Elman network and the single-parent search.
+// The hidden state keeps a fraction of the previous step. The previous action enters that memory through a feedback layer.
+// The action is the tanh of a linear layer. The weights, the hidden state, and the action live in Float32Array. There are no tensors.
 import { config } from "../config.js";
 
 const net = config.net;
 const search = config.search;
 
-// Unidades de una capa. Ratio 0 apaga la capa. Si no, es la fracción de las entradas, redondeada.
+// Units in one layer. Ratio 0 turns the layer off. Otherwise it is the fraction of the inputs, rounded.
 function unitsFromRatio(ratio) {
   if (!(ratio > 0)) return 0;
   return Math.round(net.inputCount * ratio);
@@ -27,10 +27,10 @@ function buildLayout() {
   const recurrentBlock = recurrent * recurrentStride;
   const feedbackBase = feedforwardBlock;
   const recurrentBase = feedforwardBlock + feedbackBlock;
-  // Camino directo de las columnas de error de los targets a la salida de cada articulacion.
-  // Sin esto, mover el cuello a la orden de cabeza exige que el error sobreviva a una
-  // compresion 99 -> 50 -> 25 y ademas que la capa de salida lo vuelva a encontrar, todo a
-  // partir de UN solo numero de fitness. Con el atajo, esa relacion lineal se aprende en un paso.
+  // Direct path from the target-error columns to each joint's output.
+  // Without it, moving the neck to a head command requires the error to survive a
+  // compression 99 -> 50 -> 25 and then the output layer has to find it again, all from
+  // ONE fitness number. With the shortcut, that linear relation is learned in one step.
   const skip = net.skipTargetInputs ? net.targetInputCount : 0;
   const skipFrom = net.targetInputIndex;
   const outputStride = 1 + recurrent + skip;
@@ -53,22 +53,22 @@ function buildLayout() {
   };
 }
 
-// Un solo objeto. ask() y tell() lo leen una vez por peso.
+// One object. ask() and tell() read it once per weight.
 const layout = buildLayout();
 
 export class ElmanNetwork {
-  // Una capa: la primera es la Elman, con memoria. Dos capas: la primera comprime sin memoria y la segunda es la única que recuerda.
+  // One layer: the first is the Elman, with memory. Two layers: the first compresses with no memory and the second is the only one that remembers.
   static get layout() {
     return layout;
   }
 
-  // Pesos de la red actual. Con una sola capa es el mismo empaquetado de antes.
+  // Weights of the current net. With one layer this is the same packing as before.
   static get weightCount() {
     const layout = ElmanNetwork.layout;
     return layout.outputBase + net.jointCount * layout.outputStride;
   }
 
-  // Copia el vector si tiene exactamente ese largo. Si no, null.
+  // Copies the vector when it has exactly that length. Otherwise null.
   static copy(source) {
     if (!source || source.length !== ElmanNetwork.weightCount) return null;
     return Float32Array.from(source);
@@ -87,11 +87,11 @@ export class ElmanNetwork {
     this.action = new Float32Array(net.jointCount);
   }
 
-  // Un paso adelante. Escribe la acción nueva y deja `hidden` en el estado de este paso.
-  // La capa de feedback es tanh(sesgo + pesos · acción anterior), sin memoria. Entra solo a la capa recurrente.
-  // Con una capa, cada unidad oculta es leak * anterior + (1 - leak) * tanh(sesgo + pesos · entrada + pesos · feedback + pesos · oculto).
-  // Con dos, la primera es tanh(sesgo + pesos · entrada), sin memoria. La segunda es la Elman.
-  // Cada articulación: tanh(sesgo + pesos · oculto nuevo).
+  // One step forward. Writes the new action and leaves `hidden` at this step's state.
+  // The feedback layer is tanh(bias + weights · previous action), with no memory. It enters only the recurrent layer.
+  // With one layer, each hidden unit is leak * previous + (1 - leak) * tanh(bias + weights · input + weights · feedback + weights · hidden).
+  // With two, the first is tanh(bias + weights · input), with no memory. The second is the Elman.
+  // Each joint: tanh(bias + weights · new hidden).
   forward(input) {
     const layout = ElmanNetwork.layout;
     const weights = this.weights;
@@ -122,8 +122,7 @@ export class ElmanNetwork {
     for (let joint = 0; joint < net.jointCount; joint++) {
       let sum = weights[cursor++];
       for (let unit = 0; unit < layout.recurrent; unit++) sum += weights[cursor++] * this.nextHidden[unit];
-      // Atajo: el error del target entra directo a la articulacion, sin pasar por el
-      //cuello de botella de las capas escondidas.
+      // Shortcut: the target error goes straight to the joint, not through the hidden-layer bottleneck.
       for (let c = 0; c < layout.skip; c++) sum += weights[cursor++] * input[layout.skipFrom + c];
       this.action[joint] = Math.tanh(sum);
     }
@@ -134,8 +133,8 @@ export class ElmanNetwork {
   }
 }
 
-// Deja en cero los pesos del atajo de cada articulacion. Los 14 van entrenables: cuello y
-// muñecas volvieron a la lista, si no las filas de giro de cabeza y manos no se movian.
+// Zeros the shortcut weights of each joint. All 14 stay trainable: the neck and the
+// wrists are back on the list, or the head and hand rotation rows could not move.
 export function zeroSkip(weights) {
   const layout = ElmanNetwork.layout;
   if (!layout.skip) return weights;
@@ -146,16 +145,16 @@ export function zeroSkip(weights) {
   return weights;
 }
 
-// 1 si esa articulación de salida se entrena. La lista es config.search.trainableJointIndexes.
-// Los 14 van: cuello y muñecas volvieron a la lista, si no las filas de giro de cabeza y manos
-// no tenían forma de moverse. Se arma una vez.
+// 1 when that output joint is trained. The list is config.search.trainableJointIndexes.
+// All 14 are on: the neck and the wrists are back, or the head and hand rotation rows
+// had no way to move. Built once.
 const limbJoint = new Uint8Array(net.jointCount);
 for (let jointIndex = 0; jointIndex < search.trainableJointIndexes.length; jointIndex++) {
   const joint = search.trainableJointIndexes[jointIndex];
   if (joint >= 0 && joint < limbJoint.length) limbJoint[joint] = 1;
 }
 
-// Si está puesto, el ruido y Adam solo tocan esas salidas. El resto del vector queda en el checkpoint.
+// When set, the noise and Adam touch only those outputs. The rest of the vector stays at the checkpoint.
 let outputJointMask = null;
 
 export function setOutputJoints(indexes) {
@@ -170,9 +169,9 @@ export function setOutputJoints(indexes) {
   }
 }
 
-// Cuánto ruido le toca a cada peso. El cuerpo casi no se mueve; los miembros y los targets, sí.
-// El ruido grande de los targets y del contacto de la cabeza solo cae en los pesos que multiplican esa entrada.
-// `boost` agranda ese ruido cuando el puntaje no mejora. sigmaCap lo corta.
+// How much noise each weight gets. The body barely moves; the limbs and the targets do.
+// The large noise on the targets and on the head contact lands only on the weights that multiply that input.
+// `boost` grows that noise when the score is not improving. sigmaCap clips it.
 function explorationOf(index, scale, boost) {
   const extra = boost > 0 ? boost : 1;
   let sigma = search.bodyExplorationScale * extra;
@@ -195,9 +194,9 @@ function explorationOf(index, scale, boost) {
     const local = (index - layout.outputBase) % stride;
     const allowed = outputJointMask ? outputJointMask[joint] : limbJoint[joint];
     if (!allowed) sigma = 0;
-    // El atajo arranca en cero, asi que necesita un poco mas de ruido que un peso normal
-    // para que el gradiente lo despierte, pero no el ruido grande de los targets: ese le
-    // cambiaba la accion a todas las articulaciones y rompia el equilibrio.
+    // The shortcut starts at zero, so it needs a little more noise than a normal weight
+    // for the gradient to wake it, but not the large target noise: that changed the
+    // action of every joint and broke balance.
     else if (local > layout.recurrent) sigma = search.skipExplorationScale * extra;
     else sigma = search.limbExplorationScale * extra;
   }
@@ -205,7 +204,7 @@ function explorationOf(index, scale, boost) {
   return sigma > 0 && cap > 0 ? Math.min(cap, sigma) : sigma;
 }
 
-// x1 por debajo del umbral, luego stagnationBoost, y otra vez cada tantas generaciones, hasta el tope.
+// x1 below the threshold, then stagnationBoost, and again every so many generations, up to the cap.
 function explorationBoost(flatGens) {
   const every = search.stagnationGenerations;
   if (!(every > 0) || !(flatGens >= every)) return 1;
@@ -213,7 +212,7 @@ function explorationBoost(flatGens) {
   return Math.min(search.stagnationBoostCap, Math.pow(search.stagnationBoost, steps));
 }
 
-// 0 por debajo del umbral. Después, una fracción fija de los pares. El resto se queda con el ruido chico.
+// 0 below the threshold. After that, a fixed fraction of the pairs. The rest keep the small noise.
 function mutationFraction(flatGens) {
   const every = search.stagnationGenerations;
   const cap = search.stagnationMutateCap;
@@ -221,23 +220,23 @@ function mutationFraction(flatGens) {
   return Math.min(1, cap);
 }
 
-// Búsqueda de un padre. Cada generación son pares antitéticos: el mismo ruido, con signo más y con signo menos.
-// El gradiente sale del rango del fitness, no de una derivada. Adam lo aplica sobre el vector de pesos.
+// One-parent search. Each generation is antithetic pairs: the same noise, plus and minus.
+// The gradient comes from the fitness rank, not from a derivative. Adam applies it to the weight vector.
 export class EvolutionSearch {
   constructor(randomNormal) {
     const parent = new Float32Array(ElmanNetwork.weightCount);
     const outputBase = ElmanNetwork.layout.outputBase;
     for (let i = 0; i < outputBase; i++) parent[i] = randomNormal() * search.hiddenInitScale;
     for (let i = outputBase; i < ElmanNetwork.weightCount; i++) parent[i] = randomNormal() * search.outputInitScale;
-    // El atajo arranca en CERO. Si no, mete 25 x ruido x 14 articulaciones de perturbacion en
-    // la accion desde el genero 0, y el doll se cae siempre: skill 1 dejo de aprender a pararse.
-    // En cero es capacidad extra, no un cambio de comportamiento inicial: crece donde sirve.
+    // The shortcut starts at ZERO. Otherwise it puts 25 x noise x 14 joints of perturbation
+    // into the action from generation 0, and the doll always falls: skill 1 stopped learning to stand.
+    // At zero it is extra capacity, not a change to the initial behaviour: it grows where it helps.
     zeroSkip(parent);
     this.theta = parent;
     this.gen = 0;
     this.hist = [];
     this.k = 0;
-    // Primer y segundo momento de Adam.
+    // Adam first and second moments.
     this.m = new Float32Array(ElmanNetwork.weightCount);
     this.v = new Float32Array(ElmanNetwork.weightCount);
     this.bestGenTheta = parent.slice();
@@ -250,9 +249,9 @@ export class EvolutionSearch {
     this.mutationBoost = 1;
     this.mutationFraction = 0;
     this.anchorNote = "";
-    // Cuantas veces cambio el padre. Si esto se queda en cero durante una meseta, la poblacion
-    // esta explorando alrededor de un padre fijo y el promedio no sube de verdad. Hay que mirar
-    // ESTE numero antes de culpar al premio.
+    // How many times the parent changed. If this stays at zero through a plateau, the
+    // population is exploring around a fixed parent and the average is not really rising.
+    // Look at THIS number before blaming the reward.
     this.parentMoves = 0;
     this.parentMoveNote = "";
     const length = ElmanNetwork.weightCount;
@@ -286,7 +285,7 @@ export class EvolutionSearch {
     this.compareFitness = (a, b) => self.values[a] - self.values[b];
   }
 
-  // Agranda el pool solo si esta generación tiene más pares que la anterior.
+  // Grows the pool only when this generation has more pairs than the last.
   growFloat(store, count, length) {
     for (let i = store.length; i < count; i++) store.push(new Float32Array(length));
   }
@@ -295,7 +294,7 @@ export class EvolutionSearch {
     for (let i = 0; i < out.length; i++) out[i] = explorationOf(i, scale, boost);
   }
 
-  // Escribe un par antitético en buffers que ya existen.
+  // Writes one antithetic pair into buffers that already exist.
   writePair(pairIndex, parent, sigma, randomNormal) {
     const length = parent.length;
     const direction = this.noiseStore[pairIndex];
@@ -320,7 +319,7 @@ export class EvolutionSearch {
     this.k = 0;
   }
 
-  // Pares extra copiados de Best ever. Cero hasta que el récord existe y el vector coincide.
+  // Extra pairs copied from Best ever. Zero until the record exists and the vector matches.
   anchorPairCount() {
     const pairs = search.bestEverPairs | 0;
     if (!(pairs > 0)) return 0;
@@ -330,20 +329,30 @@ export class EvolutionSearch {
     return pairs;
   }
 
-  // El factor y la fracción que va a usar la próxima generación. Sirve al retomar una sesión ya estancada.
+  // The factor and the fraction the next generation will use. Useful when resuming a run that is already stuck.
   refreshMutationBoost() {
     this.mutationBoost = explorationBoost(this.flatGens);
     this.mutationFraction = mutationFraction(this.flatGens);
   }
 
-  // Una situación para toda la generación. Cada individuo decide en un frame distinto.
-  // Devuelve el mismo objeto cada vez. Vale hasta el próximo ask.
+  // One situation for the whole generation. Each individual decides on a different frame.
+  // Returns the same object every time. It is valid until the next ask.
   ask(situation, count, randomNormal) {
     const parent = this.theta;
     const length = parent.length;
     const scale = Math.max(search.explorationScale, search.explorationFloor * Math.pow(0.5, (this.gen || 0) / search.explorationHalfLifeGenerations));
-    const boost = explorationBoost(this.flatGens);
-    const fraction = mutationFraction(this.flatGens);
+    let boost = explorationBoost(this.flatGens);
+    let fraction = mutationFraction(this.flatGens);
+    this.lastScouted = false;
+    if (this.handScout) {
+      this.handScout = false;
+      this.lastScouted = true;
+      const forced = search.stagnationBoost > 0 ? search.stagnationBoost : 1;
+      boost = Math.max(boost, forced);
+      if (search.stagnationBoostCap > 0) boost = Math.min(search.stagnationBoostCap, boost);
+      const share = search.stagnationMutateCap > 0 ? Math.min(1, search.stagnationMutateCap) : 0;
+      fraction = share > 0 ? share : 1 / Math.max(1, count);
+    }
     this.mutationBoost = boost;
     this.mutationFraction = fraction;
     const hot = fraction > 0 ? Math.min(count, Math.max(1, Math.round(count * fraction))) : 0;
@@ -362,7 +371,7 @@ export class EvolutionSearch {
       this.pairBoosts[individual] = pairBoost;
       this.writePair(individual, parent, pairBoost > 1 ? this.sigmaHot : this.sigmaQuiet, randomNormal);
     }
-    // Copias leves de Best ever, al final. count sigue siendo solo los pares del padre.
+    // Light copies of Best ever, at the end. count stays just the parent's pairs.
     const anchorParent = this.bestEverTheta;
     for (let individual = 0; individual < anchor; individual++) {
       const pairIndex = count + individual;
@@ -404,7 +413,7 @@ export class EvolutionSearch {
       if (value < low) low = value;
       if (value > high) high = value;
     }
-    // Empate total: el rango no dice nada y Adam igual caminaría. No se toca al padre.
+    // A total tie: the rank says nothing and Adam would still step. The parent is left alone.
     const boost = generation.boost || 1;
     if (high > low) {
       const gradient = this.gradient;
@@ -444,25 +453,25 @@ export class EvolutionSearch {
     for (let i = 1; i < values.length; i++) if (values[i] > values[bestIndex]) bestIndex = i;
     this.bestGenTheta.set(generation.weights[bestIndex]);
     this.bestGenScore = values[bestIndex];
-    // El padre solo se reemplaza si un hijo SUYO llego al marcador.
-    // OJO: `order` esta ordenado sobre TODOS los hijos, las copias de Best ever incluidas, asi que
-    // el indice del mejor no dice de quien venia. Con bestEverPairs > 0 una copia del record (que es
-    // un promedio de 16 generaciones atras, y de otra escala si el premio cambio) podia terminar
-    // siendo el padre. Por eso el guard exige ademas que el hijo venga del padre. Los pares del
-    // padre son los primeros `count`, o sea los indices [0, count); los del ancla van despues.
+    // The parent is replaced only when one of ITS children reaches the marker.
+    // `order` is sorted over EVERY child, including the Best ever copies, so the index of
+    // the best one does not say who it came from. With bestEverPairs > 0 a copy of the
+    // record (an average of 16 generations ago, and on another scale if the reward changed)
+    // could become the parent. The guard also requires the child to come from the parent.
+    // The parent's pairs are the first `count`, indexes [0, count); the anchor's come after.
     let parentBestIndex = order.length ? order[order.length - 1] : -1;
     if (parentBestIndex < (generation.anchorPairs | 0)) parentBestIndex = -1;
-    // La meta es lo que decide si el hijo puede ser padre. OJO: el guard era
-    // (gap ?? 9) < goalCloseEnoughMeters con goalCloseEnoughMeters en -1, y una distancia NUNCA
-    // es menor que -1. O sea la elitancia estaba CERRADA: el padre no cambiaba nunca, y el unico
-    // camino que quedaba era adoptAnchor, que pide 1000 generaciones de meseta. Medido: 400
-    // generaciones de skill 1 y el padre no se movio NI UNA vez. El promedio subia por el paso
-    // de Adam, no por seleccion, y por eso el eval daba 7/20 en la gen 300 y 1/20 en la 400 con
-    // el record subiendo. La elitancia se mide con parentMoves, que ahora va en el log.
+    // The marker decides whether a child can become the parent. The guard used to be
+    // (gap ?? 9) < goalCloseEnoughMeters with goalCloseEnoughMeters at -1, and a distance
+    // is NEVER less than -1. Elitism was CLOSED: the parent never changed, and the only
+    // path left was adoptAnchor, which asks for 1000 generations of plateau. Measured:
+    // 400 generations of skill 1 and the parent did not move ONCE. The average rose from
+    // the Adam step, not from selection, which is why the eval was 7/20 at gen 300 and
+    // 1/20 at 400 while the record climbed. Elitism is measured by parentMoves, which is logged.
     //
-    // Si la situacion NO tiene meta (los cinco niveles de targets), no hay por que exigir
-    // closeness a nada: se exige solo que le gane al marcador del padre. Si tiene meta, el guard
-    // sigue pidiendo closeness, y ahi goalCloseEnoughMeters tiene que ser una distancia positiva.
+    // If the situation has NO marker (the five target levels), there is no closeness to
+    // require: the child only has to beat the parent's marker. If it has a marker, the
+    // guard still asks for closeness, and goalCloseEnoughMeters has to be a positive distance.
     const row = parentBestIndex >= 0 ? scores[parentBestIndex] || {} : {};
     const hasGoal = row.goalX != null;
     const goalGate = row.gap ?? search.eliteMissingGapMeters;
@@ -481,13 +490,13 @@ export class EvolutionSearch {
         " gap " + Number(goalGate).toFixed(2);
       this.zeroMoments();
     } else if (parentBestIndex >= 0) {
-      // Por que no se promocio. "META CERRADA" significa que la situacion tiene meta y el hijo
-      // no llego: eso es correcto. Un padre congelado es lo que hay que mirar.
+      // Why it was not promoted. "goal closed" means the situation has a marker and the
+      // child did not arrive: that is correct. A frozen parent is what to look at.
       this.parentMoveNote =
         (goalOpen
           ? "elite "
           : "meta " + Number(goalGate).toFixed(2) + " > " + search.goalCloseEnoughMeters + ", ") +
-        "hijo " + values[parentBestIndex].toFixed(3) +
+        "child " + values[parentBestIndex].toFixed(3) +
         " vs elite " + (this.eliteScore ?? -1e9).toFixed(3);
     }
     this.gen++;
@@ -532,8 +541,8 @@ export class EvolutionSearch {
     this.mutationFraction = mutationFraction(this.flatGens);
   }
 
-  // En el plateau, un hijo de ruido chico pasa a ser el padre si le gana a su gemelo y al promedio.
-  // Una copia de Best ever entra aunque empate con su gemelo. Un scout no entra. El récord no se toca.
+  // On a plateau, a small-noise child becomes the parent when it beats its twin and the average.
+  // A Best ever copy gets in even if it ties its twin. A scout does not. The record is not touched.
   adoptAnchor(generation, values, thetaChildren) {
     this.anchorNote = "";
     if (!((this.flatGens || 0) >= search.stagnationGenerations)) return;
@@ -569,8 +578,8 @@ export class EvolutionSearch {
     this.anchorNote = source + bestValue.toFixed(2) + " became the parent";
   }
 
-  // El récord es el promedio de finales de las últimas generaciones, y el peso guardado es el padre.
-  // Un hijo con suerte, que ya arrancó parado, no alcanza.
+  // The record is the average of the endings of the last generations, and the saved weights are the parent.
+  // A lucky child that was already standing does not qualify.
   noteSmoothRecord() {
     const window = search.recordWindow;
     if (!(window > 0) || this.hist.length < window) return;
@@ -605,7 +614,7 @@ export class EvolutionSearch {
   }
 }
 
-// Red chica de las piernas. El prior de equilibrio no se toca. Unos cientos de pesos, no miles.
+// Small leg net. The balance prior is not touched. A few hundred weights, not thousands.
 export const residualInputs = 12;
 export const residualHidden = 16;
 export const residualOutputs = 6;
@@ -638,7 +647,7 @@ export class ResidualNet {
   }
 }
 
-// La misma búsqueda antitética y Adam, solo sobre la red chica. Sigma uniforme.
+// The same antithetic search and Adam, only on the small net. Uniform sigma.
 export class ResidualSearch {
   constructor(randomNormal) {
     const length = residualWeightCount();

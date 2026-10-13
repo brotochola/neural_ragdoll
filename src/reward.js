@@ -1,4 +1,4 @@
-// El premio de un frame es la distancia y la rotación de los targets prendidos. Uno apagado no suma.
+// One frame's reward is the distance and rotation of the targets that are on. An off target adds nothing.
 import { config } from "../config.js";
 
 const part = config.partIndex;
@@ -37,20 +37,34 @@ for (let i = 0; i < config.targets.length; i++) {
     scoreOnly: false,
   });
 }
+for (let g = 0; g < config.contact.groups.length; g++) {
+  const group = config.contact.groups[g];
+  terms.push({
+    n: group.id + " contact",
+    tip:
+      "How hard " +
+      group.parts.join(", ") +
+      " is pressed into the floor or a thrown object. 0 when clear, -" +
+      config.contact.weight +
+      " when fully pressed. Hands and feet are not in any group.",
+    v: 0,
+    scoreOnly: false,
+  });
+}
 const scored = { total: 0, max: 0, onFeet: 0, terms };
 
-// Cada target trae su span, su peso y su gain. El gain 0 saca la fila del premio y sus
-// cinco columnas de la entrada. Nada de pie contra cuerpo: los numeros viven en config.targets.
+// Each target carries its own span, weight, and gain. Gain 0 drops the row from the reward
+// and its five input columns. The numbers live on config.targets.
 export function targetGain(id, target) {
-  // El episodio puede multiplicar el gain (gainCmd, el nivel que manda esa parte).
+  // The episode can multiply the gain (gainCmd, the level that commands this part).
   if (target && typeof target.gain === "number") return target.gain > 0 ? target.gain : 0;
   const gains = config.targetGains;
   const g = gains ? gains[id] : 1;
   return typeof g === "number" && g > 0 ? g : 0;
 }
 
-// El span puede venir del episodio (target.span): cambia si a esa parte la estan mandando.
-// Si no viene, el del spec.
+// The span can come from the episode (target.span): it tightens when that part is commanded.
+// Otherwise it is the spec's span.
 export function targetSpan(spec, target) {
   if (target && target.span > 0) return target.span;
   if (spec.spanCmd > 0 && spec.span <= 0) return spec.spanCmd;
@@ -67,7 +81,7 @@ export function targetPositionWeight(spec) {
     : weight.targetPosition;
 }
 
-// Parado de verdad: los dos pies abajo, nada más tocando, torso erguido, cabeza alta, base real y quieto.
+// Standing: both feet down, nothing else touching, torso upright, head high, a real base, and still.
 export function isStanding(measure) {
   if (!measure || !measure.touch || !measure.touch[part.footLeft] || !measure.touch[part.footRight]) return false;
   for (let i = 0; i < measure.touch.length; i++) {
@@ -91,21 +105,20 @@ function footTarget(id) {
   return id === "footR" || id === "footL";
 }
 
-// La fila de posicion: +weight en la marca, -weight en el infinito, y NUNCA una meseta.
+// Position row: +weight on the mark, -weight at infinity, and never a plateau.
 //
-// Antes era lineal (1 - 2r) y se APLANABA en -weight a partir de un span. Caerse son ~1.5 m,
-// asi que toda la caida daba el mismo numero: no habia forma de volver a subir, era un pozo.
-// El intento con 1/(1+r^2) arreglarlo pero rompio otra cosa: el fondo era 0, no -weight, asi
-// que tirado el doll sacaba ~0 en vez de ~-peso. Con los pies valiendo 6 de 12 puntos, eso
-// hacia que estar TIRADO fuera casi igual de rentable (medido: 10.92 parado contra 8.00
-// tumbado, cuando la version lineal daba 7.49 contra -1.48). El termine se habia comido el
-// premio de pararse.
+// It used to be linear (1 - 2r) and it flattened at -weight past one span. A fall is about
+// 1.5 m, so the whole fall was one number and there was no way back up.
+// 1/(1+r^2) fixed the plateau but the floor became 0 instead of -weight, so lying down
+// scored about 0 instead of about -weight. With the feet worth 6 of 12 points, lying down
+// was almost as good as standing (measured: 10.92 standing against 8.00 down, where the
+// linear version gave 7.49 against -1.48).
 //
-// La forma de ahora es r / sqrt(1+r^2) con r = d/span:
-//   - deriva -2*weight/span en la marca, IGUAL que la lineal. La sensibilidad de 10 cm,
-//     que es donde la red aprende, no se toca.
-//   - tiende a -weight muy lejos: caerse sigue costingo el premio entero.
-//   - d/dr de r/sqrt(1+r^2) es 1/(1+r^2)^1.5 > 0: baja siempre, nunca sube ni se aplana.
+// The shape now is r / sqrt(1+r^2), with r = d/span:
+//   - slope -2*weight/span on the mark, the same as the linear row. The 10 cm sensitivity,
+//     which is where the net learns, is unchanged.
+//   - it tends to -weight far away, so a fall still costs the whole reward.
+//   - the derivative 1/(1+r^2)^1.5 is always positive: it always falls, and never flattens.
 function positionRow(weight, distance, span) {
   const ratio = distance / span;
   return weight * (1 - 2 * (ratio / Math.sqrt(1 + ratio * ratio)));
@@ -131,8 +144,8 @@ export function onMark(measure, targetIndex) {
   return error.dist <= reach && error.align >= Math.cos(radians);
 }
 
-// Escribe el total. Si writeRows, también las filas fijas del panel. No crea objetos.
-function fillScore(measure, writeRows) {
+// Writes the total. When writeRows is set, also the fixed panel rows. Allocates nothing.
+function writeRewardRows(measure, writeRows) {
   const targets = measure.targets && measure.targets.length === config.targets.length ? measure.targets : config.targets;
   let total = 0;
   let ceiling = 0;
@@ -162,17 +175,28 @@ function fillScore(measure, writeRows) {
     row += 2;
     total += position + rotation;
   }
+  const contactWeight = config.contact.weight;
+  const contact = measure.contact;
+  for (let g = 0; g < config.contact.groups.length; g++) {
+    let amount = contact ? contact[g] || 0 : 0;
+    if (amount < 0) amount = 0;
+    else if (amount > 1) amount = 1;
+    const penalty = -contactWeight * amount;
+    if (writeRows) terms[row].v = penalty;
+    row += 1;
+    total += penalty;
+  }
   if (row !== termCount) throw new Error("reward rows " + row);
   scored.total = total;
   scored.max = ceiling;
   return total;
 }
 
-// El mismo total partido por target. Lo usa el probe y el panel de diagnóstico, no el premio.
+// The same total split per target. The probe and the diagnostic panel use it, not the reward.
 const perTarget = config.targets.map((spec) => ({ id: spec.id, position: 0, rotation: 0 }));
 
 export function scoreByTarget(measure) {
-  fillScore(measure, false);
+  writeRewardRows(measure, false);
   for (let i = 0; i < config.targets.length; i++) {
     const spec = config.targets[i];
     const target = measure.targets && measure.targets[i];
@@ -191,13 +215,13 @@ export function scoreByTarget(measure) {
   return perTarget;
 }
 
-// Número solo. Lo usa el episodio, en cada muestra de reward.
+// Number only. The episode uses it on every reward sample.
 export function scoreTotal(measure) {
-  return fillScore(measure, false);
+  return writeRewardRows(measure, false);
 }
 
-// Las mismas filas de siempre, reescritas. El panel las lee en la misma vuelta.
+// The same rows, rewritten. The panel reads them on the same turn.
 export function scoreDecision(measure) {
-  fillScore(measure, true);
+  writeRewardRows(measure, true);
   return scored;
 }

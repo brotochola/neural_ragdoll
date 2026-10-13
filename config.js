@@ -19,7 +19,8 @@ const targetInputCount = targetCount * targetStride;
 const sensedBeforeRays = jointSenseCount + 4 + 2 + 4 + targetCount * 2; // Joints, torso/head sin/cos, two heights, four mass values, then x/y velocity of each of the five targets.
 const targetInputIndex = sensedBeforeRays + bodyRayCount + headRayCount;
 const sensedInputCount = targetInputIndex + targetInputCount + 1; // The last column is head contact.
-const rewardRowCount = targetCount * 2; // Position and rotation for each target.
+const contactGroupCount = 4; // config.contact.groups. Hands and feet are not groups.
+const rewardRowCount = targetCount * 2 + contactGroupCount; // Target rows, then one penalty row per contact group.
 const rewardTotalNow = false;
 const rewardTotalPrevious = false;
 const rewardTotalNext = false;
@@ -32,7 +33,7 @@ export const config = {
   physics: {
     hz: physicsHz, // Steps per simulated second.
     timeStep: 1 / physicsHz, // Seconds advanced by one physics step.
-    solverSubsteps: 2, // Box2D solver iterations per step. 3 was steadier; 2 is the fast setting.
+    solverSubsteps: 4, // Box2D solver iterations per step. 2 let the angle limits slip.
   },
   cadence: {
     actionEveryNFrames: 6, // Frames an action is held before the net picks a new one. 5 = 12 decisions/s (was 10 = 6/s, slow for balance).
@@ -40,10 +41,10 @@ export const config = {
     rewardFrameOffset: 1, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
-    hidden1Ratio: 0.5, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
-    hidden2Ratio: 0.25, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
+    hidden1Ratio: 1, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
+    hidden2Ratio: 1.1, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
     feedbackUnits: 0, // Nonlinear summary of the previous action. It enters the recurrent layer only.
-    skipTargetInputs: false, // Cada salida de articulacion tambien lee las 25 columnas de los targets, directo, no solo por las unidades escondidas. Con esto "mover esta articulacion a esta orden" es un problema de una capa. OFF de momento: se probo y empeoro skill 1 (0.45 a gen 480 contra 0.95 a gen 160 sin el), y no hay evidencia de que ayude. Ver README.
+    skipTargetInputs: false, // Each joint output also reads the 25 target columns directly, not only through the hidden units. That makes "move this joint toward this command" a one-layer problem. Off for now: it was tried and it hurt skill 1 (0.45 at gen 480 against 0.95 at gen 160 without it), and there is no evidence it helps. See the README.
     jointCount: 14, // Motor joints, and the width of the action vector. Waist, neck, and six joints on each side.
     sensedInputCount, // Observation length before optional reward-total columns.
     targetInputIndex, // First of the target columns. Five targets, five numbers each: use, dx, dy, error sin, error cos.
@@ -58,7 +59,7 @@ export const config = {
     rewardTotalNext, // Append the reward total estimated one physics frame ahead.
     inputCount: sensedInputCount + rewardTotalInputCount, // Full observation length.
     freshInputExplorationScale: 0.04, // Noise on columns after sensedInputCount (reward totals, when on).
-    hiddenLeak: 0.6, // Fraction of the previous hidden state kept each step.
+    hiddenLeak: 0, //0.6, // Fraction of the previous hidden state kept each step.
   },
   body: {
     platformPeriodSeconds: 8, // Kept on the task header. The floor does not tilt.
@@ -72,7 +73,7 @@ export const config = {
     headHeightMeters: headCenterY, // Head center of the standing blueprint. The head-height input uses this.
     torsoHeightMeters: 1.14, // Lower-torso center of the standing blueprint.
     neckOffsetMeters: neckY - 1.14, // Neck joint above the lower-torso center, in the torso frame. The head arcs around this.
-    // Pivotes and reach. The arm and the leg start FULLY EXTENDED, so the neutral hand sits
+    // Pivots and reach. The arm and the leg start FULLY EXTENDED, so the neutral hand sits
     // exactly at armReachMeters from the shoulder and the neutral foot at legReachMeters from
     // the hip. Any command that pushes a limb further out than that is not a hard command, it
     // is an impossible one, so every commanded position is clamped back onto the reach sphere.
@@ -109,11 +110,11 @@ export const config = {
   // cmdArc means "do not sample the position, derive it from the commanded angle". The head
   // capsule pivots headRadius+headAxis away from the neck joint, so its body-frame position
   // can only ever sit on a 14 cm arc. Sampling a box there would ask for the impossible.
-  // spanCmd y gainCmd son los numeros del nivel que MANDA a esta parte: mas apretado y mas peso.
-  // Los de arriba (span, weight) son los de los niveles donde no hay orden. Son preguntas
-  // distintas, asi que son numeros distintos: subir el peso global de la cabeza le cambiaba el
-  // paisaje a skill 1, donde no hay nada que mandar y solo importa pararse.
-  // gainCmd multiplica a config.targetGains, que es la rampa manual.
+  // spanCmd and gainCmd are the numbers for the level that COMMANDS this part: tighter, and heavier.
+  // The span and weight above are for the levels with no command. They are different questions,
+  // so they are different numbers: raising the head's global weight changed skill 1, where
+  // nothing is commanded and the only job is to stand.
+  // gainCmd multiplies config.targetGains, which is the manual ramp.
   targets: [
     {
       id: "head",
@@ -204,33 +205,49 @@ export const config = {
   // How much of its own row each target puts into the reward. The ramp for turning one group on
   // without disturbing the others: 0 takes it out of the score and out of the network's inputs.
   targetGains: { head: 1, handR: 1, handL: 1, footR: 1, footL: 1 },
+
+  // CONTACT PENALTIES. Four rows, one per group, each a penalty from 0 down to -weight.
+  //
+  // Hands and feet are deliberately NOT here: standing on your feet and touching the floor with
+  // your hands is allowed. What is not allowed is the body folding onto itself.
+  //
+  // Each group's amount is the MAX over its parts, not the mean: if one thigh is down the row is
+  // fully penalised, because half-collapsed is not better than collapsed. The value under the max
+  // is continuous (see sim.contactAmount), so the search still has a gradient to climb.
+  // Revolute spring on the 14 motor joints. This Box2D build has no target angle, so the
+  // spring pulls each joint back to the pose it was built in. The speed motor still runs.
+  joint: {
+    hertz: 20,
+    dampingRatio: 0.7,
+  },
+  contact: {
+    weight: 1, // Per group. Four groups, so the worst case is 4 * weight.
+    fullMeters: 0.04, // Separation at which a contact counts as fully pressed together.
+    groups: [
+      { id: "torso", parts: ["torso", "chest"] },
+      { id: "butt", parts: ["hip"] },
+      {
+        id: "legs",
+        parts: ["thighLeft", "thighRight", "shinLeft", "shinRight"],
+      },
+      {
+        id: "arms",
+        parts: ["upperArmLeft", "upperArmRight", "forearmLeft", "forearmRight"],
+      },
+    ],
+  },
   reward: {
-    // Súbele este número cada vez que cambie la fórmula del fitness. Un train-state guardado
-    // con otra versión tiene un bestEverScore de otra escala, y el padre no lo supera nunca.
-    version: 6,
+    // Raise this whenever the fitness formula changes. A saved train-state from another
+    // version has a bestEverScore on another scale, and the parent never beats it.
+    version: 10,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
-    // EL PREMIO SON SOLO LAS DIEZ FILAS DE LOS TARGETS. Ni upright, ni headTouch, ni alive,
-    // ni fail, ni motion, ni step. Todo lo de abajo esta en cero y fuera de la formula.
-    // "Pararse" no necesita ser un termino aparte: cae solo por los targets. Las marcas se
-    // plantan UNA vez, con el torso parado, y quedan congeladas en el mundo. Si el torso se
-    // cae, la cabeza baja a 0.12 m contra una marca a 1.58 m, y eso YA es el premio.
-    // Medido con node check-collapse.js: parado 7.92 contra tumbado 4.74 de un techo de 12.
-    // Ver README.
-    targetMean: 1, // Escala global del fitness. 1 deja las diez filas tal cual.
-    startHoldShare: 0.5, // Cuanto se le cobra de lo que se perdio entre el arranque y el final.
-    // SOLO la perdida: si el doll MEJORA durante el episodio no se le cobra nada. Antes la mezcla
-    // era (1-share)*vida + share*min(arranque, vida), y como min siempre es <= vida, eso le
-    // cobraba justo a quien mejoraba: dar un paso con el pie subia el promedio del episodio y el
-    // fitness se quedaba a medio camino de no haberlo dado. Ver sim.js fitnessValue.
-    headTouch: 0, // RETIRADO del fitness. Queda solo como dato en el readout.
-    motion: 0, // RETIRADO.
-    upright: 0, // RETIRADO.
-    alive: 0, // RETIRADO.
-    aliveShare: 0, // RETIRADO.
-    fail: 0, // RETIRADO.
-    step: 0, // RETIRADO.
+    // The score is the target rows plus four contact rows. Standing is not its own term:
+    // the body marks are planted upright and then frozen, and a penalised part on the floor
+    // pays its contact row. Hands and feet are not penalised.
+    targetMean: 1, // Global scale. 1 leaves the rows as they are.
+    startHoldShare: 0.5, // Fraction of a drop from the opening window that is charged. A gain is free.
   },
   curriculum: {
     // These rows drive the *sandbox* start pose and the held-out eval situations (sim.situation).
@@ -289,20 +306,19 @@ export const config = {
     downSettleFrames: 40, // Physics steps run before the episode clock, so a down start reaches the floor.
   },
   // Skill ladder the training start actually runs. The phase menu above is not this.
-  // 1 stand, 2 feet on a short step, 3 assisted steps, 4 those steps over a low box.
-  // Do not raise `level` until that skill's held-out eval has passed.
+  // 1 stand, 2 head, 3 hands, 4 feet, 5 all five. Do not raise `level` until that skill's held-out eval has passed.
   skill: {
     level: 2,
     trainSeconds: 6, // Scored training length when the ramp is off. The held-out eval always uses episode.seconds.
-    rampStartSeconds: 1.5, // La rampa de DURACION del entrenamiento: el primer episodio dura esto.
-    // 0 la apaga. Pedir "no caerse" durante 6 s en la generacion 0 es un control de equilibrio
-    // sin peldaños. Arranca corto y llega a episode.seconds en rampGenerations. El PREMIO no
-    // cambia: son las mismas diez filas sobre un episodio más corto. El eval SIEMPRE corre entero,
-    // o se estaría aprobando una red que solo sabe pararse 1.5 s.
-    rampGenerations: 400, // 0 la apaga.
-    stanceMeters: 0.11, // Half the stance width the feet spawn with. Se aplica a la POSE (options.stance),
-    // no a la marca. Antes fillStandFeet lo ponía en el dx del target y eso se colaba como ORDEN
-    // de paso: en el skill 1, que es PARADO, al pie derecho se le pedía un paso de 11 cm.
+    rampStartSeconds: 1.5, // Duration ramp: the first training episode is this long.
+    // 0 turns it off. Asking the search not to fall for 6 s from generation 0 is a balance
+    // problem with no steps. It starts short and reaches episode.seconds over rampGenerations.
+    // The reward does not change: the same rows, over a shorter episode. The eval ALWAYS runs
+    // the full length, or a net that can only stand for 1.5 s would pass.
+    rampGenerations: 400, // 0 turns the ramp off.
+    stanceMeters: 0.11, // Half the stance width the feet spawn with. Applied to the POSE (options.stance),
+    // not the mark. fillStandFeet used to put it on the target dx, and that leaked in as a step
+    // command: skill 1 is called STAND, and the right foot was asked to step 11 cm.
     placeStanceMeters: 0.32, // Where each foot already is when it stands. One mark stays here; the other steps away.
     footGroundMeters: 0.04, // Foot-center height once the sole is on the floor. Marks sit here, not at the drop height.
     footSpanMeters: 0.5, // Foot position reward and foot dx/dy use this instead of targetSpanMeters.
@@ -315,13 +331,13 @@ export const config = {
     stepTurnRadians: 0.25, // Max foot-mark rotation away from flat.
     footReachMeters: 0.06, // A foot is on its mark inside this distance. Also under a third of the average step.
     footReachRadians: 0.3, // And inside this angle error.
-    // Tolerancias de "obedecio". Tienen que ser MAS CHICAS que la orden promedio, o la barra
-    // se cumple sin obedecer: con una orden de 3 cm de promedio y una tolerancia de 8 cm, un net
-    // que se queda quieto pasa siempre. Estas son cerca de un tercio del error de ignorar.
+    // "Obeyed" tolerances. They have to be SMALLER than the average command, or the bar
+    // is met without obeying: a 3 cm average command and an 8 cm tolerance lets a net that
+    // never moves pass every time. These are about a third of the error of ignoring the command.
     targetReachMeters: 0.05, // A ride target obeys inside this distance.
-    targetReachRadians: 0.15, // And inside this angle error. Un tercio del comando promedio.
+    targetReachRadians: 0.15, // And inside this angle error. A third of the average command.
     residualSearch: false, // At skill 2 and up, search the small residual leg net and leave the main one frozen. Off means the main net, the one that reads the target columns, keeps training and a loaded residual stays a frozen leg prior.
-    scriptedLegs: false, // The hand written gait in sim.blendLegs overwrites hip/knee/ankle on its own clock. It cannot obey a foot command, so the command ladder runs without it. Turn it on again for a pure locomotion skill.
+    scriptedLegs: false, // The hand written gait in sim.applyScriptedGait overwrites hip, knee, and ankle on its own clock. It cannot obey a foot command, so the command ladder runs without it. Turn it on again for a pure locomotion skill.
     cmdFootMeters: 0.22, // A foot command: half range of the step the foot is asked to take, in meters. Feet are commanded in world axes, they live on the floor.
     walkSteps: 3, // Assisted-walk pass: this many steps, then still standing.
     planSteps: 4, // Steps offered in one walk or box episode. The wire format stores this many slots.
@@ -333,18 +349,18 @@ export const config = {
     explorationScale: 0.06, // Target-column noise never drops below this.
     explorationFloor: 0.12, // Starting amplitude of the decaying target noise. The used scale is the max of this decay and explorationScale.
     explorationHalfLifeGenerations: 4000, // Generations for the decaying noise to halve.
-    stagnationGenerations: 1000, // Plateau length before the large noise starts. One new best removes this many generations from the count.
-    stagnationBoost: 3, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
-    stagnationBoostCap: 9, // Two boosts, then sigmaCap already clips limb noise.
+    stagnationGenerations: 100, // Plateau length before the large noise starts. One new best removes this many generations from the count.
+    stagnationBoost: 1.5, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
+    stagnationBoostCap: 3, // Two boosts, then sigmaCap already clips limb noise.
     sigmaCap: 0.4, // One weight's noise never exceeds this. At the plateau cap every scout stops here, near a trained weight.
     recordWindow: 16, // Generations in the ending average that sets a record.
     recordMargin: 0.2, // That average must clear the previous record by this much.
-    bestEverPairs: 0, // Pares extra copiados de Best ever con ruido chico. 0 los apaga. Ojo: con esto en 0
-    // igual habia un bug. En net.js tell(), order se ordenaba sobre TODOS los hijos y el guard de
-    // promocion solo miraba eliteScore, sin preguntar de quien venia: un hijo del ancla podia
-    // llegar a ser padre. Ahora el guard exige ademas que sea hijo del padre.
+    bestEverPairs: 0, // Extra pairs copied from Best ever with small noise. 0 turns them off. With this at 0
+    // there was still a bug: net.js tell() ranked EVERY child, and the promotion guard only
+    // looked at eliteScore, so a child of the anchor could become the parent. The guard now
+    // also requires the child to come from the parent.
     bestEverAdoptMargin: 0.25, // During a plateau, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. Scouts never become the parent.
-    stagnationMutateCap: 0, // Share of pairs that receive the large noise once a plateau starts. 0 keeps every pair on the small noise.
+    stagnationMutateCap: 0.2, // Share of pairs that receive the large noise once a plateau starts. 0 keeps every pair on the small noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
     skipExplorationScale: 0.02, // Noise on the zero-initialised shortcut from the target columns to the joint outputs. Small on purpose: at the full target scale it perturbed every joint's action and the doll could not learn to stand at all.
     bodyExplorationScale: 0.02, // Noise on hidden weights. Small, so balance can shift without a rewrite.
@@ -360,18 +376,18 @@ export const config = {
     outputInitScale: 0.04, // Fresh joint-output weights are a gaussian times this.
     randomHiddenScale: 0.26, // Random-weights button. Gaussian scale of a trained hidden block.
     randomOutputScale: 0.22, // Random-weights button. Gaussian scale of a trained joint-output block.
-    // Distancia a la meta que un hijo tiene que tener para poder ser el padre. SOLO se exige en
-    // las situaciones que TIENEN meta (caminar, caja, pelota): ahi tiene que haber llegado de verdad.
-    // Este numero estaba en -1, y -1 es menor que toda distancia, asi que el guard era
-    // (gap ?? 9) < -1 = falso SIEMPRE y la elitancia estaba apagada en todas las situaciones.
-    // net.js ahora saltea el guard cuando la situacion no tiene meta, asi que los cinco niveles
-    // de targets no lo necesitan; y este valor vuelve a ser una distancia de verdad para las que si.
+    // How close to the marker a child must be before it can become the parent. Required only
+    // in situations that HAVE a marker (walk, box, ball): it has to have actually arrived.
+    // This used to be -1, which is less than every distance, so (gap ?? 9) < -1 was always
+    // false and elitism was off in every situation. net.js now skips the guard when the
+    // situation has no marker, so the five target levels do not need it, and this value is
+    // a real distance again for the ones that do.
     goalCloseEnoughMeters: 0.45, // Elite replace also needs the best child at least this close to the marker.
     eliteMissingGapMeters: 9, // Gap assumed when a score has no marker distance.
     headImpactQuiet: 1.5, // A stand counts as quiet when the peak head-down speed is below this, in m/s.
   },
   episode: {
-    seconds: episodeSeconds, // How long one scored individual runs. A head touch subtracts reward.headTouch and the episode keeps going.
+    seconds: episodeSeconds, // How long one scored individual runs. The episode keeps going after a head touch.
     frames: episodeSeconds * physicsHz, // Physics steps in that run. 6 s at 60 Hz is 360. The doll on screen is not cut by this.
     startWindowSeconds: 0.25, // Mean reward over the first this many seconds. A drop from here to the ending is subtracted from the fitness.
     endWindowSeconds: 3, // Mean reward over the last this many seconds. The fitness is this, minus any drop from the start window.
@@ -388,8 +404,7 @@ export const config = {
     browserMax: 8, // Most browser workers.
     browserReserve: 1, // CPU cores left unused when sizing the browser pool.
     browserHardwareFallback: 4, // Core count assumed when the browser does not report one.
-    browserPairMin: 48, // Fewest antithetic pairs in a browser generation. Was 4: too few samples for ~1100 weights.
-    headlessPairs: 48, // Antithetic pairs in a headless generation.
+    pairs: 48, // Antithetic pairs in one generation, browser and headless.
     headlessWorkerMin: 2, // Fewest headless workers.
     headlessWorkerMax: 12, // Most headless workers.
     headlessWorkerReserve: 2, // CPU cores left unused when sizing the headless pool.
@@ -406,14 +421,13 @@ export const config = {
     officialMinN: 20, // Pass/fail is official only when the eval count is at least this.
     gateTargets: false, // Also require the head and both hands on their marks before a skill counts as passed. Off, the numbers are still measured and printed every eval.
     nearPassSlack: 0.15, // A rate this close to the pass rate still triggers a full eval.
-    // LA BARRA DE "PARADO". Un episodio pasa si el doll esta de pie durante ESTA fraccion de los
-    // ultimos endWindowSeconds (3 s = 180 frames), y ademas mantiene la racha de pie al final.
+    // The STAND bar. An episode passes when the doll is standing for THIS fraction of the
+    // last endWindowSeconds (3 s = 180 frames), and it is still standing at the end.
     //
-    // Antes la barra era windowStood === windowFrames: de pie en los 180 frames, sin uno menos. Un
-    // solo tropiezo en tres segundos echaba el episodio, y con eso la barra no media "se para" sino
-    // "se queda clavado sin parpadear". Medido sobre el padre de la gen 474 con el gate viejo:
-    // stoodUp 8/20 y gate 1/20. El mismo doll, la misma red, las mismas semillas: la diferencia
-    // entera era la barra, no la red.
+    // The old bar was windowStood === windowFrames: standing for all 180 frames, with no miss.
+    // One stumble in three seconds failed the episode, so the bar measured "never blinks"
+    // rather than "stands". Measured on the gen 474 parent with the old gate: stoodUp 8/20
+    // and gate 1/20. Same doll, same net, same seeds: the difference was the bar.
     standWindowShare: 0.9,
     passRate: {
       stand: 0.8,
@@ -452,9 +466,21 @@ export const config = {
     thighRight: 12,
     shinRight: 13,
     footRight: 14,
-    hip: 15, // Tail circle welded under the pelvis. Not one of the speed inputs.
+    hip: 15, // Tail circle welded on the pelvis. Not one of the speed inputs.
   },
 };
+
+export function applySearchNumbers(values) {
+  if (!values) return;
+  const search = config.search;
+  const keys = Object.keys(values);
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (typeof search[key] !== "number") continue;
+    const value = +values[key];
+    if (Number.isFinite(value)) search[key] = value;
+  }
+}
 
 export function setTrainingPhase(phase) {
   const id = phase | 0;

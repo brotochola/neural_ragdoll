@@ -129,6 +129,39 @@ h3.sub {
   text-align: right;
 }
 
+.stat.stagnant,
+.stat.stagnant b {
+  color: #ffb020;
+}
+
+#searchKnobs {
+  margin-top: 8px;
+}
+
+#searchKnobs summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#searchKnobList {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6.5rem;
+  gap: 4px 8px;
+  max-height: 16rem;
+  overflow: auto;
+  margin-top: 6px;
+}
+
+#searchKnobList label {
+  display: contents;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+#searchKnobList input {
+  width: 100%;
+}
+
 .swatch {
   display: inline-block;
   width: 8px;

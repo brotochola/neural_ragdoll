@@ -92,11 +92,37 @@ function readOptions(f32, cursor) {
   const placeExtra = f32[plan++];
   const placeTurn = f32[plan++];
   options.place = placeFoot >= 0 ? { foot: placeFoot | 0, extra: placeExtra, turn: placeTurn } : null;
+  const command = f32[plan++] | 0;
+  options.placed = command === 6;
+  options.commands = options.placed ? "all" : (config.commands[command] || "");
+  options.stance = f32[plan++] || 0;
+  for (let t = 0; t < targets.length; t++) {
+    const target = targets[t];
+    const a = f32[plan++];
+    const b = f32[plan++];
+    const c = f32[plan++];
+    if (options.placed) {
+      target.x = a;
+      target.y = b;
+      target.angle = c;
+    } else {
+      target.cx = a;
+      target.cy = b;
+      target.ca = c;
+    }
+  }
 }
 
 postMessage("ready");
 onmessage = (event) => {
   const data = event.data;
+  if (data && data.type === "stop") {
+    if (episode) episode.cleanup();
+    episode = null;
+    sim.destroyWorld(world);
+    world = null;
+    return;
+  }
   if (!data || !data.buffer) return;
   if (data.trainingPhase != null) setTrainingPhase(data.trainingPhase);
   const buffer = data.buffer;
@@ -110,14 +136,14 @@ onmessage = (event) => {
     const taskIndex = f32[cursor];
     readOptions(f32, cursor);
     const weights = new Float32Array(buffer, (cursor + TASK_HEADER) * 4, weightCount);
-    // A FRESH WORLD PER EPISODE. Box2D warm-starts every contact from the impulse it applied
-    // last step, and that cache survives a body transform reset. Reusing one world gave a
-    // different answer depending on how many episodes ran in it before, which made the official
-    // evaluation depend on the worker count.
-    sim.destroyWorld(world);
-    world = sim.build();
+    // ONE world per worker for its whole life, rebuilt before every episode. A reset alone is
+    // not enough: Box2D keeps per-body solver state across a reset, so a reused world answered
+    // differently depending on how many episodes had run in it, and the official evaluation
+    // changed with the worker count. See sim.runOneEpisode.
+    if (!world) world = sim.build();
+    else world.rebuild();
     episode = new sim.Episode(world, weights, options.tilt || 0, options.drop || 0, options);
-    while (!episode.step());
+    while (!episode.advanceOneFrame());
     steps += episode.frame;
     const at = resultIndex(taskCount, weightCount, index);
     const fitness = episode.fitnessValue;

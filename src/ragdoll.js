@@ -53,7 +53,10 @@ export const facePartName = {
 const skinColor = 0xffd166;
 const jeanColor = 0x3f6f9f;
 const shirtColor = 0xd24b4b;
-const footColor = 0xc4a574;
+const handRightColor = 0xff7a18;
+const handLeftColor = 0xb14dff;
+const footRightColor = 0x3dff6a;
+const footLeftColor = 0x2ec8ff;
 
 function shadeColor(color, scale) {
   const red = (color >> 16) & 255;
@@ -74,11 +77,14 @@ function partTint(index) {
   const id = config.partIndex;
   if (index === id.torso || index === id.chest) return torsoTint;
   if (index === id.upperArmLeft || index === id.forearmLeft) return leftArmTint;
+  if (index === id.handRight) return handRightColor;
+  if (index === id.handLeft) return handLeftColor;
+  if (index === id.footRight) return footRightColor;
+  if (index === id.footLeft) return footLeftColor;
   let color = shirtColor;
-  if (index === id.head || index === id.handLeft || index === id.handRight) color = skinColor;
-  else if (index === id.footLeft || index === id.footRight) color = footColor;
+  if (index === id.head) color = skinColor;
   else if (index === id.thighLeft || index === id.thighRight || index === id.shinLeft || index === id.shinRight) color = jeanColor;
-  const leftLimb = index === id.thighLeft || index === id.shinLeft || index === id.footLeft || index === id.handLeft;
+  const leftLimb = index === id.thighLeft || index === id.shinLeft;
   return leftLimb ? darken(color) : color;
 }
 
@@ -151,12 +157,14 @@ class Part {
 }
 
 export class RagDoll2D {
-  constructor(box, dollConfig = config) {
+  constructor(box, dollConfig = config, options) {
     const cfg = dollConfig;
+    const warmStart = options && options.warmStart;
+    this.cfg = cfg;
     const {
-      CreateWorld, CreateBoxPolygon, CreateRevoluteJoint, CreateCircle, CreateCapsule, b2Vec2, b2BodyType,
+      CreateWorld, CreateBoxPolygon, CreateRevoluteJoint, CreateWeldJoint, CreateCircle, CreateCapsule, b2Vec2, b2BodyType,
       b2Body_GetPosition, b2Body_GetRotation, b2Body_GetLinearVelocity, b2Body_GetAngularVelocity,
-      b2Shape_RayCast, b2Body_GetShapes, b2DestroyWorld,
+      b2Shape_RayCast, b2Body_GetShapes, b2DestroyWorld, b2Shape_SetFilter,
     } = box;
     const dynamicBody = b2BodyType.b2_dynamicBody;
     const staticBody = b2BodyType.b2_staticBody;
@@ -167,6 +175,7 @@ export class RagDoll2D {
     this.getSpin = b2Body_GetAngularVelocity;
     this.castRay = b2Shape_RayCast;
     this.getShapes = b2Body_GetShapes;
+    this.setFilter = b2Shape_SetFilter;
     this.rayOrigin = vector(0, 0);
     this.rayDelta = vector(0, 0);
     this.rot = { x: 0, y: 0 };
@@ -176,7 +185,44 @@ export class RagDoll2D {
     this.partSprites = null;
 
     const { worldId } = CreateWorld({});
+    this.worldId = worldId;
     this.worldId0 = worldId;
+    this.destroyWorld = box.b2DestroyWorld;
+    this.CreateBoxPolygon = CreateBoxPolygon;
+    this.CreateRevoluteJoint = CreateRevoluteJoint;
+    this.CreateWeldJoint = CreateWeldJoint;
+    this.CreateCircle = CreateCircle;
+    this.CreateCapsule = CreateCapsule;
+    this.b2DestroyBody = box.b2DestroyBody;
+    this.b2DestroyJoint = box.b2DestroyJoint || null;
+    this.dynamicBody = dynamicBody;
+    this.staticBody = staticBody;
+    this.vector = vector;
+    if (warmStart === false && box.b2World_SetWarmStarting) {
+      box.b2World_SetWarmStarting(worldId, false);
+    }
+    this.buildRagdoll();
+  }
+
+  // Everything that creates a body or a joint lives here, not in the constructor, so that
+  // rebuild() can tear it down and build it again inside the SAME world.
+  //
+  // Why that matters: resetting a world is not enough. Box2D keeps per-body solver state that
+  // a transform reset does not clear, so a world reused for a second episode answers differently
+  // depending on what ran in it before. That made the official evaluation depend on the worker
+  // count. Destroying the bodies removes that state with them.
+  //
+  // Why not just build a new world instead: b2CreateWorldArray caps the process at 32 worlds and
+  // b2DestroyWorld does not return a slot, so a long-lived worker would run out after 32 episodes.
+  buildRagdoll() {
+    const {
+      CreateBoxPolygon, CreateRevoluteJoint, CreateWeldJoint, CreateCircle, CreateCapsule,
+    } = this;
+    const worldId = this.worldId;
+    const vector = this.vector;
+    const dynamicBody = this.dynamicBody;
+    const staticBody = this.staticBody;
+    const cfg = this.cfg;
     const ground = CreateBoxPolygon({ worldId, type: staticBody, position: vector(0, -0.5), size: vector(800, 0.5), friction: 2 });
     const parts = [];
     const joints = [];
@@ -226,6 +272,7 @@ export class RagDoll2D {
         worldId, bodyIdA: a.id, bodyIdB: b.id,
         anchorA: vector(worldX - a.cx, worldY - a.cy), anchorB: vector(worldX - b.cx, worldY - b.cy),
         lowerAngle: lower, upperAngle: upper, enableLimit: true, enableMotor: true, motorSpeed: 0, maxMotorTorque: torque,
+        enableSpring: true, hertz: cfg.joint.hertz, dampingRatio: cfg.joint.dampingRatio,
       });
       joints.push({
         id: created.jointId, lo: lower, hi: upper, n: Math.max(-lower, upper),
@@ -275,11 +322,12 @@ export class RagDoll2D {
     tail.m = 40 * Math.PI * hipRadius * hipRadius;
     tail.th = hipRadius + 0.04;
     parts.push(tail);
-    CreateRevoluteJoint({
+    const welded = CreateWeldJoint({
       worldId, bodyIdA: parts[0].id, bodyIdB: hip.bodyId,
       anchorA: vector(0, 0.96 - parts[0].cy), anchorB: vector(0, 0),
-      lowerAngle: 0, upperAngle: 0, enableLimit: true, enableMotor: false, motorSpeed: 0, maxMotorTorque: 0,
+      collideConnected: false,
     });
+    this.buttJoint = welded.jointId;
 
     const count = parts.length;
     this.worldId = worldId;
@@ -287,6 +335,7 @@ export class RagDoll2D {
     this.joints = joints;
     this.groundId = ground.bodyId;
     this.floorShapes = [this.shapeOf(ground.bodyId)];
+    this.applyFilters(ground.bodyId);
     this.thrownIds = [];
     this.thrownShapes = [];
     this.px = new Float32Array(count);
@@ -306,19 +355,41 @@ export class RagDoll2D {
     this.rayHit = new Uint8Array(this.rayCount);
   }
 
-  // Releases the world's slot in Box2D's fixed world array. Without this, building a world per
-  // episode exhausts the array and the next CreateBody reads undefined.
-  // This is also why a world cannot be reused across episodes: Box2D warm-starts every contact
-  // from the impulse it applied last step, and that cache survives a body transform reset. A
-  // reused world therefore gives a different answer depending on how many episodes ran in it
-  // before, which made the official evaluation depend on the worker count.
-  destroy() {
-    this.parts.length = 0;
-    this.joints.length = 0;
+  // Joints before bodies: Box2D will not destroy a body that a live joint still references.
+  destroyRagdoll() {
+    if (this.buttJoint && this.b2DestroyJoint) this.b2DestroyJoint(this.buttJoint);
+    this.buttJoint = null;
+    const joints = this.joints || [];
+    for (let i = 0; i < joints.length; i++)
+      if (joints[i].id && this.b2DestroyJoint) this.b2DestroyJoint(joints[i].id);
+    joints.length = 0;
+    const thrown = this.thrownIds || [];
+    for (let i = 0; i < thrown.length; i++) this.b2DestroyBody(thrown[i]);
+    thrown.length = 0;
+    const parts = this.parts || [];
+    for (let i = 0; i < parts.length; i++)
+      if (parts[i].id) this.b2DestroyBody(parts[i].id);
+    parts.length = 0;
+    if (this.groundId) this.b2DestroyBody(this.groundId);
+    this.groundId = null;
     this.floorShapes = null;
     this.thrownShapes = null;
+  }
+
+  // The call every scored episode makes: tear the body tree down and build it again in the same
+  // world. This is what makes an episode independent of the ones that ran before it.
+  rebuild() {
+    this.destroyRagdoll();
+    this.buildRagdoll();
+  }
+
+  // Releases the world itself. Box2D's world array is capped at 32 per process and
+  // b2DestroyWorld does not return the slot, so this is only safe when the worker is exiting.
+  // Between episodes, rebuild() tears the body down inside the same world instead.
+  destroy() {
+    this.destroyRagdoll();
     this.worldId = null;
-    if (box.b2DestroyWorld && this.worldId0 != null) box.b2DestroyWorld(this.worldId0);
+    if (this.destroyWorld && this.worldId0 != null) this.destroyWorld(this.worldId0);
     this.worldId0 = null;
   }
   shapeOf(bodyId) {
@@ -328,7 +399,32 @@ export class RagDoll2D {
     return shapes[0];
   }
 
-  // Único lugar que lee la pose desde Box2D. Copia x e y antes de la llamada siguiente: el vector se reutiliza.
+  // Thighs meet the chest and nothing else on the body. Every part still meets the ground.
+  // The butt, the pelvis, and the chest overlap on purpose. Same negative group never collides.
+  applyFilters(groundId) {
+    const GROUND = 1;
+    const CHEST = 2;
+    const THIGH = 4;
+    const REST = 8;
+    const apply = (bodyId, category, mask, group) => {
+      this.setFilter(this.shapeOf(bodyId), {
+        categoryBits: category,
+        maskBits: mask,
+        groupIndex: group,
+      });
+    };
+    apply(groundId, GROUND, 0xffff, 0);
+    const id = this.cfg.partIndex;
+    const parts = this.parts;
+    for (let i = 0; i < parts.length; i++) {
+      const bodyId = parts[i].id;
+      if (i === id.chest) apply(bodyId, CHEST, GROUND | THIGH, 0);
+      else if (i === id.thighLeft || i === id.thighRight) apply(bodyId, THIGH, GROUND | CHEST, 0);
+      else apply(bodyId, REST, GROUND, -1);
+    }
+  }
+
+  // The only place that reads the pose from Box2D. Copy x and y before the next call: the vector is reused.
   readPose() {
     const parts = this.parts;
     const count = parts.length;
@@ -358,7 +454,7 @@ export class RagDoll2D {
     }
   }
 
-  // Punto de la piel en dirección local. Escribe skinX y skinY.
+  // Skin point in a local direction. Writes skinX and skinY.
   support(part, dirX, dirY) {
     const len = Math.hypot(dirX, dirY) || 1;
     const ux = dirX / len;
@@ -398,7 +494,7 @@ export class RagDoll2D {
     return fraction;
   }
 
-  // Escribe las fracciones en faceRay. Si measure.recordRays, también los segmentos de debug.
+  // Writes the fractions into faceRay. When measure.recordRays is set, also the debug segments.
   throwRays(measure) {
     const specs = faceRaySpecs;
     const face = this.faceRay;
@@ -510,10 +606,6 @@ export class RagDoll2D {
     this.leftElbow = this.findJoint("elbow", id.upperArmLeft);
     this.leftElbowSprite = this.addSprite(circleTexture, leftArmTint);
     this.tailSprite = this.addSprite(circleTexture, jeanColor);
-    this.hipMarks = [];
-    for (let i = 0; i < this.joints.length; i++) {
-      if (this.joints[i].mark === "hip") this.hipMarks.push(this.joints[i]);
-    }
     this.addPartSprite(id.torso, boxTexture);
     this.addPartSprite(id.chest, boxTexture);
     this.addPartSprite(id.head, boxTexture);
@@ -572,24 +664,11 @@ export class RagDoll2D {
     this.placeKnob(this.rightKnee, this.rightKneeSprite, this.kneeDiameter, this.kneeForward, scale, cx, groundY, half);
     this.placeKnob(this.leftElbow, this.leftElbowSprite, this.elbowDiameter, this.elbowBack, scale, cx, groundY, half);
     this.placeKnob(this.rightElbow, this.rightElbowSprite, this.elbowDiameter, this.elbowBack, scale, cx, groundY, half);
-    const hips = this.hipMarks;
-    if (hips.length === 2) {
-      let hipX = 0;
-      let hipY = 0;
-      for (let k = 0; k < 2; k++) {
-        const joint = hips[k];
-        const index = joint.a;
-        rotate(joint.ax, joint.ay, c[index], s[index], this.rot);
-        hipX += px[index] + this.rot.x;
-        hipY += py[index] + this.rot.y;
-      }
-      const torso = config.partIndex.torso;
-      const torsoPart = parts[torso];
-      const tailRadius = torsoPart.hx * 1.1;
-      const x = hipX * 0.5 + c[torso] * (torsoPart.hx - tailRadius);
-      const y = hipY * 0.5 + s[torso] * (torsoPart.hx - tailRadius);
-      this.tailSprite.position.set((x - cx) * scale + half, groundY - y * scale);
-      const size = tailRadius * 2 * scale;
+    const hipIndex = config.partIndex.hip;
+    const butt = parts[hipIndex];
+    if (butt && this.tailSprite) {
+      this.tailSprite.position.set((px[hipIndex] - cx) * scale + half, groundY - py[hipIndex] * scale);
+      const size = butt.r * 2 * scale;
       this.tailSprite.width = size;
       this.tailSprite.height = size;
     }

@@ -15,8 +15,9 @@ const sim = createSim(Box2D);
 const weights = new Float32Array(ElmanNetwork.weightCount);
 
 const start = sim.fillTrainingStart({}, makeSeededRandom(21), { full: true, level: 1 });
-const episode = new sim.Episode(sim.build(), weights, 0, 0, start);
-episode.reset(weights, 0, 0, start);
+// A fresh world, like every scored episode. This one needs the pose mid-episode, so it steps
+// the episode itself.
+const episode = new sim.Episode(sim.build(), weights, start.tilt || 0, start.drop || 0, start);
 
 // Congelamos el mundo en la pose plantada y movemos SOLO la cabeza a distintas alturas.
 // Asi lo unico que cambia es donde esta la cabeza: la fila de cabeza, y nada mas.

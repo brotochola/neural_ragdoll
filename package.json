@@ -7,6 +7,6 @@
     "train": "node train-headless.js",
     "probe": "node probe-targets.js",
     "watch": "node supervise.js",
-    "check": "node check-reward.js && node check-reach.js && node check-obey.js && node check-collapse.js && node check-foot-command.js"
+    "check": "node check-reward.js && node check-reach.js && node check-obey.js && node check-collapse.js && node check-foot-command.js && node check-contact.js"
   }
 }
