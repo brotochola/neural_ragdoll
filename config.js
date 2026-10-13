@@ -94,6 +94,8 @@ export const config = {
     velocityScale: 4, // Metres per second that maps to a full-scale input for part velocity. A diving head hits 2-3 m/s, a swinging hand 4-5.
     waistForwardRadians: (12 * Math.PI) / 180, // Chest flexes this far toward the toes.
     waistBackRadians: (6 * Math.PI) / 180, // Chest extends this far backward. Less than the forward bend.
+    hipBackRadians: (22 * Math.PI) / 180, // Thigh extends this far behind standing. Was 40°.
+    hipForwardRadians: (128 * Math.PI) / 180, // Thigh flexes this far toward the chest. Was 137°.
     bodyRayMeters: 0.35, // Short rays from the body. 1 means nothing is within this distance of that face.
     pelvisFrameMeters: 1, // A part's position in the torso frame is divided by this before it enters the net.
     targetSpanMeters: 2, // Target distance at which the position reward reaches its floor.
@@ -233,7 +235,7 @@ export const config = {
     dampingRatio: 6.66,
   },
   contact: {
-    weight: 1, // Per group, times the group's share. The four leg rows share one weight, so the worst case stays 4 * weight.
+    weight: 2, // Per group, times the group's share. The four leg rows share one weight, so the worst case stays 4 * weight.
     fullMeters: 0.04, // Separation at which a contact counts as fully pressed together.
     impulseFull: 0.79, // Normal impulse of a solid rest, measured on the lying pose in check-contact.js. Amount from impulse is 1 - exp(-impulse / this), so that rest sits near 0.63 and a light touch does not.
     groups: [
@@ -252,13 +254,13 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 14,
+    version: 15,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
     wideWeight: 0.5, // Extra copy of a ride target's position row, on wideSpanMeters. Feet do not get one.
     wideSpanMeters: 1.5, // Span of that copy. The tight span has already flattened by the time a fall reaches this.
-    upright: 1, // Half torso angle, half head height. +this standing, near 0 when flat.
+    upright: 1.5, // torsoCos + head/standingHead - 1. +this standing, -this lying flat.
     // The score is the target rows, the upright row, and four contact rows. The body marks
     // are planted upright and then frozen, and a penalised part on the floor pays its contact
     // row. Hands and feet are not penalised.

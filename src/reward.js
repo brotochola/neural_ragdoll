@@ -69,9 +69,11 @@ for (let g = 0; g < config.contact.groups.length; g++) {
 terms.push({
   n: "upright",
   tip:
-    "Half the torso angle and half the head height. +" +
+    "Torso cosine plus head height over a standing head, minus one. +" +
     weight.upright +
-    " standing, near 0 when flat. The slope stays alive during a fall, after the target rows have flattened.",
+    " standing, -" +
+    weight.upright +
+    " lying flat.",
   v: 0,
   scoreOnly: false,
 });
@@ -188,7 +190,10 @@ function uprightRow(measure) {
   let height = standing > 0 ? ((measure && measure.headHeight) || 0) / standing : 0;
   if (height < 0) height = 0;
   else if (height > 1) height = 1;
-  return weight.upright * (0.5 * ((measure && measure.torsoCos) || 0) + 0.5 * height);
+  let mix = ((measure && measure.torsoCos) || 0) + height - 1;
+  if (mix < -1) mix = -1;
+  else if (mix > 1) mix = 1;
+  return weight.upright * mix;
 }
 export function markError(measure, targetIndex) {
   const spec = config.targets[targetIndex];

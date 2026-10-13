@@ -81,7 +81,10 @@ const uprightOf = (torsoCos, headHeight) => {
   let height = headHeight / config.body.standingHeadMeters;
   if (height < 0) height = 0;
   else if (height > 1) height = 1;
-  return config.reward.upright * (0.5 * torsoCos + 0.5 * height);
+  let mix = torsoCos + height - 1;
+  if (mix < -1) mix = -1;
+  else if (mix > 1) mix = 1;
+  return config.reward.upright * mix;
 };
 // El measure falso nace parado: torsoCos 1, cabeza a 1.6 m. Eso es la fila de parado entera.
 const upright = uprightOf(1, 1.6);
