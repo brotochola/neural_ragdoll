@@ -299,18 +299,19 @@ for (let u = 0; u < layout.feedforward; u++) {
   }
 }
 const allRms = Math.sqrt(allSum / (allN || 1));
+const columns = config.net.targetInputCount / config.net.targetCount;
 for (let t = 0; t < config.targets.length; t++) {
   const spec = config.targets[t];
-  const use = rms(firstTargetColumn + t * 5);
-  const err = rms(firstTargetColumn + t * 5 + 1, 4);
+  const use = rms(firstTargetColumn + t * columns);
+  const err = rms(firstTargetColumn + t * columns + 1, columns - 1);
   // El atajo: los pesos que llevan el error del target directo a cada articulacion.
-  const stride = layout.outputStride;
-  const skipWeight = (joint, col) => theta[layout.outputBase + joint * stride + 1 + layout.recurrent + col];
+  const outStride = layout.outputStride;
+  const skipWeight = (joint, col) => theta[layout.outputBase + joint * outStride + 1 + layout.recurrent + col];
   let skipSum = 0;
   let skipN = 0;
   for (let joint = 0; joint < 14; joint++) {
-    for (let c = 1; c <= 4; c++) {
-      const w = skipWeight(joint, t * 5 + c);
+    for (let c = 1; c < columns; c++) {
+      const w = skipWeight(joint, t * columns + c);
       skipSum += w * w;
       skipN++;
     }

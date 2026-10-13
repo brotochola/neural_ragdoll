@@ -14,13 +14,22 @@ const headRayCount = headForwardRayCount + headBackRayCount; // Observation widt
 const headRayMeters = 2; // No head ray looks farther than this.
 const episodeSeconds = 6; // One scored individual, unless the head hits first.
 const targetCount = 5; // Head, handR, handL, footR, footL.
-const targetStride = 5; // use, dx, dy, sin of the angle error, cos of the angle error. Each is its own input.
+const targetStride = 7; // use, dx, dy, sin, cos, then dx and dy again on the wide span.
 const targetInputCount = targetCount * targetStride;
-const sensedBeforeRays = jointSenseCount + 4 + 2 + 4 + targetCount * 2; // Joints, torso/head sin/cos, two heights, four mass values, then x/y velocity of each of the five targets.
+const pelvisInputCount = (partCount - 1) * 2; // X and Y of every part except the pelvis, in the torso frame.
+const footContactInputCount = 2; // Left and right foot. Inputs only, not a penalty.
+const contactGroupCount = 7; // Torso, butt, four leg parts, arms. Hands and feet are not groups. Same amounts enter the net.
+const sensedBeforeRays =
+  jointSenseCount + 4 + 2 + 4 + targetCount * 2 + pelvisInputCount; // Joints, torso/head sin/cos, two heights, four mass values, x/y velocity of the five targets, then the pelvis-frame positions.
 const targetInputIndex = sensedBeforeRays + bodyRayCount + headRayCount;
-const sensedInputCount = targetInputIndex + targetInputCount + 1; // The last column is head contact.
-const contactGroupCount = 4; // config.contact.groups. Hands and feet are not groups.
-const rewardRowCount = targetCount * 2 + contactGroupCount + 1; // Target rows, one penalty row per contact group, then the upright row.
+const sensedInputCount =
+  targetInputIndex +
+  targetInputCount +
+  1 +
+  footContactInputCount +
+  contactGroupCount; // Head contact, the two feet, then one pressure per contact group.
+const rewardAxes = 5; // dx, dy, rotation, close x, close y.
+const rewardRowCount = targetCount * rewardAxes + contactGroupCount + 1; // Then the upright row.
 const rewardTotalNow = false;
 const rewardTotalPrevious = false;
 const rewardTotalNext = false;
@@ -41,16 +50,16 @@ export const config = {
     rewardFrameOffset: 1, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
-    hidden1Ratio: 1, // First hidden layer as a fraction of inputCount. Rounded to a whole number of units.
-    hidden2Ratio: 1.1, // Second hidden layer, also a fraction of inputCount. 0 turns it off.
+    hidden1Ratio: 0.3205, // 50 units at the current 156 inputs. The net that stood was this size. A ratio of 1 builds one hidden unit per input and the recurrent matrix blows up.
+    hidden2Ratio: 0.16, // 25 units, the recurrent layer. 0 turns it off and the first layer becomes the one with memory.
     feedbackUnits: 0, // Nonlinear summary of the previous action. It enters the recurrent layer only.
-    skipTargetInputs: false, // Each joint output also reads the 25 target columns directly, not only through the hidden units. That makes "move this joint toward this command" a one-layer problem. Off for now: it was tried and it hurt skill 1 (0.45 at gen 480 against 0.95 at gen 160 without it), and there is no evidence it helps. See the README.
+    skipTargetInputs: false, // Each joint output also reads the target columns directly, not only through the hidden units. That makes "move this joint toward this command" a one-layer problem. Off for now: it was tried and it hurt skill 1 (0.45 at gen 480 against 0.95 at gen 160 without it), and there is no evidence it helps. See the README.
     jointCount: 14, // Motor joints, and the width of the action vector. Waist, neck, and six joints on each side.
     sensedInputCount, // Observation length before optional reward-total columns.
-    targetInputIndex, // First of the target columns. Five targets, five numbers each: use, dx, dy, error sin, error cos.
+    targetInputIndex, // First of the target columns. Five targets, seven numbers each: use, dx, dy, error sin, error cos, wide dx, wide dy.
     targetInputCount,
     targetCount,
-    headContactInputIndex: sensedInputCount - 1, // 1 when Box2D says the head is touching.
+    headContactInputIndex: targetInputIndex + targetInputCount, // 1 when Box2D says the head is touching. The two foot contacts follow it.
     mutedTargets: [], // Target ids whose five input columns are written as off. The reward still counts them, so this measures what the net loses without them. Used by probe-targets.js.
     partCount, // Dynamic body parts. The tail is extra and is not one of them.
     rewardRowCount, // Score rows shown on screen. They are not copied into the observation.
@@ -86,6 +95,7 @@ export const config = {
     waistForwardRadians: (12 * Math.PI) / 180, // Chest flexes this far toward the toes.
     waistBackRadians: (6 * Math.PI) / 180, // Chest extends this far backward. Less than the forward bend.
     bodyRayMeters: 0.35, // Short rays from the body. 1 means nothing is within this distance of that face.
+    pelvisFrameMeters: 1, // A part's position in the torso frame is divided by this before it enters the net.
     targetSpanMeters: 2, // Target distance at which the position reward reaches its floor.
   },
   vision: {
@@ -221,16 +231,16 @@ export const config = {
     dampingRatio: 0.7,
   },
   contact: {
-    weight: 1, // Per group. Four groups, so the worst case is 4 * weight.
+    weight: 1, // Per group, times the group's share. The four leg rows share one weight, so the worst case stays 4 * weight.
     fullMeters: 0.04, // Separation at which a contact counts as fully pressed together.
     impulseFull: 0.79, // Normal impulse of a solid rest, measured on the lying pose in check-contact.js. Amount from impulse is 1 - exp(-impulse / this), so that rest sits near 0.63 and a light touch does not.
     groups: [
       { id: "torso", parts: ["torso", "chest"] },
       { id: "butt", parts: ["hip"] },
-      {
-        id: "legs",
-        parts: ["thighLeft", "thighRight", "shinLeft", "shinRight"],
-      },
+      { id: "thighL", parts: ["thighLeft"], share: 0.25 },
+      { id: "thighR", parts: ["thighRight"], share: 0.25 },
+      { id: "shinL", parts: ["shinLeft"], share: 0.25 },
+      { id: "shinR", parts: ["shinRight"], share: 0.25 },
       {
         id: "arms",
         parts: ["upperArmLeft", "upperArmRight", "forearmLeft", "forearmRight"],
@@ -240,7 +250,7 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 11,
+    version: 13,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
@@ -251,6 +261,7 @@ export const config = {
     // are planted upright and then frozen, and a penalised part on the floor pays its contact
     // row. Hands and feet are not penalised.
     targetMean: 1, // Global scale. 1 leaves the rows as they are.
+    closeWeight: 0.5, // Per axis. The row is this times how many meters that axis closed since the previous reward sample. The first sample is zero.
     startHoldShare: 0.5, // Fraction of a drop from the opening window that is charged. A gain is free.
   },
   curriculum: {

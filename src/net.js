@@ -185,7 +185,7 @@ function explorationOf(index, scale, boost) {
       const local = (index - origin) % stride;
       const targetLocal = net.targetInputIndex + 1;
       if (local >= targetLocal && local < targetLocal + net.targetInputCount) sigma = scale * extra;
-      else if (local === net.headContactInputIndex + 1) sigma = scale * extra;
+      else if (local > net.targetInputIndex + net.targetInputCount && local <= net.sensedInputCount) sigma = scale * extra;
       else if (local > net.sensedInputCount && local <= net.inputCount) sigma = net.freshInputExplorationScale * extra;
     }
   } else {

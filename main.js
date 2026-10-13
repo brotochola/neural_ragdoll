@@ -1001,7 +1001,7 @@ export class NeuralRagDollWorld {
           endSec +
           " s, minus " +
           hold +
-          " of any drop from the opening window. A gain is free. The total adds the targets that are on, the upright row, and four contact penalties.",
+          " of any drop from the opening window. A gain is free. The total adds each target axis, how far that axis closed, the upright row, and the contact rows.",
         "avg",
       ],
       [

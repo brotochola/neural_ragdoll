@@ -3,6 +3,7 @@ import { config, activeTrainingPhase } from "../config.js";
 import {
   scoreDecision,
   scoreTotal,
+  rememberAxisErrors,
   isStanding,
   onMark,
   markError,
@@ -92,6 +93,26 @@ function buildObservationLabels() {
       tip: "Vertical speed of the " + spec.id + ", same scale.",
     });
   }
+  const partNames = [];
+  for (const name of Object.keys(config.partIndex))
+    partNames[config.partIndex[name]] = name;
+  for (let i = 0; i < config.net.partCount; i++) {
+    if (i === config.partIndex.torso) continue;
+    labels.push({
+      name: partNames[i] + " x",
+      tip:
+        "Horizontal position of the " +
+        partNames[i] +
+        " in the torso frame, in meters. The pelvis is the origin.",
+    });
+    labels.push({
+      name: partNames[i] + " y",
+      tip:
+        "Vertical position of the " +
+        partNames[i] +
+        " in the torso frame, in meters. The pelvis is the origin.",
+    });
+  }
   for (const spec of faceRaySpecs) {
     const reach = spec.vision ? spec.reach : config.body.bodyRayMeters;
     labels.push({
@@ -152,12 +173,44 @@ function buildObservationLabels() {
           spec.id +
           ". 1 when it faces the target. 0 while that target is off.",
       },
+      {
+        name: spec.id + " wide dx",
+        tip:
+          "The same horizontal error, divided by " +
+          config.reward.wideSpanMeters +
+          " m, so a fall does not saturate it. Clamped at 2.",
+      },
+      {
+        name: spec.id + " wide dy",
+        tip:
+          "The same vertical error, divided by " +
+          config.reward.wideSpanMeters +
+          " m. Clamped at 2.",
+      },
     );
   }
-  labels.push({
-    name: "head contact",
-    tip: "1 when the head is touching the floor or a thrown object. A corner counts. Otherwise 0.",
-  });
+  labels.push(
+    {
+      name: "head contact",
+      tip: "1 when the head is touching the floor or a thrown object. A corner counts. Otherwise 0.",
+    },
+    {
+      name: "footL contact",
+      tip: "How hard the left foot is pressed, from 0 to 1. Not a penalty.",
+    },
+    {
+      name: "footR contact",
+      tip: "How hard the right foot is pressed, from 0 to 1. Not a penalty.",
+    },
+  );
+  for (const group of config.contact.groups)
+    labels.push({
+      name: group.id + " contact",
+      tip:
+        "How hard " +
+        group.parts.join(", ") +
+        " is pressed into the floor or a thrown object, from 0 to 1. The same amount as that reward row, before the weight. Hands and feet are not in any group.",
+    });
   if (config.net.rewardTotalNow)
     labels.push({
       name: "reward total",
@@ -1035,6 +1088,9 @@ export function createSim(box) {
     measure.headContact = headTouch ? 1 : 0;
     const footLeft = config.partIndex.footLeft;
     const footRight = config.partIndex.footRight;
+    if (!measure.footContact) measure.footContact = new Float32Array(2);
+    measure.footContact[0] = contactSample(world, world.parts[footLeft].id).amount;
+    measure.footContact[1] = contactSample(world, world.parts[footRight].id).amount;
     measure.headX = partX[head];
     measure.headWorldY = partY[head];
     measure.headVelocityY = measure.partVelocityY[head];
@@ -1335,6 +1391,8 @@ export function createSim(box) {
       this.ballThrown = false;
       this.endedUp = false;
       this.previousJointAngle.fill(0);
+      if (this.measure.prevAbsX) this.measure.prevAbsX.fill(NaN);
+      if (this.measure.prevAbsY) this.measure.prevAbsY.fill(NaN);
       this.cleanup();
       const world = this.world;
       resetPose(world, tilt, drop, this.options);
@@ -1412,6 +1470,21 @@ export function createSim(box) {
           1,
         );
       }
+      // Every part except the pelvis, in the torso frame. The pelvis is the origin, so a
+      // neck movement does not drag the feet across the input.
+      const torso = config.partIndex.torso;
+      const originX = measure.partX[torso] || 0;
+      const originY = measure.partY[torso] || 0;
+      const torsoCos = measure.torsoCos || 1;
+      const torsoSin = measure.torsoSin || 0;
+      const pelvisSpan = config.body.pelvisFrameMeters || 1;
+      for (let i = 0; i < config.net.partCount; i++) {
+        if (i === torso) continue;
+        const dx = (measure.partX[i] || 0) - originX;
+        const dy = (measure.partY[i] || 0) - originY;
+        input[cursor++] = clamp((torsoCos * dx + torsoSin * dy) / pelvisSpan, -2, 2);
+        input[cursor++] = clamp((-torsoSin * dx + torsoCos * dy) / pelvisSpan, -2, 2);
+      }
       const face = measure.faceRay;
       for (let i = 0; i < face.length; i++) input[cursor++] = face[i];
       const targets = measure.targets;
@@ -1438,6 +1511,8 @@ export function createSim(box) {
           input[cursor++] = 0;
           input[cursor++] = 0;
           input[cursor++] = 0;
+          input[cursor++] = 0;
+          input[cursor++] = 0;
           continue;
         }
         // The normaliser is the EPISODE span, not the old 2 m: at 2 m a 20 cm command
@@ -1453,8 +1528,24 @@ export function createSim(box) {
         const partCos = measure.partCos[index];
         input[cursor++] = targetSin * partCos - targetCos * partSin;
         input[cursor++] = targetCos * partCos + targetSin * partSin;
+        const wide = config.reward.wideSpanMeters || 1;
+        input[cursor++] = clamp(ex / wide, -2, 2);
+        input[cursor++] = clamp(ey / wide, -2, 2);
       }
       input[cursor++] = measure.headContact || 0;
+      const feet = measure.footContact;
+      input[cursor++] = feet ? feet[0] : 0;
+      input[cursor++] = feet ? feet[1] : 0;
+      // The same 0..1 amounts the reward penalises. Rays miss a thigh lying flat, and the
+      // torso frame does not say which part is on the floor.
+      const contact = measure.contact;
+      const groups = config.contact.groups;
+      for (let g = 0; g < groups.length; g++) {
+        let amount = contact ? contact[g] || 0 : 0;
+        if (amount < 0) amount = 0;
+        else if (amount > 1) amount = 1;
+        input[cursor++] = amount;
+      }
       if (cursor !== config.net.sensedInputCount)
         throw new Error("base observation " + cursor);
       if (
@@ -1487,6 +1578,7 @@ export function createSim(box) {
       const tracing = !!(this.options && this.options.trace);
       const scored = tracing ? scoreDecision(this.measure) : null;
       const total = scored ? scored.total : scoreTotal(this.measure);
+      rememberAxisErrors(this.measure);
       if (tracing) {
         if (!this.trace) this.trace = [];
         const src = this.action;

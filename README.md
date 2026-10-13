@@ -64,7 +64,7 @@ It used to be `(1-share)·life + share·min(start, life)`, with `life` the whole
 
 ```
 distance = |dx| + |dy|
-near = weight * (1 - 2r / sqrt(1 + r²))          r = distance / span
+near = weight * (1 - 2r / (1 + |r|))             r = distance / span
 wide = ride ? the same curve on wideSpanMeters : 0
 row  = near + wide
 ```
@@ -80,7 +80,7 @@ The tight curve has been wrong twice, and both failures were invisible until mea
   consequence: standing 10.92 vs lying 8.00 — a 24% gap where the linear version had 100%.
   The fix for the plateau had eaten the reward for standing.
 
-The tight term still has derivative `-2·weight/span` at the mark, tends to `-weight` far away, and never flattens. The wide copy is what still moves at 1.5 m, where that derivative has fallen to about 0.4% of its value on the mark.
+The tight term still has derivative `-2·weight/span` at the mark, tends to `-weight` far away, and never flattens. The wide copy is what still moves at 1.5 m, where that derivative has already fallen off.
 
 ## The parent was frozen for 400 generations
 

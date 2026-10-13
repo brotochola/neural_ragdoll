@@ -28,7 +28,9 @@ for (const group of config.contact.groups) {
     check(group.id + ' does not include ' + name, !banned);
   }
 }
-check('four contact groups', config.contact.groups.length === 4, String(config.contact.groups.length));
+check('seven contact groups', config.contact.groups.length === 7, String(config.contact.groups.length));
+const legShare = config.contact.groups.reduce((sum, group) => sum + (group.share || 0), 0);
+check('leg rows share one weight', Math.abs(legShare - 1) < 1e-6, legShare.toFixed(2));
 
 function settle(name, tilt, settle) {
   const start = sim.fillTrainingStart({}, makeSeededRandom(21), { full: true, level: 1 });
@@ -41,7 +43,7 @@ function settle(name, tilt, settle) {
   const amounts = [];
   for (let i = 0; i < contact.length; i++) amounts.push(contact[i]);
   const scored = scoreDecision(episode.measure);
-  const contactStart = config.targets.length * 2;
+  const contactStart = config.net.rewardRowCount - config.contact.groups.length - 1;
   const contactEnd = contactStart + config.contact.groups.length;
   const penalty = scored.terms.slice(contactStart, contactEnd).reduce((sum, term) => sum + term.v, 0);
   const impulses = [];

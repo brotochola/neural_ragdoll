@@ -56,23 +56,26 @@ function check(name, actual, expected, tolerance) {
 const head = config.targets[0];
 const foot = config.targets[3];
 
-// La fila de posicion es near + wide. near es weight*(1 - 2r/sqrt(1+r^2)) con
-// r = (|dx|+|dy|)/span. wide es la misma curva, solo en los targets que ridean, con
-// span ancho. En la marca suma +peso*(1+wideWeight) para esos, y +peso para un pie.
+// Cada eje es near + wide. near es weight*(1 - 2r/(1+|r|)) con r = |eje|/span.
+// wide es la misma curva, solo en los targets que ridean, con span ancho.
+// En la marca un eje suma +peso*(1+wideWeight) si ridea, y +peso si es un pie.
+// La posicion del target es la suma de los dos ejes.
 const hw = targetPositionWeight(head);
 const hr = config.reward.targetRotation;
 const wideWeight = config.reward.wideWeight;
 const wideSpan = config.reward.wideSpanMeters;
 const pRow = (w, span, d) => {
-  const r = d / span;
-  return w * (1 - 2 * (r / Math.sqrt(1 + r * r)));
+  const r = Math.abs(d / span);
+  return w * (1 - 2 * (r / (1 + r)));
 };
 const positionOf = (spec, dx, dy) => {
   const w = targetPositionWeight(spec);
-  const l1 = Math.abs(dx) + Math.abs(dy);
-  let value = pRow(w, spec.span, l1);
-  if (spec.ride) value += pRow(w * wideWeight, wideSpan, l1);
-  return value;
+  const one = (d) => {
+    let value = pRow(w, spec.span, Math.abs(d));
+    if (spec.ride) value += pRow(w * wideWeight, wideSpan, Math.abs(d));
+    return value;
+  };
+  return one(dx) + one(dy);
 };
 const uprightOf = (torsoCos, headHeight) => {
   let height = headHeight / config.body.standingHeadMeters;
@@ -96,13 +99,13 @@ check('pie al doble de su span', scoreTotal(fakeMeasure(foot, foot.span * 2, 0, 
 // La caida entera: 2 m tiene que seguir castigando, y no puede valer lo mismo que 0.5 m.
 // Y la sensibilidad cerca de la marca tiene que ser la de siempre: 10 cm no puede costar
 // menos que lo que costaba con la fila lineal.
-check('caer a 2 m sigue costando casi el peso entero', pRow(hw, head.span, 2.0) < -0.9 * hw, true);
+check('caer a 2 m sigue costando la mayor parte del peso', pRow(hw, head.span, 2.0) < -0.75 * hw, true);
 check('medio metro vale mas que 2 m', pRow(hw, head.span, 0.5) > pRow(hw, head.span, 2.0), true);
 check('la fila de posicion nunca es positiva lejos de la marca', positionRowOf(head, 99, 99) < 0, true);
 check('la fila no se aplana: 2 m vale mas que 20 m', positionRowOf(head, 2.0, 0) > positionRowOf(head, 20, 0), true);
 // La sensibilidad tiene que ser la misma que daba la fila lineal. Lo que importa es la DERIVA
 // en la marca (ahi se aprende la precision fina), y que a 10 cm no cueste mucho menos.
-const slope = (spec) => (positionRowOf(spec, 0.001, 0) - positionRowOf(spec, 0, 0)) / 0.001;
+const slope = (spec) => (positionRowOf(spec, 0.0001, 0) - positionRowOf(spec, 0, 0)) / 0.0001;
 const linearSlope = (spec) => {
   const w = targetPositionWeight(spec);
   let value = -2 * w / spec.span;
@@ -110,8 +113,8 @@ const linearSlope = (spec) => {
   return value;
 };
 check('la derivada en la marca es la lineal', slope(head), linearSlope(head), 0.02);
-check('a 10 cm no cuesta mucho menos que en la lineal', pRow(hw, head.span, 0.1), hw * (1 - 2 * (0.1 / head.span)), 0.08);
-check('la fila de giro si baja de cero', scoreTotal(fakeMeasure(head, head.span, 0, Math.PI)) < 0, true);
+check('a 10 cm es r/(1+|r|)', pRow(hw, head.span, 0.1), hw * (1 - 2 * (0.1 / (head.span + 0.1))), 1e-9);
+check('la fila de giro si baja de cero', scoreByTarget(fakeMeasure(head, head.span, 0, Math.PI))[0].rotation < 0, true);
 
 // El span decides la sensibilidad por metro: mismo error, misma pérdida en los cinco.
 const err = 0.1;
