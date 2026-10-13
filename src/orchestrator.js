@@ -87,6 +87,8 @@ function adopt(packet) {
   search.bestGenScore = packet.bestGenScore ?? -1e9;
   search.bestSmooth = packet.bestSmooth ?? null;
   search.eliteScore = packet.eliteScore ?? -1e9;
+  search.parentMoves = packet.parentMoves | 0;
+  search.parentMoveNote = typeof packet.parentMoveNote === "string" ? packet.parentMoveNote : "";
   search.hist = Array.isArray(packet.hist) ? packet.hist : [];
   search.refreshMutationBoost();
   return search;
@@ -212,6 +214,8 @@ async function oneGeneration(search, runEpoch) {
     bestGenScore: search.bestGenScore,
     bestSmooth: search.bestSmooth,
     eliteScore: search.eliteScore,
+    parentMoves: search.parentMoves || 0,
+    parentMoveNote: search.parentMoveNote || "",
     anchorNote: note || "",
     row,
     timings: run.timings,

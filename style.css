@@ -122,6 +122,16 @@ h3.sub {
   border-top: 1px solid var(--line);
 }
 
+.stat.note {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.stat.note b {
+  white-space: normal;
+  font-weight: 500;
+}
+
 .stat b {
   color: var(--text);
   font-weight: 600;

@@ -793,6 +793,8 @@ export class NeuralRagDollWorld {
         bestGenScore: state.bestGenScore,
         bestSmooth: state.bestSmooth,
         eliteScore: state.eliteScore,
+        parentMoves: state.parentMoves || 0,
+        parentMoveNote: state.parentMoveNote || "",
         hist: state.hist || [],
       },
       transfer: [
@@ -848,6 +850,11 @@ export class NeuralRagDollWorld {
     state.bestGenScore = data.bestGenScore;
     state.bestSmooth = data.bestSmooth;
     state.eliteScore = data.eliteScore;
+    const previousMoves = state.parentMoves || 0;
+    state.parentMoves = data.parentMoves || 0;
+    state.parentMoveNote = typeof data.parentMoveNote === "string" ? data.parentMoveNote : "";
+    if (state.parentMoves > previousMoves && state.parentMoveNote)
+      this.logEvent(state.parentMoveNote);
     if (data.row) {
       state.hist.push(data.row);
       if (state.hist.length > 400) state.hist.shift();
@@ -954,6 +961,10 @@ export class NeuralRagDollWorld {
   ensureStatus() {
     if (this.statusValues) return;
     const every = config.search.stagnationGenerations;
+    const windowGens = config.search.recordWindow;
+    const startSec = config.episode.startWindowSeconds;
+    const endSec = config.episode.endWindowSeconds;
+    const hold = config.reward.startHoldShare;
     const perf = this.fillStats(this.$("perf"), [
       [
         "Step",
@@ -976,7 +987,21 @@ export class NeuralRagDollWorld {
       ],
       [
         "Start → end",
-        "Average reward of the parent's children in the first 0.5 s, then in the last 3 s. The light copies of Best ever are not in this average. The reward is only the ten target rows: five positions, five rotations. The blue line is that fitness, averaged over 20 generations. Not a network you can put on the doll.",
+        "Average reward of the parent's children in the first " +
+          startSec +
+          " s, then in the last " +
+          endSec +
+          " s. Copies of Best ever are not in this average. This is the reward total, not the blue line.",
+      ],
+      [
+        "Avg",
+        "Mean fitness of the parent's children, averaged over the last " +
+          windowGens +
+          " generations. The blue line. Fitness is the reward over the last " +
+          endSec +
+          " s, minus " +
+          hold +
+          " of any drop from the opening window. A gain is free. The total adds the targets that are on, the upright row, and four contact penalties.",
         "avg",
       ],
       [
@@ -986,11 +1011,21 @@ export class NeuralRagDollWorld {
       ],
       [
         "Best ever",
-        "The 20-generation average fitness, at the last time it reached a new high. That fitness is only the ten target rows, so its scale is 12 when every mark is hit and -12 when every part is on the floor upside down. Nothing is subtracted: there is no head-touch term, no motion term, no survival term. Network → Best ever plays the parent from that generation. A single lucky child does not set this.",
+        "That same " +
+          windowGens +
+          "-generation average, the last time it beat the previous record by " +
+          config.search.recordMargin +
+          ". Network → Best ever plays the parent from that generation. A single lucky child does not set this.",
+      ],
+      [
+        "Elite",
+        "The fitness a child of the parent has to beat before it replaces the parent. It only goes up. Each generation is a different command, so one lucky episode can set a bar later children never clear. Adam still steps the parent when this stays put.",
       ],
       [
         "Plateau",
-        "Generations since the 20-generation average fitness last reached a new high. The row says Stagnation once the count reaches " +
+        "Generations since the " +
+          windowGens +
+          "-generation average fitness last reached a new high. The row says Stagnation once the count reaches " +
           every +
           ". " +
           (config.search.stagnationMutateCap > 0
@@ -1055,10 +1090,15 @@ export class NeuralRagDollWorld {
       // Al FINAL a proposito: las filas de arriba se llenan por indice, y este dato es nuevo.
       [
         "Parent moves",
-        "How many times a child has replaced the parent. READ THIS BEFORE BLAMING THE REWARD. If it stays at 0 the population is exploring around a parent that never improves, the average can still rise from Adam's step, and the network you get back is a random walk. A target level has no goal, so nothing gates the promotion there; a situation that has a goal also needs the child within " +
+        "How many times a child has replaced the parent. A plateau can also hand the parent to a small-noise child, and that counts here. If it stays at 0, the population is exploring around a parent that has not been replaced: the average can still move from Adam's step. A target level has no goal, so nothing gates the promotion there; a situation that has a goal also needs the child within " +
           config.search.goalCloseEnoughMeters +
           " m of it.",
-        "moves",
+      ],
+      [
+        "Why",
+        "The training worker's note for the best child of the parent this generation. A note with 'vs elite' means that child did not clear the bar.",
+        null,
+        "note",
       ],
     ]);
     this.statusValues = status.values;
@@ -1133,47 +1173,66 @@ export class NeuralRagDollWorld {
       ? "–"
       : this.formatRange(handoffLow, handoffHigh, 1) + " ms";
     const pending = "–";
+    const elite = this.state.eliteScore;
+    const eliteText =
+      Number.isFinite(elite) && elite > -1e8 ? elite.toFixed(2) : "–";
+    const windowGens = config.search.recordWindow;
+    let avgText = "–";
+    if (this.state.hist.length) {
+      const begin = Math.max(0, this.state.hist.length - windowGens);
+      let sum = 0;
+      let n = 0;
+      for (let i = begin; i < this.state.hist.length; i++) {
+        if (!Number.isFinite(this.state.hist[i].mean)) continue;
+        sum += this.state.hist[i].mean;
+        n++;
+      }
+      if (n) avgText = (sum / n).toFixed(2);
+    }
     this.setPerf(0, this.formatMs(this.stepMs));
     this.setPerf(1, this.formatMs(this.renderMs));
     this.setPerf(2, this.formatMs(this.frameGapShow));
     this.setStatus(0, String(this.state.gen || 0));
     this.setStatus(1, arrow);
-    this.setStatus(2, last ? last.best.toFixed(2) : "–");
-    this.setStatus(3, everText);
+    this.setStatus(2, avgText);
+    this.setStatus(3, last ? last.best.toFixed(2) : "–");
+    this.setStatus(4, everText);
+    this.setStatus(5, eliteText);
     const stagnant = every > 0 && flat >= every;
     this.setStatus(
-      4,
+      6,
       stagnant ? "Stagnation · " + flat : flat + " / " + (every > 0 ? every : "–"),
     );
-    if (this.statusTips[4]) this.statusTips[4].classList.toggle("stagnant", stagnant);
+    if (this.statusTips[6]) this.statusTips[6].classList.toggle("stagnant", stagnant);
     this.setStatus(
-      5,
+      7,
       (this.scoutPending ? "scout next · " : "") +
         "x" +
         boost +
         (pct > 0 ? " · " + pct + "%" : "") +
         anchorText,
     );
-    this.setStatus(6, this.formatMs(this.sendMs));
-    this.setStatus(7, handoffText);
-    this.setStatus(8, this.formatMs(this.tellMs));
-    this.setStatus(9, this.formatMs(this.saveMs));
+    this.setStatus(8, this.formatMs(this.sendMs));
+    this.setStatus(9, handoffText);
+    this.setStatus(10, this.formatMs(this.tellMs));
+    this.setStatus(11, this.formatMs(this.saveMs));
     this.setStatus(
-      10,
+      12,
       ragCount ? this.formatRange(ragLow, ragHigh, 0) : pending,
     );
     this.setStatus(
-      11,
+      13,
       ragCount ? this.formatRange(secLow, secHigh, 1) : pending,
     );
     this.setStatus(
-      12,
+      14,
       ragCount ? this.formatRange(frameLow, frameHigh, 2) : pending,
     );
-    this.setStatus(13, String(this.state.parentMoves || 0));
+    this.setStatus(15, String(this.state.parentMoves || 0));
+    this.setStatus(16, this.state.parentMoveNote || "–");
     if (ragCount)
       this.setStatusTip(
-        10,
+        12,
         "How many ragdolls each worker ran in the last generation. There were " +
           ragTotal +
           " ragdolls in total, split across " +
@@ -2467,6 +2526,8 @@ export class NeuralRagDollWorld {
         : null,
       networkName: state.networkName || "",
       eliteScore: state.eliteScore,
+      parentMoves: state.parentMoves || 0,
+      parentMoveNote: state.parentMoveNote || "",
       flatGens: state.flatGens || 0,
       bestSmooth: Number.isFinite(state.bestSmooth) ? state.bestSmooth : null,
       hist: kept,
@@ -2754,6 +2815,10 @@ export class NeuralRagDollWorld {
       revived.networkName = packet.name.replace(/\.json$/i, "");
     if (Number.isFinite(+packet.eliteScore))
       revived.eliteScore = +packet.eliteScore;
+    if (Number.isFinite(+packet.parentMoves) && +packet.parentMoves > 0)
+      revived.parentMoves = Math.floor(+packet.parentMoves);
+    if (typeof packet.parentMoveNote === "string")
+      revived.parentMoveNote = packet.parentMoveNote;
     if (Number.isFinite(+packet.bestSmooth))
       revived.bestSmooth = +packet.bestSmooth;
     if (Array.isArray(packet.hist)) {
@@ -2813,6 +2878,10 @@ export class NeuralRagDollWorld {
     revived.networkName =
       typeof packet.networkName === "string" ? packet.networkName : "";
     revived.eliteScore = packet.eliteScore ?? -1e9;
+    if (Number.isFinite(+packet.parentMoves) && +packet.parentMoves > 0)
+      revived.parentMoves = Math.floor(+packet.parentMoves);
+    if (typeof packet.parentMoveNote === "string")
+      revived.parentMoveNote = packet.parentMoveNote;
     if (Number.isFinite(+packet.flatGens) && +packet.flatGens > 0)
       revived.flatGens = Math.floor(+packet.flatGens);
     if (Number.isFinite(+packet.bestSmooth))
