@@ -88,9 +88,12 @@ function partTint(index) {
   return leftLimb ? darken(color) : color;
 }
 
+const solidTextureSize = 32;
+const capsulePpm = 400;
+
 function makeSolidTexture(circle) {
   const PIXI = globalThis.PIXI;
-  const size = 32;
+  const size = solidTextureSize;
   const textureCanvas = document.createElement("canvas");
   textureCanvas.width = size;
   textureCanvas.height = size;
@@ -106,18 +109,17 @@ function makeSolidTexture(circle) {
 
 function makeCapsuleTexture(part) {
   const PIXI = globalThis.PIXI;
-  const ppm = 400;
-  const width = Math.max(2, Math.ceil(part.hx * 2 * ppm));
-  const height = Math.max(2, Math.ceil(part.hy * 2 * ppm));
+  const width = Math.max(2, Math.ceil(part.hx * 2 * capsulePpm));
+  const height = Math.max(2, Math.ceil(part.hy * 2 * capsulePpm));
   const textureCanvas = document.createElement("canvas");
   textureCanvas.width = width;
   textureCanvas.height = height;
   const context = textureCanvas.getContext("2d");
   const originX = width / 2;
   const originY = height / 2;
-  const radius = part.r * ppm;
-  const axisX = part.ax * ppm;
-  const axisY = -part.ay * ppm;
+  const radius = part.r * capsulePpm;
+  const axisX = part.ax * capsulePpm;
+  const axisY = -part.ay * capsulePpm;
   context.fillStyle = "#ffffff";
   context.strokeStyle = "#ffffff";
   context.lineWidth = radius * 2;
@@ -381,6 +383,12 @@ export class RagDoll2D {
   rebuild() {
     this.destroyRagdoll();
     this.buildRagdoll();
+    if (!this.partSprites) return;
+    const id = config.partIndex;
+    this.leftKnee = this.findJoint("knee", id.thighLeft);
+    this.rightKnee = this.findJoint("knee", id.thighRight);
+    this.leftElbow = this.findJoint("elbow", id.upperArmLeft);
+    this.rightElbow = this.findJoint("elbow", id.upperArmRight);
   }
 
   // Releases the world itself. Box2D's world array is capped at 32 per process and
@@ -564,20 +572,36 @@ export class RagDoll2D {
     return null;
   }
 
-  addSprite(texture, tint) {
+  addSprite(texture, tint, texW, texH) {
     const PIXI = globalThis.PIXI;
     const sprite = new PIXI.Sprite(texture);
     sprite.anchor.set(0.5);
     sprite.tint = tint;
     sprite.zIndex = this.spriteDepth++;
+    sprite.texW = texW || solidTextureSize;
+    sprite.texH = texH || solidTextureSize;
+    sprite.visible = false;
     this.viewContainer.addChild(sprite);
     return sprite;
+  }
+
+  sizeSprite(sprite, metersW, metersH, scale) {
+    const texW = sprite.texW;
+    const texH = sprite.texH;
+    if (!(texW > 0) || !(texH > 0) || !(scale > 0)) {
+      sprite.visible = false;
+      return;
+    }
+    sprite.scale.set((metersW * scale) / texW, (metersH * scale) / texH);
+    sprite.visible = true;
   }
 
   addPartSprite(index, boxTexture) {
     const part = this.parts[index];
     const texture = part.capsule ? makeCapsuleTexture(part) : boxTexture;
-    this.partSprites[index] = this.addSprite(texture, partTint(index));
+    const texW = part.capsule ? Math.max(2, Math.ceil(part.hx * 2 * capsulePpm)) : solidTextureSize;
+    const texH = part.capsule ? Math.max(2, Math.ceil(part.hy * 2 * capsulePpm)) : solidTextureSize;
+    this.partSprites[index] = this.addSprite(texture, partTint(index), texW, texH);
   }
 
   attachView(container) {
@@ -633,9 +657,7 @@ export class RagDoll2D {
       y += sin * forward;
     }
     sprite.position.set((x - cx) * scale + half, groundY - y * scale);
-    const size = diameter * scale;
-    sprite.width = size;
-    sprite.height = size;
+    this.sizeSprite(sprite, diameter, diameter, scale);
   }
 
   // Coloca los sprites desde la pose. No lee Box2D y no hace nada si no hay vista.
@@ -657,8 +679,7 @@ export class RagDoll2D {
       const part = parts[index];
       sprite.position.set((px[index] - cx) * scale + half, groundY - py[index] * scale);
       sprite.rotation = -Math.atan2(s[index], c[index]);
-      sprite.width = part.hx * 2 * scale;
-      sprite.height = part.hy * 2 * scale;
+      this.sizeSprite(sprite, part.hx * 2, part.hy * 2, scale);
     }
     this.placeKnob(this.leftKnee, this.leftKneeSprite, this.kneeDiameter, this.kneeForward, scale, cx, groundY, half);
     this.placeKnob(this.rightKnee, this.rightKneeSprite, this.kneeDiameter, this.kneeForward, scale, cx, groundY, half);
@@ -668,9 +689,7 @@ export class RagDoll2D {
     const butt = parts[hipIndex];
     if (butt && this.tailSprite) {
       this.tailSprite.position.set((px[hipIndex] - cx) * scale + half, groundY - py[hipIndex] * scale);
-      const size = butt.r * 2 * scale;
-      this.tailSprite.width = size;
-      this.tailSprite.height = size;
+      this.sizeSprite(this.tailSprite, butt.r * 2, butt.r * 2, scale);
     }
   }
 }

@@ -11,7 +11,7 @@ const headCenterY = neckY + headRadius + headAxis;
 const headForwardRayCount = 4; // Most head rays look forward.
 const headBackRayCount = 2; // A few look behind the head.
 const headRayCount = headForwardRayCount + headBackRayCount; // Observation width of the head fan. Changing this needs a fresh network.
-const headRayMeters = 2; // No head ray looks farther than this.
+const headRayMeters = 4; // No head ray looks farther than this.
 const episodeSeconds = 6; // One scored individual, unless the head hits first.
 const targetCount = 5; // Head, handR, handL, footR, footL.
 const targetStride = 7; // use, dx, dy, sin, cos, then dx and dy again on the wide span.
@@ -214,7 +214,7 @@ export const config = {
   commands: ["", "none", "head", "hand", "foot", "all"],
   // How much of its own row each target puts into the reward. The ramp for turning one group on
   // without disturbing the others: 0 takes it out of the score and out of the network's inputs.
-  targetGains: { head: 1, handR: 1, handL: 1, footR: 1, footL: 1 },
+  targetGains: { head: 1.3, handR: 1.3, handL: 1.3, footR: 1.5, footL: 1.5 },
 
   // CONTACT PENALTIES. Four rows, one per group, each a penalty from 0 down to -weight.
   //
@@ -372,8 +372,8 @@ export const config = {
     explorationFloor: 0.12, // Starting amplitude of the decaying target noise. The used scale is the max of this decay and explorationScale.
     explorationHalfLifeGenerations: 4000, // Generations for the decaying noise to halve.
     stagnationGenerations: 100, // Plateau length before the large noise starts. One new best removes this many generations from the count.
-    stagnationBoost: 1.5, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
-    stagnationBoostCap: 3, // Two boosts, then sigmaCap already clips limb noise.
+    stagnationBoost: 2, // Noise multiplier at the first plateau, then again after each further stretch of the same length.
+    stagnationBoostCap: 4, // Two boosts, then sigmaCap already clips limb noise.
     sigmaCap: 0.4, // One weight's noise never exceeds this. At the plateau cap every scout stops here, near a trained weight.
     recordWindow: 16, // Generations in the ending average that sets a record.
     recordMargin: 0.2, // That average must clear the previous record by this much.

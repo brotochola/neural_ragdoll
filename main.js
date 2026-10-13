@@ -1477,6 +1477,8 @@ export class NeuralRagDollWorld {
       ghost.anchor.set(0.5);
       ghost.alpha = 0.22;
       ghost.tint = src.tint;
+      ghost.texW = src.texW;
+      ghost.texH = src.texH;
       ghost.visible = false;
       this.poseLayer.addChild(ghost);
       this.poseGhosts.push(ghost);
@@ -1491,6 +1493,8 @@ export class NeuralRagDollWorld {
       sandbox.anchor.set(0.5);
       sandbox.alpha = 0.5;
       sandbox.tint = src.tint;
+      sandbox.texW = src.texW;
+      sandbox.texH = src.texH;
       sandbox.visible = false;
       this.markLayer.addChild(sandbox);
       this.sandboxMarks.push(sandbox);
@@ -1498,6 +1502,8 @@ export class NeuralRagDollWorld {
       preview.anchor.set(0.5);
       preview.alpha = 0.5;
       preview.tint = src.tint;
+      preview.texW = src.texW;
+      preview.texH = src.texH;
       preview.visible = false;
       this.markLayer.addChild(preview);
       this.previewMarks.push(preview);
@@ -1508,9 +1514,7 @@ export class NeuralRagDollWorld {
     const scale = this.view.scale || 1;
     sprite.position.set(this.toX(x), this.toY(y));
     sprite.rotation = -angle;
-    sprite.width = part.hx * 2 * scale;
-    sprite.height = part.hy * 2 * scale;
-    sprite.visible = true;
+    this.doll.sizeSprite(sprite, part.hx * 2, part.hy * 2, scale);
   }
 
   drawTrainPreview() {
@@ -1643,6 +1647,11 @@ export class NeuralRagDollWorld {
 
   resetEpisode() {
     if (this.episode) this.episode.cleanup();
+    if (this.drag) {
+      b2DestroyJoint(this.drag.id);
+      this.drag = null;
+    }
+    this.world.rebuild();
     const options = this.episodeOptions();
     this.episode = new this.sim.Episode(
       this.world,

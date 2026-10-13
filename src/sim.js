@@ -895,40 +895,6 @@ export function createSim(box) {
   const staticBody = b2BodyType.b2_staticBody;
   const vector = (x, y) => new b2Vec2(x, y);
   const placed = [];
-  // Box2D keeps the vector and the rotation we pass it. One shared vector glues every part together.
-  function partPose(part, x, y) {
-    let pos = part.pose;
-    if (!pos) {
-      pos = new b2Vec2(x, y);
-      part.pose = pos;
-    } else {
-      pos.x = x;
-      pos.y = y;
-    }
-    return pos;
-  }
-  function partRot(part, tilt) {
-    let rot = part.tiltRot;
-    if (!rot) {
-      rot = b2MakeRot(tilt);
-      part.tiltRot = rot;
-    } else {
-      rot.c = Math.cos(tilt);
-      rot.s = Math.sin(tilt);
-    }
-    return rot;
-  }
-  function partVel(part) {
-    let vel = part.vel;
-    if (!vel) {
-      vel = new b2Vec2(0, 0);
-      part.vel = vel;
-    } else {
-      vel.x = 0;
-      vel.y = 0;
-    }
-    return vel;
-  }
   let random = makeSeededRandom(7);
   // Reads `random` on every call, so setRandom changes the sequence.
   const randomNormal = () => randomNormalSample(random);
@@ -1131,13 +1097,15 @@ export function createSim(box) {
     const count = world.parts.length;
     for (let i = 0; i < count; i++) {
       const slot = placed[i];
-      const part = slot.part;
+      const part = world.parts[i];
+      // PhaserBox2D stores these by reference. A reused vec/rot glues bodies together
+      // or parks one at the origin (the pelvis at 0,0 crush).
       b2Body_SetTransform(
         part.id,
-        partPose(part, slot.x, slot.y),
-        partRot(part, tilt + (slot.extra || 0)),
+        vector(slot.x, slot.y),
+        b2MakeRot(tilt + (slot.extra || 0)),
       );
-      b2Body_SetLinearVelocity(part.id, partVel(part));
+      b2Body_SetLinearVelocity(part.id, vector(0, 0));
       b2Body_SetAngularVelocity(part.id, 0);
       b2Body_SetAwake(part.id, true);
     }
