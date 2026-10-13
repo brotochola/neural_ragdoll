@@ -131,6 +131,7 @@ export class NeuralRagDollWorld {
       this.syncTrainBoxes();
       this.paintTargetToggles();
       this.syncEpisodeTargets();
+      if (this.episode) this.episode.passive = !this.trainMode && this.$("passive").checked;
       if (this.trainMode) this.postTraining();
       this.saveUi();
     };
@@ -314,6 +315,7 @@ export class NeuralRagDollWorld {
       "startPose",
       "viewRays",
       "viewColliders",
+      "passive",
       "objectKind",
       "showTrainPose",
     ]) {
@@ -479,6 +481,7 @@ export class NeuralRagDollWorld {
         if (!this.hold) this.resetEpisode();
       } else {
         const stepStart = performance.now();
+        this.episode.passive = !this.trainMode && this.$("passive").checked;
         const ended = this.episode.advanceOneFrame();
         stepSum += performance.now() - stepStart;
         stepCount++;
@@ -1213,6 +1216,7 @@ export class NeuralRagDollWorld {
     this.$("trainHead").checked = on("head");
     this.$("trainFeet").checked = on("footL") && on("footR");
     this.$("trainHands").checked = on("handL") && on("handR");
+    this.$("passive").disabled = this.trainMode;
   }
 
   networkTitle() {
@@ -2601,6 +2605,7 @@ export class NeuralRagDollWorld {
           startPose: this.$("startPose").value,
           viewRays: this.$("viewRays").checked,
           viewColliders: this.$("viewColliders").checked,
+          passive: this.$("passive").checked,
           objectKind: this.$("objectKind").value,
           speed: this.$("speed").value,
           phaseStartGen: this.phaseStartGen,
@@ -2660,6 +2665,7 @@ export class NeuralRagDollWorld {
     }
     this.$("viewRays").checked = !!saved.viewRays;
     this.$("viewColliders").checked = !!saved.viewColliders;
+    this.$("passive").checked = !!saved.passive;
     if (Array.isArray(saved.targets)) {
       saved.targets.forEach((item, index) => {
         const target = this.targets[index];

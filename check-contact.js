@@ -41,18 +41,24 @@ function settle(name, tilt, settle) {
   const amounts = [];
   for (let i = 0; i < contact.length; i++) amounts.push(contact[i]);
   const scored = scoreDecision(episode.measure);
-  const penalty = scored.terms.slice(config.targets.length * 2).reduce((sum, term) => sum + term.v, 0);
+  const contactStart = config.targets.length * 2;
+  const contactEnd = contactStart + config.contact.groups.length;
+  const penalty = scored.terms.slice(contactStart, contactEnd).reduce((sum, term) => sum + term.v, 0);
+  const impulses = [];
+  const impulse = episode.measure.contactImpulse;
+  for (let i = 0; i < contact.length; i++) impulses.push(impulse ? impulse[i] : 0);
   episode.cleanup();
   sim.destroyWorld(world);
-  return { name, amounts, penalty };
+  return { name, amounts, penalty, impulses };
 }
 
 const standing = settle('standing', 0, 20);
 const lying = settle('lying', Math.PI / 2, 90);
 const format = (row) => row.amounts.map((value) => value.toFixed(2)).join(' ');
+const formatImpulse = (row) => row.impulses.map((value) => value.toFixed(3)).join(' ');
 
-console.log('standing  ' + format(standing) + '  penalty ' + standing.penalty.toFixed(3));
-console.log('lying     ' + format(lying) + '  penalty ' + lying.penalty.toFixed(3));
+console.log('standing  ' + format(standing) + '  penalty ' + standing.penalty.toFixed(3) + '  impulse ' + formatImpulse(standing));
+console.log('lying     ' + format(lying) + '  penalty ' + lying.penalty.toFixed(3) + '  impulse ' + formatImpulse(lying));
 
 const standSum = standing.amounts.reduce((sum, value) => sum + value, 0);
 const lieMax = Math.max(...lying.amounts);

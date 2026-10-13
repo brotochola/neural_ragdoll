@@ -787,6 +787,8 @@ export function createSim(box) {
     b2Body_ApplyForceToCenter,
     b2RevoluteJoint_GetAngle,
     b2RevoluteJoint_SetMotorSpeed,
+    b2RevoluteJoint_EnableMotor,
+    b2RevoluteJoint_EnableSpring,
     CreateCircle,
     b2DestroyBody,
     b2Body_GetContactCapacity,
@@ -920,8 +922,8 @@ export function createSim(box) {
     return false;
   }
 
-  // How hard a body is pressed into the world, from 0 to 1. 0 when it is clear, 1 when a contact
-  // is carrying load or the surfaces have interpenetrated by contact.fullMeters.
+  // How hard a body is pressed into the world, from 0 to 1. 0 when it is clear. Separation
+  // reaches 1 at contact.fullMeters, and impulse rises as 1 - exp(-impulse / impulseFull).
   //
   // This reads Box2D's contact manifolds, not the proximity rays, and that is deliberate.
   // ragdoll.js gives thigh, shin, torso and upper arm only HORIZONTAL rays, so a thigh lying flat
@@ -930,27 +932,32 @@ export function createSim(box) {
   //
   // Thighs can meet the chest. Those contacts are skipped: the penalty is the floor and
   // thrown objects, not the doll touching itself.
-  function contactAmount(world, bodyId) {
+  function contactSample(world, bodyId) {
     const capacity = b2Body_GetContactCapacity(bodyId);
-    if (!capacity) return 0;
+    if (!capacity) return { amount: 0, impulse: 0 };
     while (contactData.length < capacity) contactData.push(freshContact());
     const count = b2Body_GetContactData(bodyId, contactData, capacity);
     const reach = config.body.touchGapMeters + config.contact.fullMeters;
+    const impulseFull = config.contact.impulseFull;
     let amount = 0;
+    let impulse = 0;
     for (let i = 0; i < count; i++) {
       if (selfContact(world, bodyId, contactData[i])) continue;
       const manifold = contactData[i].manifold;
       if (!manifold) continue;
       for (let p = 0; p < manifold.pointCount; p++) {
         const point = manifold.points[p];
-        // A resting contact carries load even when the manifold separation is barely negative.
-        if (point.normalImpulse > 0) return 1;
-        const closeness =
-          (config.body.touchGapMeters - point.separation) / reach;
-        if (closeness > amount) amount = closeness;
+        let fromGap = (config.body.touchGapMeters - point.separation) / reach;
+        if (fromGap < 0) fromGap = 0;
+        else if (fromGap > 1) fromGap = 1;
+        const load = point.normalImpulse || 0;
+        const fromImpulse = load > 0 && impulseFull > 0 ? 1 - Math.exp(-load / impulseFull) : 0;
+        const pointAmount = fromGap > fromImpulse ? fromGap : fromImpulse;
+        if (pointAmount > amount) amount = pointAmount;
+        if (load > impulse) impulse = load;
       }
     }
-    return amount < 0 ? 0 : amount > 1 ? 1 : amount;
+    return { amount: amount > 1 ? 1 : amount, impulse };
   }
 
   function resetPose(world, tilt, drop, options) {
@@ -1056,21 +1063,29 @@ export function createSim(box) {
     }
     const groups = config.contact.groups;
     let contact = measure.contact;
+    let contactImpulse = measure.contactImpulse;
     if (!contact || contact.length !== groups.length) {
       contact = new Float32Array(groups.length);
       measure.contact = contact;
     }
+    if (!contactImpulse || contactImpulse.length !== groups.length) {
+      contactImpulse = new Float32Array(groups.length);
+      measure.contactImpulse = contactImpulse;
+    }
     for (let g = 0; g < groups.length; g++) {
       const names = groups[g].parts;
-      let amount = 0;
+      let sum = 0;
+      let impulse = 0;
       for (let p = 0; p < names.length; p++) {
-        const value = contactAmount(
+        const sample = contactSample(
           world,
           world.parts[config.partIndex[names[p]]].id,
         );
-        if (value > amount) amount = value;
+        sum += sample.amount;
+        if (sample.impulse > impulse) impulse = sample.impulse;
       }
-      contact[g] = amount;
+      contact[g] = names.length ? sum / names.length : 0;
+      contactImpulse[g] = impulse;
     }
     measure.handOn = !!(
       measure.touch[config.partIndex.handLeft] ||
@@ -1191,6 +1206,7 @@ export function createSim(box) {
   class Episode {
     constructor(world, weights, tilt, drop, options = {}) {
       this.free = false;
+      this.passive = false;
       this.world = world;
       this.network = new ElmanNetwork(weights);
       this.residual = new ResidualNet();
@@ -1572,7 +1588,7 @@ export function createSim(box) {
       }
       if (acting) {
         measureProximity(this.world, this.measure);
-        this.decide();
+        if (!this.passive) this.decide();
       }
       if (
         !this.quiet &&
@@ -2102,11 +2118,22 @@ export function createSim(box) {
         add[legs[i]] += 0.1 * scale * this.residual.out[from[i]];
     }
     applyMotors() {
+      if (this.passive) {
+        for (let i = 0; i < config.net.jointCount; i++) {
+          const id = this.world.joints[i].id;
+          b2RevoluteJoint_SetMotorSpeed(id, 0);
+          b2RevoluteJoint_EnableMotor(id, false);
+          b2RevoluteJoint_EnableSpring(id, false);
+        }
+        return;
+      }
       this.applyScriptedGait();
       const limit = config.episode.motorSpeedLimit || 1;
       let speedSum = 0;
       for (let i = 0; i < config.net.jointCount; i++) {
         const joint = this.world.joints[i];
+        b2RevoluteJoint_EnableMotor(joint.id, true);
+        b2RevoluteJoint_EnableSpring(joint.id, true);
         const leg =
           this.legLocked &&
           (i === 5 || i === 6 || i === 7 || i === 11 || i === 12 || i === 13);
@@ -2200,23 +2227,19 @@ export function createSim(box) {
       );
     }
     get fitnessValue() {
-      // Fitness is the target rows plus the contact penalties, averaged over the episode.
-      // life is that average. start is the same average over the opening window.
-      // Standing is not its own term: the marks are planted on an upright body and then
-      // frozen in the world, and a part pressed into the floor pays its contact row.
-      // startHoldShare charges only a drop from the opening window. A gain is not charged.
-      const life = this.lifeCount ? this.lifeSum / this.lifeCount : 0;
+      // Fitness is the reward rows over the last endWindowSeconds, not the whole episode.
+      // A short ramp episode has not filled that window, so the mean is every sample so far.
+      // start is the opening window. startHoldShare charges only a drop from there to the
+      // ending. A gain is not charged.
+      const end = this.windowMean(true);
       const start = this.windowMean(false);
-      if (!this.lifeCount) return 0;
+      if (!this.endFilled) return 0;
       const hold = config.reward.startHoldShare;
-      // BEFORE: (1-hold)*life + hold*min(start, life).
-      // That charged a net that IMPROVES: min(start, life) is start, so taking a step
-      // (which raises the episode average) left the fitness halfway to not having taken it.
-      // The name is startHoldShare, "what is held from the start", and it has to punish a
-      // loss, not a gain. For the foot skill that was half the signal.
-      // NOW: the drop is charged, and improving is never penalised.
-      const drop = start > life ? start - life : 0;
-      const blend = hold ? life - hold * drop : life;
+      // BEFORE: (1-hold)*life + hold*min(start, life), with life the whole-episode mean.
+      // That charged a net that IMPROVES, and the saturated fall samples diluted the rest.
+      // NOW: the drop from the opening window to the ending is charged, and improving is free.
+      const drop = start > end ? start - end : 0;
+      const blend = hold ? end - hold * drop : end;
       return config.reward.targetMean * blend;
     }
     get stats() {

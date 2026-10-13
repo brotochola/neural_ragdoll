@@ -1,4 +1,4 @@
-// One frame's reward is the distance and rotation of the targets that are on. An off target adds nothing.
+// One frame's reward is the targets that are on, plus upright and contact. An off target adds nothing.
 import { config } from "../config.js";
 
 const part = config.partIndex;
@@ -8,18 +8,22 @@ const termCount = config.net.rewardRowCount;
 const terms = [];
 for (let i = 0; i < config.targets.length; i++) {
   const spec = config.targets[i];
+  const positionWeight = targetPositionWeight(spec);
+  const onMarkValue = positionWeight * (spec.ride ? 1 + weight.wideWeight : 1);
   terms.push({
     n: spec.id + " position",
     tip:
       "Distance from the " +
       spec.id +
-      " to its target. +" +
-      targetPositionWeight(spec) +
-      " on the mark, 0 at " +
-      targetSpan(spec) +
-      " m, and approaching -" +
-      targetPositionWeight(spec) +
-      " far away. It never flattens, so there is always a way back. Zero while this target is off or its gain is zero.",
+      " to its target, |dx| + |dy|. +" +
+      onMarkValue +
+      " on the mark, approaching -" +
+      onMarkValue +
+      " far away." +
+      (spec.ride
+        ? " A wide copy keeps a slope out to " + weight.wideSpanMeters + " m."
+        : "") +
+      " Zero while this target is off or its gain is zero.",
     v: 0,
     scoreOnly: false,
   });
@@ -42,15 +46,24 @@ for (let g = 0; g < config.contact.groups.length; g++) {
   terms.push({
     n: group.id + " contact",
     tip:
-      "How hard " +
+      "Mean of how hard " +
       group.parts.join(", ") +
       " is pressed into the floor or a thrown object. 0 when clear, -" +
       config.contact.weight +
-      " when fully pressed. Hands and feet are not in any group.",
+      " when every part is fully pressed. Lifting one part moves the row. Hands and feet are not in any group.",
     v: 0,
     scoreOnly: false,
   });
 }
+terms.push({
+  n: "upright",
+  tip:
+    "Half the torso angle and half the head height. +" +
+    weight.upright +
+    " standing, near 0 when flat. The slope stays alive during a fall, after the target rows have flattened.",
+  v: 0,
+  scoreOnly: false,
+});
 const scored = { total: 0, max: 0, onFeet: 0, terms };
 
 // Each target carries its own span, weight, and gain. Gain 0 drops the row from the reward
@@ -114,7 +127,7 @@ function footTarget(id) {
 // was almost as good as standing (measured: 10.92 standing against 8.00 down, where the
 // linear version gave 7.49 against -1.48).
 //
-// The shape now is r / sqrt(1+r^2), with r = d/span:
+// The shape now is r / sqrt(1+r^2), with r = (|dx| + |dy|) / span:
 //   - slope -2*weight/span on the mark, the same as the linear row. The 10 cm sensitivity,
 //     which is where the net learns, is unchanged.
 //   - it tends to -weight far away, so a fall still costs the whole reward.
@@ -122,6 +135,25 @@ function footTarget(id) {
 function positionRow(weight, distance, span) {
   const ratio = distance / span;
   return weight * (1 - 2 * (ratio / Math.sqrt(1 + ratio * ratio)));
+}
+
+// |dx| + |dy|, so a step along either axis always moves the row. Ride targets add the same
+// curve on a wide span: the tight span is already flat by the time a fall reaches 1.5 m.
+function targetPosition(spec, target, dx, dy) {
+  const positionWeight = targetPositionWeight(spec);
+  const l1 = Math.abs(dx) + Math.abs(dy);
+  let value = positionRow(positionWeight, l1, targetSpan(spec, target));
+  if (spec.ride)
+    value += positionRow(positionWeight * weight.wideWeight, l1, weight.wideSpanMeters);
+  return value;
+}
+
+function uprightRow(measure) {
+  const standing = config.body.standingHeadMeters;
+  let height = standing > 0 ? ((measure && measure.headHeight) || 0) / standing : 0;
+  if (height < 0) height = 0;
+  else if (height > 1) height = 1;
+  return weight.upright * (0.5 * ((measure && measure.torsoCos) || 0) + 0.5 * height);
 }
 export function markError(measure, targetIndex) {
   const spec = config.targets[targetIndex];
@@ -161,12 +193,11 @@ function writeRewardRows(measure, writeRows) {
     if (on) {
       const dx = (target.x || 0) - ((measure.partX && measure.partX[index]) || 0);
       const dy = (target.y || 0) - ((measure.partY && measure.partY[index]) || 0);
-      const span = targetSpan(spec, target);
       const positionWeight = targetPositionWeight(spec);
-      position = gain * positionRow(positionWeight, Math.hypot(dx, dy), span);
+      position = gain * targetPosition(spec, target, dx, dy);
       const partCos = measure.partCos && measure.partCos[index];
       rotation = gain * weight.targetRotation * angleErrorCos(target.angle, (measure.partSin && measure.partSin[index]) || 0, partCos == null ? 1 : partCos);
-      ceiling += gain * (positionWeight + weight.targetRotation);
+      ceiling += gain * (positionWeight * (spec.ride ? 1 + weight.wideWeight : 1) + weight.targetRotation);
     }
     if (writeRows) {
       terms[row].v = position;
@@ -186,6 +217,11 @@ function writeRewardRows(measure, writeRows) {
     row += 1;
     total += penalty;
   }
+  const upright = uprightRow(measure);
+  if (writeRows) terms[row].v = upright;
+  row += 1;
+  total += upright;
+  ceiling += weight.upright;
   if (row !== termCount) throw new Error("reward rows " + row);
   scored.total = total;
   scored.max = ceiling;
@@ -205,10 +241,9 @@ export function scoreByTarget(measure) {
     row.position = 0;
     row.rotation = 0;
     if (!target || !target.on || !targetGain(spec.id, target)) continue;
-    const span = targetSpan(spec, target);
     const dx = (target.x || 0) - ((measure.partX && measure.partX[index]) || 0);
     const dy = (target.y || 0) - ((measure.partY && measure.partY[index]) || 0);
-    row.position = positionRow(targetPositionWeight(spec), Math.hypot(dx, dy), span);
+    row.position = targetPosition(spec, target, dx, dy);
     const partCos = measure.partCos && measure.partCos[index];
     row.rotation = weight.targetRotation * angleErrorCos(target.angle, (measure.partSin && measure.partSin[index]) || 0, partCos == null ? 1 : partCos);
   }

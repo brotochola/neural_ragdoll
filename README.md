@@ -12,24 +12,13 @@ node serve.js
 Then open http://localhost:8765/. Box2D is loaded from a CDN build (`PhaserBox2D.min.js`).
 Headless training uses the vendored copy and needs no server.
 
-## The reward is only the targets
+## The reward
 
-The fitness is the mean of the ten target rows — five positions, five rotations — sampled across
-the **whole episode**. That is all of it.
+One frame is the ten target rows, one upright row, and four contact penalties. A target's position uses `|dx| + |dy|`, and head and hands add a wide copy of that curve so a fall still has slope after the tight span has flattened. The upright row is half torso angle and half head height. Contact is the mean pressure of each group, not a cliff at the first touch.
 
-There is no `upright`, no `headTouch`, no `alive`, no `fail`, no `motion`, no `step` term.
-They are all zero in `config.reward` and none of them is read by `fitnessValue`.
+The fitness is the mean of those rows over the last `episode.endWindowSeconds` (3 s). A short ramp episode has not filled that window yet, so the mean is the whole episode.
 
-**Standing is not a term. It falls out of the frozen marks.** Head and hand marks are planted
-**once**, at reset, using the midpoint of the feet only to capture the standing torso height —
-and then they never move again for the rest of the episode. The mark lives in the world, so the
-torso has to stay up to reach it. Tip over and the head falls away from its own frozen mark, and
-the head row charges you for it:
-
-```
-standing        reward  7.92   head height 1.63
-lying on back   reward  4.74   head height 0.12
-```
+**The frozen marks still carry standing.** Head and hand marks are planted **once**, at reset, using the midpoint of the feet only to capture the standing torso height — and then they never move again for the rest of the episode. The mark lives in the world, so the torso has to stay up to reach it. Tip over and the head falls away from its own frozen mark. The upright row is what still changes after that distance has flattened.
 
 `check-collapse.js` measures exactly that, and fails the build if lying ever scores higher.
 
@@ -67,22 +56,22 @@ The residual drift (0.298 m against a 0.089 m command, from `check-foot-command.
 anchoring problem at all. It is what "the net cannot stand yet" looks like. Once it stands, drift
 goes to zero and the frozen world mark measures the command by itself. Skill 1 before skill 4.
 
-The starting pose enters through one number only, `reward.startHoldShare`: **how much of what was
-lost between the start and the end is charged.** It uses the same ten rows. It charges the drop
-and nothing else — improving during the episode is free.
+The starting pose enters through one number only, `reward.startHoldShare`: **how much of a drop from the opening window to the ending is charged.** Improving during the episode is free.
 
-It used to be `(1-share)·life + share·min(start, life)`. Since `min` is always ≤ `life`, that
-charged whoever *improved*: taking a foot step raises the episode average, and the fitness was
-left halfway to not having taken it. For the foot skill that was half the signal, inverted.
-Now it is `life − share·max(0, start − life)`. `check-reward.js` pins all four cases.
+It used to be `(1-share)·life + share·min(start, life)`, with `life` the whole-episode mean. Since `min` is always ≤ `life`, that charged whoever *improved*. Now the fitness is the ending window, and the blend is `end − share·max(0, start − end)`. `check-reward.js` pins all four cases.
 
 ### The position row shape
 
 ```
-row = weight * (1 - 2r / sqrt(1 + r²))        r = distance / span
+distance = |dx| + |dy|
+near = weight * (1 - 2r / sqrt(1 + r²))          r = distance / span
+wide = ride ? the same curve on wideSpanMeters : 0
+row  = near + wide
 ```
 
-This one line has been wrong twice, and both failures were invisible until measured:
+`wideWeight` is 0.5 and `wideSpanMeters` is 1.5. Feet do not get the wide copy: their mark is on the floor and they already weigh 2. On one axis the tight term matches the old hypot. Along a diagonal the axes add, so fixing one of them always raises the row.
+
+The tight curve has been wrong twice, and both failures were invisible until measured:
 
 - **Linear `1 - 2r`**, floored at a span. A fall is ~1.5 m and a span is 0.25 m, so every
   collapsed pose scored identically. A plateau: no gradient back up.
@@ -91,10 +80,7 @@ This one line has been wrong twice, and both failures were invisible until measu
   consequence: standing 10.92 vs lying 8.00 — a 24% gap where the linear version had 100%.
   The fix for the plateau had eaten the reward for standing.
 
-The current form has all three properties: derivative `-2·weight/span` **at the mark**, identical
-to the linear row, so the fine precision where learning actually happens is untouched;
-`-weight` in the far field, so falling still costs the whole weight; and strictly decreasing
-(`d/dr [r/√(1+r²)] = 1/(1+r²)^{3/2} > 0`), so there is no plateau anywhere.
+The tight term still has derivative `-2·weight/span` at the mark, tends to `-weight` far away, and never flattens. The wide copy is what still moves at 1.5 m, where that derivative has fallen to about 0.4% of its value on the mark.
 
 ## The parent was frozen for 400 generations
 
@@ -187,9 +173,7 @@ Training a 6-second "do not fall over" from generation 0 asks the search for a 6
 controller with no stepping stone. `config.skill.rampStartSeconds` (1.5 s) and
 `rampGenerations` (400) start the scored episode short and stretch it to the full length.
 
-The reward does not change. It is the same ten rows, sampled over a shorter episode. And
-`evaluateSkill` always runs the **full** episode regardless of where the ramp is — otherwise the
-gate would be approving a network that can only stand for a second and a half.
+The reward rows do not change with the ramp. The eval always runs the **full** episode regardless of where the ramp is — otherwise the gate would be approving a network that can only stand for a second and a half.
 
 This is a curriculum, not a reward term. Nothing was added to the score.
 

@@ -20,7 +20,7 @@ const sensedBeforeRays = jointSenseCount + 4 + 2 + 4 + targetCount * 2; // Joint
 const targetInputIndex = sensedBeforeRays + bodyRayCount + headRayCount;
 const sensedInputCount = targetInputIndex + targetInputCount + 1; // The last column is head contact.
 const contactGroupCount = 4; // config.contact.groups. Hands and feet are not groups.
-const rewardRowCount = targetCount * 2 + contactGroupCount; // Target rows, then one penalty row per contact group.
+const rewardRowCount = targetCount * 2 + contactGroupCount + 1; // Target rows, one penalty row per contact group, then the upright row.
 const rewardTotalNow = false;
 const rewardTotalPrevious = false;
 const rewardTotalNext = false;
@@ -59,7 +59,7 @@ export const config = {
     rewardTotalNext, // Append the reward total estimated one physics frame ahead.
     inputCount: sensedInputCount + rewardTotalInputCount, // Full observation length.
     freshInputExplorationScale: 0.04, // Noise on columns after sensedInputCount (reward totals, when on).
-    hiddenLeak: 0, //0.6, // Fraction of the previous hidden state kept each step.
+    hiddenLeak: 0.75, //0.6, // Fraction of the previous hidden state kept each step.
   },
   body: {
     platformPeriodSeconds: 8, // Kept on the task header. The floor does not tilt.
@@ -211,9 +211,9 @@ export const config = {
   // Hands and feet are deliberately NOT here: standing on your feet and touching the floor with
   // your hands is allowed. What is not allowed is the body folding onto itself.
   //
-  // Each group's amount is the MAX over its parts, not the mean: if one thigh is down the row is
-  // fully penalised, because half-collapsed is not better than collapsed. The value under the max
-  // is continuous (see sim.contactAmount), so the search still has a gradient to climb.
+  // Each group's amount is the MEAN of its parts. One thigh down costs its share of the row,
+  // and lifting any of them moves the number. Every part fully pressed is still -weight.
+  // Separation and impulse both rise smoothly (see sim.contactSample): the first impulse is not an instant 1.
   // Revolute spring on the 14 motor joints. This Box2D build has no target angle, so the
   // spring pulls each joint back to the pose it was built in. The speed motor still runs.
   joint: {
@@ -223,6 +223,7 @@ export const config = {
   contact: {
     weight: 1, // Per group. Four groups, so the worst case is 4 * weight.
     fullMeters: 0.04, // Separation at which a contact counts as fully pressed together.
+    impulseFull: 0.79, // Normal impulse of a solid rest, measured on the lying pose in check-contact.js. Amount from impulse is 1 - exp(-impulse / this), so that rest sits near 0.63 and a light touch does not.
     groups: [
       { id: "torso", parts: ["torso", "chest"] },
       { id: "butt", parts: ["hip"] },
@@ -239,13 +240,16 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 10,
+    version: 11,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
-    // The score is the target rows plus four contact rows. Standing is not its own term:
-    // the body marks are planted upright and then frozen, and a penalised part on the floor
-    // pays its contact row. Hands and feet are not penalised.
+    wideWeight: 0.5, // Extra copy of a ride target's position row, on wideSpanMeters. Feet do not get one.
+    wideSpanMeters: 1.5, // Span of that copy. The tight span has already flattened by the time a fall reaches this.
+    upright: 1, // Half torso angle, half head height. +this standing, near 0 when flat.
+    // The score is the target rows, the upright row, and four contact rows. The body marks
+    // are planted upright and then frozen, and a penalised part on the floor pays its contact
+    // row. Hands and feet are not penalised.
     targetMean: 1, // Global scale. 1 leaves the rows as they are.
     startHoldShare: 0.5, // Fraction of a drop from the opening window that is charged. A gain is free.
   },
