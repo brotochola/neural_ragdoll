@@ -32,6 +32,7 @@ const options = {
   steps: [],
   boxes: [],
   place: null,
+  crouchKnee: 0,
 };
 
 function readOptions(f32, cursor) {
@@ -111,6 +112,7 @@ function readOptions(f32, cursor) {
       target.ca = c;
     }
   }
+  options.crouchKnee = f32[plan++] || 0;
 }
 
 postMessage("ready");

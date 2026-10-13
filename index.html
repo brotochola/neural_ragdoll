@@ -88,7 +88,7 @@
           </label>
           <label class="ctrl" title="Draws the start pose the search is scoring, behind the marks you place."><input id="showTrainPose" type="checkbox"> Show training pose</label>
           <button id="restart" title="Throws away this session, including saved networks, and starts from random weights.">Restart from scratch</button>
-          <button id="randomWeights" title="Replaces the parent with random weights at the scale of a trained network and shows that network. Training continues from it.">Random weights</button>
+          <button id="randomWeights" title="Asks for a scale, throws away the saved network, and starts a new parent. 0–1 is a normal draw. 10 saturates every unit.">Random weights</button>
           <label class="ctrl" title="In Train mode this mark is scored. In Sandbox it only scores the doll on screen."><input id="trainHead" type="checkbox" checked> Head</label>
           <label class="ctrl" title="In Train mode both foot marks are scored. In Sandbox they only score the doll on screen."><input id="trainFeet" type="checkbox"> Feet</label>
           <label class="ctrl" title="In Train mode both hand marks are scored. In Sandbox they only score the doll on screen."><input id="trainHands" type="checkbox"> Hands</label>
@@ -125,7 +125,7 @@
       <strong id="graphTitle">Network</strong>
       <button id="graphClose" type="button">Close</button>
     </div>
-    <p id="graphSentence">Every unit and every connection is shown; brightness is this decision.</p>
+    <p id="graphSentence">Every unit and every connection is shown; opacity is how strong that connection is on this decision.</p>
     <p id="graphMissing"></p>
     <canvas id="graphCanvas"></canvas>
     <div id="netlist"></div>

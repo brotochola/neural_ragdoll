@@ -228,6 +228,7 @@ export const config = {
   // spring pulls each joint back to the pose it was built in. The speed motor still runs.
   joint: {
     hertz: 20,
+    kneeHertz: 6, // Softer than the rest. 20 Hz held the knee straight against the motor, so a step never left the ground.
     dampingRatio: 0.7,
   },
   contact: {
@@ -250,7 +251,7 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 13,
+    version: 14,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
@@ -353,7 +354,13 @@ export const config = {
     targetReachRadians: 0.15, // And inside this angle error. A third of the average command.
     residualSearch: false, // At skill 2 and up, search the small residual leg net and leave the main one frozen. Off means the main net, the one that reads the target columns, keeps training and a loaded residual stays a frozen leg prior.
     scriptedLegs: false, // The hand written gait in sim.applyScriptedGait overwrites hip, knee, and ankle on its own clock. It cannot obey a foot command, so the command ladder runs without it. Turn it on again for a pure locomotion skill.
-    cmdFootMeters: 0.22, // A foot command: half range of the step the foot is asked to take, in meters. Feet are commanded in world axes, they live on the floor.
+    cmdFootMeters: 0.1, // A foot command: half range of the step the foot is asked to take, in meters. Feet are commanded in world axes, they live on the floor.
+    oneFoot: true, // Only one foot is asked to step. The other mark stays under that foot.
+    swingContact: 0.15, // Below this, a foot is in the air. Its Y row and close Y are zero while the other foot is planted and the torso is up.
+    stanceContact: 0.3, // The supporting foot has to be at least this pressed, or both-feet-off still pays Y.
+    swingTorsoCos: 0.5, // And the torso has to still be up. A fall does not count as a swing.
+    crouchChance: 0.35, // Training foot episodes that start with both knees bent. The held-out eval does not.
+    crouchKneeRadians: 0.4, // That bend, at hip and knee. Negative of this is inside the knee limit.
     walkSteps: 3, // Assisted-walk pass: this many steps, then still standing.
     planSteps: 4, // Steps offered in one walk or box episode. The wire format stores this many slots.
     boxHeightMeters: 0.04, // Full height of a floor box. A flat foot has to lift over it.
@@ -374,6 +381,7 @@ export const config = {
     // there was still a bug: net.js tell() ranked EVERY child, and the promotion guard only
     // looked at eliteScore, so a child of the anchor could become the parent. The guard now
     // also requires the child to come from the parent.
+    bestGenPairs: 1, // Extra pairs copied from last generation's best child, small noise. Re-scored; not the parent.
     bestEverAdoptMargin: 0.25, // During a plateau, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. Scouts never become the parent.
     stagnationMutateCap: 0.2, // Share of pairs that receive the large noise once a plateau starts. 0 keeps every pair on the small noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
@@ -387,10 +395,10 @@ export const config = {
     adamBeta1: 0.9, // Adam first-moment decay.
     adamBeta2: 0.999, // Adam second-moment decay.
     adamEpsilon: 1e-8, // Added under the Adam denominator.
-    hiddenInitScale: 0.12, // Fresh hidden weights are a gaussian times this.
-    outputInitScale: 0.04, // Fresh joint-output weights are a gaussian times this.
-    randomHiddenScale: 0.26, // Random-weights button. Gaussian scale of a trained hidden block.
-    randomOutputScale: 0.22, // Random-weights button. Gaussian scale of a trained joint-output block.
+    hiddenInitScale: 10.12, // Fresh hidden weights are a gaussian times this.
+    outputInitScale: 10.04, // Fresh joint-output weights are a gaussian times this.
+    randomHiddenScale: 11, //0.26, // Random-weights button. Gaussian scale of a trained hidden block.
+    randomOutputScale: 11.22, // Random-weights button. Gaussian scale of a trained joint-output block.
     // How close to the marker a child must be before it can become the parent. Required only
     // in situations that HAVE a marker (walk, box, ball): it has to have actually arrived.
     // This used to be -1, which is less than every distance, so (gap ?? 9) < -1 was always

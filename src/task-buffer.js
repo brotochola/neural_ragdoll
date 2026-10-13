@@ -9,8 +9,8 @@ export const HEADER = 3;
 // (index, meters, turn). config.skill.planSteps is 4. A longer plan keeps the first four.
 export const STEP_SLOTS = 4;
 export const BOX_SLOTS = 4;
-// command index, stance, then cx/cy/ca for each of the five marks.
-export const COMMAND_FLOATS = 2 + 5 * 3;
+// command index, stance, then cx/cy/ca for each of the five marks, then crouchKnee.
+export const COMMAND_FLOATS = 2 + 5 * 3 + 1;
 export const TASK_HEADER = 17 + 20 + 2 + STEP_SLOTS * 4 + 1 + BOX_SLOTS * 4 + 3 + COMMAND_FLOATS;
 export const RESULT_STRIDE = 8;
 
@@ -102,6 +102,7 @@ export function writeTasks(buffer, tasks, weightCount) {
         f32[plan++] = target.ca || 0;
       }
     }
+    f32[plan++] = options.crouchKnee || 0;
     f32.set(task.weights, cursor + TASK_HEADER);
     cursor += TASK_HEADER + weightCount;
   }

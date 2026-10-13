@@ -353,6 +353,16 @@ function fillWalk(out, list, randomSource, boxes) {
   left.turn = firstRight ? 0 : steps[0].turn;
 }
 
+function maybeCrouch(out, mode, randomSource, wantsFoot) {
+  if (!wantsFoot) return;
+  if (mode && mode.eval) return;
+  if (mode && mode.full && !(mode.seconds > 0)) return;
+  if (!(config.skill.crouchChance > 0) || randomSource() >= config.skill.crouchChance)
+    return;
+  out.crouchKnee = config.skill.crouchKneeRadians;
+  out.settle = Math.max(out.settle || 0, 1);
+}
+
 export function fillTrainingStart(out, randomSource, mode) {
   const level = mode && mode.level ? mode.level | 0 : config.skill.level | 0;
   const full = !!(mode && mode.full);
@@ -374,6 +384,7 @@ export function fillTrainingStart(out, randomSource, mode) {
   out.pose = "up";
   out.failOnHead = true;
   out.settle = 0;
+  out.crouchKnee = 0;
   out.ballFrame = null;
   out.goalX = null;
   out.skill = level;
@@ -421,6 +432,11 @@ export function fillTrainingStart(out, randomSource, mode) {
       target.cy = 0;
       target.ca = target.angle;
     }
+    let footOn = false;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].on && !config.targets[i].ride) footOn = true;
+    }
+    maybeCrouch(out, mode, randomSource, footOn);
     return out;
   }
   out.placed = false;
@@ -438,6 +454,11 @@ export function fillTrainingStart(out, randomSource, mode) {
   for (let i = 0; i < list.length; i++) {
     const target = list[i];
     const spec = config.targets[i];
+    if (commands === "foot" && spec.ride) {
+      target.on = false;
+      target.gain = 0;
+      continue;
+    }
     const order = sampleCommandFor(spec, commands, randomSource);
     target.on = true;
     target.cx = order.x;
@@ -453,12 +474,27 @@ export function fillTrainingStart(out, randomSource, mode) {
   // feet stay at the neutral stance and the command is in charge. Otherwise the place
   // stance (0.32 m) leaks into the head and hand levels.
   if (asksFoot) {
+    const feet = [];
     for (let i = 0; i < list.length; i++) {
-      const spec = config.targets[i];
-      if (spec.ride) continue;
-      list[i].dx = signed(randomSource, config.skill.cmdFootMeters);
-      list[i].turn = 0;
+      if (!config.targets[i].ride) feet.push(i);
     }
+    const swing =
+      config.skill.oneFoot && feet.length
+        ? feet[(randomSource() * feet.length) | 0]
+        : -1;
+    const cap = config.skill.cmdFootMeters;
+    const floor = Math.min(cap, (config.skill.footReachMeters || 0) + 0.02);
+    for (let i = 0; i < feet.length; i++) {
+      const slot = feet[i];
+      if (swing >= 0 && slot !== swing) {
+        list[slot].dx = 0;
+      } else {
+        const mag = floor + randomSource() * Math.max(0, cap - floor);
+        list[slot].dx = (randomSource() < 0.5 ? -1 : 1) * mag;
+      }
+      list[slot].turn = 0;
+    }
+    maybeCrouch(out, mode, randomSource, true);
   } else if (config.skill.scriptedLegs && level === 2) {
     const scale = full
       ? 1
@@ -695,7 +731,9 @@ function stampTrainTargets(measure, options) {
       const spec = config.targets[i];
       if (!target || !target.on) continue;
       target.span = spec.spanCmd || spec.span;
-      target.gain = targetGain(spec.id) * (spec.gainCmd || 1);
+      // gainCmd is for the ladder, when that part is the task. Placed marks keep the
+      // manual gain: a head left on while training a step must not be worth 3.
+      target.gain = targetGain(spec.id);
     }
     return;
   }
@@ -709,6 +747,11 @@ function stampTrainTargets(measure, options) {
     const asked =
       commandedGroup(groups) === "all" || commandedGroup(groups) === group;
     if (spec.ride) {
+      if (commandedGroup(groups) === "foot") {
+        target.on = false;
+        target.gain = 0;
+        continue;
+      }
       // Span and gain depend on whether this part is being commanded: generous when it only
       // has to be roughly there, tight when it has to obey.
       target.span = asked ? spec.spanCmd || spec.span : spec.span;
@@ -1013,44 +1056,86 @@ export function createSim(box) {
     return { amount: amount > 1 ? 1 : amount, impulse };
   }
 
-  function resetPose(world, tilt, drop, options) {
+  function layoutStartPose(world, tilt, drop, options) {
     const cosine = Math.cos(tilt);
     const sine = Math.sin(tilt);
     const parts = world.parts;
     const count = parts.length;
     let lowest = Infinity;
-    const shiftX = options.shiftX || 0;
+    const shiftX = (options && options.shiftX) || 0;
     // Stance width is applied to the POSE, not the mark. See fillTrainingStart: that gap
     // used to be invented on the target dx, which leaked in as a step command.
-    const stance = options.stance || 0;
+    const stance = (options && options.stance) || 0;
+    const crouch = (options && options.crouchKnee) || 0;
     const footRight = config.partIndex.footRight;
     const footLeft = config.partIndex.footLeft;
+    const thighLeft = config.partIndex.thighLeft;
+    const thighRight = config.partIndex.thighRight;
+    const shinLeft = config.partIndex.shinLeft;
+    const shinRight = config.partIndex.shinRight;
+    const hipY = config.body.hipMeters;
+    const kneeY0 = 0.52;
     for (let i = 0; i < count; i++) {
       const part = parts[i];
       let slot = placed[i];
       if (!slot) {
-        slot = { part: null, x: 0, y: 0 };
+        slot = { part: null, x: 0, y: 0, extra: 0 };
         placed[i] = slot;
       }
       let localX = part.cx;
+      let localY = part.cy;
+      let extra = 0;
       if (i === footRight) localX = stance || part.cx;
       else if (i === footLeft) localX = -(stance || part.cx);
-      const x = cosine * localX - sine * (part.cy - 0.04) + shiftX;
-      const y = 0.04 + drop + sine * part.cx + cosine * (part.cy - 0.04);
+      if (crouch > 0) {
+        const leg =
+          i === thighLeft ||
+          i === shinLeft ||
+          i === footLeft ||
+          i === thighRight ||
+          i === shinRight ||
+          i === footRight;
+        if (leg) {
+          const phi = crouch;
+          const c = Math.cos(phi);
+          const s = Math.sin(phi);
+          if (i === thighLeft || i === thighRight) {
+            const dx = localX;
+            const dy = localY - hipY;
+            localX = c * dx - s * dy;
+            localY = hipY + s * dx + c * dy;
+            extra = phi;
+          } else {
+            const newKneeX = (hipY - kneeY0) * s;
+            const newKneeY = hipY - (hipY - kneeY0) * c;
+            localX = newKneeX + localX;
+            localY = newKneeY + (localY - kneeY0);
+          }
+        }
+      }
+      const x = cosine * localX - sine * (localY - 0.04) + shiftX;
+      const y = 0.04 + drop + sine * localX + cosine * (localY - 0.04);
       slot.part = part;
       slot.x = x;
       slot.y = y;
+      slot.extra = extra;
       world.support(part, -sine, -cosine);
       lowest = Math.min(lowest, y + sine * world.skinX + cosine * world.skinY);
     }
     const lift = Math.max(0, 0.05 - lowest);
+    for (let i = 0; i < count; i++) placed[i].y += lift;
+  }
+
+  function resetPose(world, tilt, drop, options) {
+    layoutStartPose(world, tilt, drop, options);
+    const count = world.parts.length;
     for (let i = 0; i < count; i++) {
       const slot = placed[i];
       const part = slot.part;
       b2Body_SetTransform(
         part.id,
-        partPose(part, slot.x, slot.y + lift),
-        partRot(part, tilt),
+        partPose(part, slot.x, slot.y),
+        partRot(part, tilt + (slot.extra || 0)),
       );
       b2Body_SetLinearVelocity(part.id, partVel(part));
       b2Body_SetAngularVelocity(part.id, 0);
@@ -2516,31 +2601,16 @@ export function createSim(box) {
   function previewStart(world, options) {
     const tilt = (options && options.tilt) || 0;
     const drop = (options && options.drop) || 0;
-    const cosine = Math.cos(tilt);
-    const sine = Math.sin(tilt);
-    const parts = world.parts;
-    const count = parts.length;
+    layoutStartPose(world, tilt, drop, options);
+    const count = world.parts.length;
     const x = new Float32Array(count);
     const y = new Float32Array(count);
-    let lowest = Infinity;
-    const shiftX = (options && options.shiftX) || 0;
-    const stance = (options && options.stance) || 0;
-    const footRight = config.partIndex.footRight;
-    const footLeft = config.partIndex.footLeft;
+    const poseA = [];
     for (let i = 0; i < count; i++) {
-      const part = parts[i];
-      let localX = part.cx;
-      if (i === footRight) localX = stance || part.cx;
-      else if (i === footLeft) localX = -(stance || part.cx);
-      const px = cosine * localX - sine * (part.cy - 0.04) + shiftX;
-      const py = 0.04 + drop + sine * part.cx + cosine * (part.cy - 0.04);
-      x[i] = px;
-      y[i] = py;
-      world.support(part, -sine, -cosine);
-      lowest = Math.min(lowest, py + sine * world.skinX + cosine * world.skinY);
+      x[i] = placed[i].x;
+      y[i] = placed[i].y;
+      poseA.push(tilt + (placed[i].extra || 0));
     }
-    const lift = Math.max(0, 0.05 - lowest);
-    for (let i = 0; i < count; i++) y[i] += lift;
     const source = (options && options.targets) || [];
     const targets = [];
     for (let i = 0; i < config.targets.length; i++) {
@@ -2582,7 +2652,7 @@ export function createSim(box) {
       poseX.push(x[i]);
       poseY.push(y[i]);
     }
-    return { x: poseX, y: poseY, angle: tilt, marks };
+    return { x: poseX, y: poseY, angle: poseA, marks };
   }
 
   return {

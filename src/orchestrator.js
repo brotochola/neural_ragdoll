@@ -12,6 +12,8 @@ let paused = true;
 let epoch = 0;
 let phase = config.curriculum.phase;
 let trainSpec = null;
+let trainSpecKey = "";
+let forgottenKey = "";
 let state = null;
 const slots = [];
 const scorePool = [];
@@ -47,8 +49,53 @@ function snapshotStart(options) {
     failOnHead: !!options.failOnHead,
     commands: options.commands || "",
     placed: !!options.placed,
+    crouchKnee: options.crouchKnee || 0,
     targets,
   };
+}
+
+function trainFingerprint(spec) {
+  if (!spec || !Array.isArray(spec.targets)) return "";
+  const parts = [];
+  for (let i = 0; i < spec.targets.length; i++) {
+    const mark = spec.targets[i] || {};
+    parts.push(
+      (mark.on ? 1 : 0) +
+        "," +
+        (mark.x || 0) +
+        "," +
+        (mark.y || 0) +
+        "," +
+        (mark.angle || 0),
+    );
+  }
+  parts.push(+spec.jitter || 0);
+  parts.push(spec.randomStart !== false ? 1 : 0);
+  return parts.join("|");
+}
+
+function readTrainSpec(data) {
+  return {
+    targets: Array.isArray(data.targets) ? data.targets : [],
+    jitter: +data.jitter || 0,
+    randomStart: data.randomStart !== false,
+  };
+}
+
+function applyTrainSpec(next) {
+  const key = trainFingerprint(next);
+  const changed = trainSpecKey !== "" && key !== trainSpecKey;
+  trainSpec = next;
+  trainSpecKey = key;
+  return changed;
+}
+
+function forgetIfNeeded(changed) {
+  if (!state || trainSpecKey === "") return;
+  if (changed || forgottenKey === trainSpecKey) {
+    state.forgetRecords();
+    forgottenKey = trainSpecKey;
+  }
 }
 
 function browserMode(search) {
@@ -237,11 +284,7 @@ onmessage = (event) => {
   if (!data) return;
   if (data.type === "pause") { paused = !!data.paused; return; }
   if (data.type === "targets") {
-    trainSpec = {
-      targets: Array.isArray(data.targets) ? data.targets : [],
-      jitter: +data.jitter || 0,
-      randomStart: data.randomStart !== false,
-    };
+    forgetIfNeeded(applyTrainSpec(readTrainSpec(data)));
     return;
   }
   if (data.type === "skill") {
@@ -267,14 +310,10 @@ onmessage = (event) => {
     phase = data.phase;
     setTrainingPhase(phase);
     if (data.search) applySearchNumbers(data.search);
-    if (Array.isArray(data.targets)) {
-      trainSpec = {
-        targets: data.targets,
-        jitter: +data.jitter || 0,
-        randomStart: data.randomStart !== false,
-      };
-    }
+    let marksChanged = false;
+    if (Array.isArray(data.targets)) marksChanged = applyTrainSpec(readTrainSpec(data));
     state = adopt(data.state);
+    forgetIfNeeded(marksChanged);
   }
 };
 
@@ -295,6 +334,7 @@ ready.then(async () => {
     try {
       const report = await oneGeneration(search, runEpoch);
       if (runEpoch !== epoch || search !== state) continue;
+      forgottenKey = "";
       const transfer = report.transfer;
       report.transfer = undefined;
       postMessage(report, transfer);

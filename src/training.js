@@ -27,7 +27,7 @@ export function trainingMode(level, gen, shiftMeters) {
 
 // Held-out eval: the whole episode, no duration ramp.
 export function evalMode(level) {
-  return { full: true, level: level | 0 };
+  return { eval: true, full: true, level: level | 0 };
 }
 
 export function generationPairs() {

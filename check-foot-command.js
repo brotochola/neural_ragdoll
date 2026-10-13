@@ -61,7 +61,7 @@ console.log('');
 console.log('semilla   orden     y0      deriva   |   err_x    err_y    err');
 console.log('');
 
-const sum = { orden: 0, y0: 0, drift: 0, ex: 0, ey: 0, err: 0, stood: 0 };
+const sum = { orden: 0, y0: 0, drift: 0, ex: 0, ey: 0, err: 0, stood: 0, commanded: 0 };
 for (let i = 1; i <= N; i++) {
   const start = sim.fillTrainingStart({}, makeSeededRandom(config.eval.seed + LEVEL * 10007 + i * 17), {
     full: true,
@@ -86,6 +86,7 @@ for (let i = 1; i <= N; i++) {
   sum.ey += Math.abs(errY);
   sum.err += err;
   if (episode.stats.stoodUp) sum.stood++;
+  if (orden > 0) sum.commanded++;
   console.log(
     String(i).padStart(7) + orden.toFixed(3).padStart(9) + y0.toFixed(3).padStart(9) +
     drift.toFixed(3).padStart(9) + '   |' + errX.toFixed(3).padStart(9) +
@@ -101,6 +102,8 @@ console.log('promedio            |   err_x ' + mean('ex').toFixed(3) + '    err_
   '    err ' + mean('err').toFixed(3));
 console.log('orden ' + mean('orden').toFixed(3) + '   desvio del piso al plantar ' + mean('y0').toFixed(3) +
   '   deriva del cuerpo ' + mean('drift').toFixed(3) + '   episodes parado ' + sum.stood + '/' + N);
+if (config.skill.oneFoot)
+  console.log('oneFoot: el pie derecho tenia orden en ' + sum.commanded + '/' + N + ' (el otro pie se queda)');
 console.log('');
 
 // El diagnostico: el error tiene que ser explicable por la orden y por la deriva del cuerpo.

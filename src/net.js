@@ -278,6 +278,7 @@ export class EvolutionSearch {
       fraction: 0,
       pairBoosts: this.pairBoosts,
       anchorPairs: 0,
+      carryPairs: 0,
       sigmaQuiet: this.sigmaQuiet,
       sigmaHot: this.sigmaHot,
     };
@@ -319,6 +320,15 @@ export class EvolutionSearch {
     this.k = 0;
   }
 
+  // The bars belong to the previous task. Weights stay. Used when Train marks move.
+  forgetRecords() {
+    this.eliteScore = -1e9;
+    this.bestEverScore = -1e9;
+    this.bestSmooth = null;
+    this.flatGens = 0;
+    this.hist.length = 0;
+  }
+
   // Extra pairs copied from Best ever. Zero until the record exists and the vector matches.
   anchorPairCount() {
     const pairs = search.bestEverPairs | 0;
@@ -326,6 +336,15 @@ export class EvolutionSearch {
     const score = this.bestEverScore;
     if (!(Number.isFinite(score) && score > -1e8)) return 0;
     if (!this.bestEverTheta || this.bestEverTheta.length !== this.theta.length) return 0;
+    return pairs;
+  }
+
+  // Last generation's best child, re-measured. Zero until tell() has written a real score.
+  carryPairCount() {
+    const pairs = search.bestGenPairs | 0;
+    if (!(pairs > 0)) return 0;
+    if (!(Number.isFinite(this.bestGenScore) && this.bestGenScore > -1e8)) return 0;
+    if (!this.bestGenTheta || this.bestGenTheta.length !== this.theta.length) return 0;
     return pairs;
   }
 
@@ -357,7 +376,8 @@ export class EvolutionSearch {
     this.mutationFraction = fraction;
     const hot = fraction > 0 ? Math.min(count, Math.max(1, Math.round(count * fraction))) : 0;
     const anchor = this.anchorPairCount();
-    const pairTotal = count + anchor;
+    const carry = this.carryPairCount();
+    const pairTotal = count + anchor + carry;
     this.growFloat(this.noiseStore, pairTotal, length);
     this.growFloat(this.childStore, pairTotal * 2, length);
     this.fillSigma(this.sigmaQuiet, scale, 1);
@@ -378,6 +398,12 @@ export class EvolutionSearch {
       this.pairBoosts[pairIndex] = 1;
       this.writePair(pairIndex, anchorParent, this.sigmaQuiet, randomNormal);
     }
+    const carryParent = this.bestGenTheta;
+    for (let individual = 0; individual < carry; individual++) {
+      const pairIndex = count + anchor + individual;
+      this.pairBoosts[pairIndex] = 1;
+      this.writePair(pairIndex, carryParent, this.sigmaQuiet, randomNormal);
+    }
     const generation = this.generation;
     generation.situation = situation;
     generation.count = count;
@@ -385,6 +411,7 @@ export class EvolutionSearch {
     generation.boost = boost;
     generation.fraction = fraction;
     generation.anchorPairs = anchor;
+    generation.carryPairs = carry;
     return generation;
   }
 

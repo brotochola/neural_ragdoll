@@ -129,6 +129,23 @@ function footTarget(id) {
   return id === "footR" || id === "footL";
 }
 
+function footContactOf(measure, id) {
+  const feet = measure && measure.footContact;
+  if (!feet) return 1;
+  const value = id === "footR" ? feet[1] : id === "footL" ? feet[0] : 1;
+  return value || 0;
+}
+
+// A step in the air: this foot is off, the other is planted, and the torso is still up.
+// Then Y and close Y stay at zero. Both feet off, or a fall, still pays Y.
+function isFootSwing(measure, spec) {
+  if (!spec || !footTarget(spec.id)) return false;
+  const other = spec.id === "footR" ? "footL" : "footR";
+  return footContactOf(measure, spec.id) < config.skill.swingContact
+    && footContactOf(measure, other) > config.skill.stanceContact
+    && (measure.torsoCos || 0) > config.skill.swingTorsoCos;
+}
+
 // Position row: +weight on the mark, -weight at infinity, and never a plateau.
 //
 // It used to be linear (1 - 2r) and it flattened at -weight past one span. A fall is about
@@ -216,11 +233,12 @@ function writeRewardRows(measure, writeRows) {
       const dy = (target.y || 0) - ((measure.partY && measure.partY[index]) || 0);
       const positionWeight = targetPositionWeight(spec);
       xRow = gain * axisPosition(spec, target, dx);
-      yRow = gain * axisPosition(spec, target, dy);
+      const swing = isFootSwing(measure, spec);
+      yRow = swing ? 0 : gain * axisPosition(spec, target, dy);
       const partCos = measure.partCos && measure.partCos[index];
       rotation = gain * weight.targetRotation * angleErrorCos(target.angle, (measure.partSin && measure.partSin[index]) || 0, partCos == null ? 1 : partCos);
       closeX = gain * axisClose(measure, i, false, Math.abs(dx));
-      closeY = gain * axisClose(measure, i, true, Math.abs(dy));
+      closeY = swing ? 0 : gain * axisClose(measure, i, true, Math.abs(dy));
       ceiling += gain * (2 * positionWeight * (spec.ride ? 1 + weight.wideWeight : 1) + weight.targetRotation);
     }
     if (writeRows) {
@@ -272,7 +290,7 @@ export function scoreByTarget(measure) {
     if (!target || !target.on || !targetGain(spec.id, target)) continue;
     const dx = (target.x || 0) - ((measure.partX && measure.partX[index]) || 0);
     const dy = (target.y || 0) - ((measure.partY && measure.partY[index]) || 0);
-    row.position = axisPosition(spec, target, dx) + axisPosition(spec, target, dy);
+    row.position = axisPosition(spec, target, dx) + (isFootSwing(measure, spec) ? 0 : axisPosition(spec, target, dy));
     const partCos = measure.partCos && measure.partCos[index];
     row.rotation = weight.targetRotation * angleErrorCos(target.angle, (measure.partSin && measure.partSin[index]) || 0, partCos == null ? 1 : partCos);
   }
@@ -298,7 +316,10 @@ export function rememberAxisErrors(measure) {
       continue;
     }
     measure.prevAbsX[i] = Math.abs((target.x || 0) - (measure.partX[index] || 0));
-    measure.prevAbsY[i] = Math.abs((target.y || 0) - (measure.partY[index] || 0));
+    // A swing does not leave a Y error for the landing sample to charge.
+    measure.prevAbsY[i] = isFootSwing(measure, spec)
+      ? NaN
+      : Math.abs((target.y || 0) - (measure.partY[index] || 0));
   }
 }
 

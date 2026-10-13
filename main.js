@@ -236,31 +236,37 @@ export class NeuralRagDollWorld {
       this.logEvent("JSON load succeeded");
     };
     this.$("randomWeights").onclick = () => {
-      const keptGen = this.state.gen;
-      const keptHist = this.state.hist;
+      const raw = window.prompt(
+        "This throws away the saved network and starts over.\nRandom scale (0–1 is normal, 10 is extreme):",
+        "1",
+      );
+      if (raw == null) return;
+      const scale = +raw;
+      if (!Number.isFinite(scale) || scale < 0) return;
       this.state = new EvolutionSearch(this.randomNormal);
       const outputBase = ElmanNetwork.layout.outputBase;
       for (let i = 0; i < outputBase; i++)
-        this.state.theta[i] =
-          this.randomNormal() * config.search.randomHiddenScale;
+        this.state.theta[i] = this.randomNormal() * scale;
       for (let i = outputBase; i < this.state.theta.length; i++)
-        this.state.theta[i] =
-          this.randomNormal() * config.search.randomOutputScale;
+        this.state.theta[i] = this.randomNormal() * scale;
       this.state.bestGenTheta = this.state.theta.slice();
       this.state.bestEverTheta = this.state.theta.slice();
-      this.state.gen = keptGen;
-      this.state.hist = keptHist;
       this.state.snapshots = [];
       this.backedBestScore = this.state.bestEverScore ?? -1e9;
       this.visit.parentName = "";
       this.visit.loadedLabel = "";
       this.visit.trained = false;
       this.fillSavedList();
+      this.$("savedNet").value = "";
+      this.$("watchParent").checked = true;
+      this.$("watchGeneration").checked = false;
+      this.$("watchEver").checked = false;
       this.clearSnapshots();
       this.saveSession();
       this.pushSearch();
       this.resetEpisode();
-      this.logEvent("random weights");
+      this.paintTraining();
+      this.logEvent("random weights scale " + scale);
     };
     this.$("log").onclick = () => {
       this.paintLog();
@@ -687,6 +693,7 @@ export class NeuralRagDollWorld {
       recordWindow: "How many recent generations are averaged to decide Best ever. The average is of the parent’s children, not of the single best child. A window that is not full yet does not set a record.",
       recordMargin: "The record average must beat the previous Best ever by at least this much. A smaller margin accepts tinier improvements and resets the plateau sooner.",
       bestEverPairs: "Extra pairs copied from Best ever and noised with the small noise. 0 turns them off. They are added on top of the parent’s pairs.",
+      bestGenPairs: "Extra pairs copied from last generation’s best child, with the small noise. They are scored again. They do not become the parent. 0 turns them off.",
       bestEverAdoptMargin: "During Stagnation, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. A scout never becomes the parent.",
       stagnationMutateCap: "Share of the parent’s pairs that get the large noise once Stagnation starts, and when you press Scout once. 0.2 is one pair in five. 0 keeps every pair on the small noise, except Scout once still scouts one pair.",
       limbExplorationScale: "Noise on the shoulder, elbow, hip, knee, and ankle outputs. The waist, neck, and wrists use this too while they are in the trainable list.",
@@ -752,7 +759,36 @@ export class NeuralRagDollWorld {
   postTraining() {
     this.trainSaved = true;
     const spec = this.trainSpec();
+    const state = this.state;
+    if (state && this.trainKey !== undefined && this.trainKey !== this.trainFingerprint(spec)) {
+      state.eliteScore = -1e9;
+      state.bestEverScore = -1e9;
+      state.bestSmooth = null;
+      state.flatGens = 0;
+      if (Array.isArray(state.hist)) state.hist.length = 0;
+    }
+    this.trainKey = this.trainFingerprint(spec);
     this.postOrchestrator({ type: "targets", ...spec });
+  }
+
+  trainFingerprint(spec) {
+    const parts = [];
+    const marks = spec.targets || [];
+    for (let i = 0; i < marks.length; i++) {
+      const mark = marks[i] || {};
+      parts.push(
+        (mark.on ? 1 : 0) +
+          "," +
+          (mark.x || 0) +
+          "," +
+          (mark.y || 0) +
+          "," +
+          (mark.angle || 0),
+      );
+    }
+    parts.push(+spec.jitter || 0);
+    parts.push(spec.randomStart !== false ? 1 : 0);
+    return parts.join("|");
   }
 
   trainSpec() {
@@ -1490,7 +1526,10 @@ export class NeuralRagDollWorld {
         ghost.visible = false;
         continue;
       }
-      this.placeGhost(ghost, preview.x[i], preview.y[i], preview.angle, parts[i]);
+      const partAngle = Array.isArray(preview.angle)
+        ? preview.angle[i]
+        : preview.angle;
+      this.placeGhost(ghost, preview.x[i], preview.y[i], partAngle, parts[i]);
       ghost.alpha = 0.22;
     }
     for (let i = 0; i < this.previewMarks.length; i++) {
@@ -1966,11 +2005,18 @@ export class NeuralRagDollWorld {
     this.arcSelf = new Uint8Array(arcCount);
   }
 
-  graphBucket(weight, source) {
-    const drive = Math.min(
-      1,
-      Math.abs(source || 0) * Math.min(1, Math.abs(weight)),
-    );
+  // Faint under 1, full alpha at 1e8. tanh saturates the units, so the log of |w|
+  // is what still separates a huge weight.
+  weightTone(mag) {
+    if (!(mag > 0)) return 0;
+    if (mag <= 1) return mag * 0.28;
+    return 0.28 + 0.72 * Math.min(1, Math.log10(mag) / 8);
+  }
+
+  graphMarks(weight, source) {
+    const mag = Math.abs(weight);
+    const live = Math.max(Math.abs(source || 0), 0.35);
+    const drive = Math.min(1, live * this.weightTone(mag));
     return Math.min(5, (drive * 6) | 0);
   }
 
@@ -1980,7 +2026,7 @@ export class NeuralRagDollWorld {
     this.feedY0[at] = y0;
     this.feedX1[at] = x1;
     this.feedY1[at] = y1;
-    this.feedBucket[at] = this.graphBucket(weight, source);
+    this.feedBucket[at] = this.graphMarks(weight, source);
     this.feedSign[at] = weight >= 0 ? 1 : 0;
     this.feedUsed = at + 1;
   }
@@ -1990,14 +2036,14 @@ export class NeuralRagDollWorld {
     this.arcX[at] = x;
     this.arcY0[at] = y0;
     this.arcY1[at] = y1;
-    this.arcBucket[at] = this.graphBucket(weight, source);
+    this.arcBucket[at] = this.graphMarks(weight, source);
     this.arcSign[at] = weight >= 0 ? 1 : 0;
     this.arcSelf[at] = self ? 1 : 0;
     this.arcUsed = at + 1;
   }
 
   strokeGraph(context) {
-    context.lineWidth = 0.55;
+    context.lineWidth = 1;
     context.setLineDash([]);
     const feedUsed = this.feedUsed;
     for (let bucket = 0; bucket < 6; bucket++) {
@@ -2018,7 +2064,6 @@ export class NeuralRagDollWorld {
       context.strokeStyle = "rgba(255,77,90," + GRAPH_ALPHA[bucket] + ")";
       context.stroke();
     }
-    context.lineWidth = 1;
     context.setLineDash([4, 3]);
     const arcUsed = this.arcUsed;
     for (let bucket = 0; bucket < 6; bucket++) {
@@ -2057,9 +2102,18 @@ export class NeuralRagDollWorld {
   drawNetworkGraph() {
     const canvas = this.$("graphCanvas");
     const missing = this.$("graphMissing");
-    this.$("graphTitle").textContent = this.networkTitle();
     const episode = this.episode;
     const weights = episode && episode.weights;
+    let maxAbs = 0;
+    if (weights) {
+      for (let i = 0; i < weights.length; i++) {
+        const mag = Math.abs(weights[i]);
+        if (mag > maxAbs) maxAbs = mag;
+      }
+    }
+    this.$("graphTitle").textContent =
+      this.networkTitle() +
+      (maxAbs ? "   |w|max " + maxAbs.toExponential(2) : "");
     const layout = ElmanNetwork.layout;
     const context = canvas.getContext("2d");
     if (!weights || weights.length !== ElmanNetwork.weightCount) {

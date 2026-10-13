@@ -1,7 +1,7 @@
 // Chequeos rápidos de la aritmética del premio y de las marcas. Sin Box2D, sin física.
 //   node check-reward.js
 import { config } from './config.js';
-import { scoreTotal, scoreByTarget, markError, onMark, isStanding, targetGain, targetPositionWeight } from './src/reward.js';
+import { scoreTotal, scoreByTarget, scoreDecision, markError, onMark, isStanding, targetGain, targetPositionWeight } from './src/reward.js';
 
 // Un measure falso: parte en (x, y) mirando un ángulo, con su marca en el origen.
 function fakeMeasure(spec, dx, dy, angle, extra) {
@@ -182,6 +182,21 @@ stand.touch[config.partIndex.footRight] = true;
 check('isStanding con los dos pies', isStanding(stand) ? 1 : 0, 1);
 stand.touch[config.partIndex.handLeft] = true;
 check('isStanding con una mano abajo', isStanding(stand) ? 1 : 0, 0);
+
+// Swing: pie derecho en el aire, el izquierdo apoyado, torso arriba. Y y close Y son 0.
+// Los dos en el aire, o el torso caido, siguen cobrando Y.
+const footYRow = config.targets.indexOf(foot) * 5 + 1;
+const axisOnly = (spec, d) => pRow(targetPositionWeight(spec), spec.span, Math.abs(d));
+const swingAir = fakeMeasure(foot, 0.1, 0.2, 0, { footContact: new Float32Array([1, 0]) });
+const swingPlanted = fakeMeasure(foot, 0.1, 0.2, 0, { footContact: new Float32Array([1, 1]) });
+const swingBothOff = fakeMeasure(foot, 0.1, 0.2, 0, { footContact: new Float32Array([0, 0]) });
+const swingDown = fakeMeasure(foot, 0.1, 0.2, 0, { footContact: new Float32Array([1, 0]), torsoCos: 0 });
+check('swing no cobra Y', scoreDecision(swingAir).terms[footYRow].v, 0);
+check('swing cobra solo X', scoreByTarget(swingAir)[config.targets.indexOf(foot)].position, axisOnly(foot, 0.1));
+const yAt20 = axisOnly(foot, 0.2);
+check('plantado cobra Y', scoreDecision(swingPlanted).terms[footYRow].v, yAt20);
+check('los dos pies en el aire cobran Y', scoreDecision(swingBothOff).terms[footYRow].v, yAt20);
+check('torso caido cobra Y', scoreDecision(swingDown).terms[footYRow].v, yAt20);
 
 console.log('');
 console.log(failures ? failures + ' chequeos fallaron' : 'todos los chequeos pasan');
