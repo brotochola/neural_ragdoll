@@ -1394,7 +1394,8 @@ export function createSim(box) {
       network.weights = weights;
       network.hidden.fill(0);
       network.nextHidden.fill(0);
-      if (network.compressed.length) network.compressed.fill(0);
+      const ff = network.ff;
+      for (let layer = 0; layer < ff.length; layer++) ff[layer].fill(0);
       if (network.feedback.length) network.feedback.fill(0);
       network.action.fill(0);
       const rawResidual = this.options.residual;

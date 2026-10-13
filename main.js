@@ -38,6 +38,8 @@ import {
 const QUAD_X = [-1, 1, 1, -1];
 const QUAD_Y = [-1, -1, 1, 1];
 const GRAPH_ALPHA = [0.06, 0.11, 0.18, 0.3, 0.46, 0.7];
+// ponytail: a bundle over this many synapses is not drawn. 8000 still covers the 47×156 layer (7332). A wide last layer is n² arcs per frame; raise this or sample those wires if that layer needs them on screen.
+const GRAPH_WIRE_CAP = 8000;
 
 export class NeuralRagDollWorld {
   constructor() {
@@ -131,7 +133,8 @@ export class NeuralRagDollWorld {
       this.syncTrainBoxes();
       this.paintTargetToggles();
       this.syncEpisodeTargets();
-      if (this.episode) this.episode.passive = !this.trainMode && this.$("passive").checked;
+      if (this.episode)
+        this.episode.passive = !this.trainMode && this.$("passive").checked;
       if (this.trainMode) this.postTraining();
       this.saveUi();
     };
@@ -683,36 +686,66 @@ export class NeuralRagDollWorld {
 
   fillSearchKnobs() {
     const tips = {
-      explorationScale: "Floor of the noise on the weights that read the target columns. The decaying noise never goes below this, so the search keeps trying the five marks even late in a run.",
-      explorationFloor: "Starting size of the target-column noise. It decays with the generation count, and the noise actually used is the larger of that decay and explorationScale.",
-      explorationHalfLifeGenerations: "How many generations it takes for the decaying target noise to fall to half. A smaller number makes the search get quieter faster.",
-      stagnationGenerations: "Generations without a new Best ever before the large noise can start. The Plateau row says Stagnation at this count. One new Best ever subtracts this many generations from the count.",
-      stagnationBoost: "Multiplier on the noise of the scout pairs at the first plateau, and again after each further stretch of stagnationGenerations. Scout once uses this same multiplier.",
-      stagnationBoostCap: "Largest multiplier the plateau is allowed to reach. sigmaCap can stop a weight sooner than this.",
-      sigmaCap: "No single weight is noised by more than this, scout or not. At the plateau cap the scouts sit near a trained weight instead of jumping past it.",
-      recordWindow: "How many recent generations are averaged to decide Best ever. The average is of the parent’s children, not of the single best child. A window that is not full yet does not set a record.",
-      recordMargin: "The record average must beat the previous Best ever by at least this much. A smaller margin accepts tinier improvements and resets the plateau sooner.",
-      bestEverPairs: "Extra pairs copied from Best ever and noised with the small noise. 0 turns them off. They are added on top of the parent’s pairs.",
-      bestGenPairs: "Extra pairs copied from last generation’s best child, with the small noise. They are scored again. They do not become the parent. 0 turns them off.",
-      bestEverAdoptMargin: "During Stagnation, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. A scout never becomes the parent.",
-      stagnationMutateCap: "Share of the parent’s pairs that get the large noise once Stagnation starts, and when you press Scout once. 0.2 is one pair in five. 0 keeps every pair on the small noise, except Scout once still scouts one pair.",
-      limbExplorationScale: "Noise on the shoulder, elbow, hip, knee, and ankle outputs. The waist, neck, and wrists use this too while they are in the trainable list.",
-      skipExplorationScale: "Noise on the shortcut from the target columns straight to the joint outputs. Those weights start at zero. A large value here shakes every joint and the doll stops being able to stand.",
-      bodyExplorationScale: "Noise on the hidden weights. Kept small so balance can shift without rewriting the whole net.",
-      learningRate: "Adam’s step size at generation 0. Each generation moves the parent by about this much in the direction the children ranked. It then decays.",
-      learningRateFloor: "Adam’s step size never falls below this, no matter how many generations have passed.",
-      learningRateHalfLifeGenerations: "How many generations it takes for Adam’s step size to fall to half, down to learningRateFloor.",
-      revertAfterGenerations: "A plateau this long copies Best ever back onto the parent and clears Adam’s memory. 0 leaves the parent where it wandered.",
-      adamBeta1: "How fast Adam forgets the direction of recent steps. Closer to 1 remembers longer. 0.9 is the usual first-moment decay.",
-      adamBeta2: "How fast Adam forgets the size of recent steps. Closer to 1 remembers longer. 0.999 is the usual second-moment decay.",
-      adamEpsilon: "A tiny number added under Adam’s division so a weight that has never moved does not divide by zero.",
-      hiddenInitScale: "Width of the gaussian for a brand new parent's hidden weights. 0 starts them at zero, so the joints hold the standing pose. Restart from scratch uses it. A run that is already going does not.",
-      outputInitScale: "Width of the gaussian for a brand new parent's joint outputs. 0 starts them at zero. A wide value saturates the output and locks each joint at a random stop. Restart from scratch uses it. A run that is already going does not.",
-      randomHiddenScale: "The Random weights button replaces the hidden block with a gaussian of this width, the scale of a trained network rather than a fresh one.",
-      randomOutputScale: "The Random weights button replaces the joint-output block with a gaussian of this width.",
-      goalCloseEnoughMeters: "In a situation that has a marker, a child must be at least this close to it before it can become the parent. The five target levels have no marker, so they ignore this.",
-      eliteMissingGapMeters: "Distance assumed when a score has no marker. It only matters for the marker check, which the target levels skip.",
-      headImpactQuiet: "A stand counts as quiet when the fastest the head was moving downward stays below this, in meters per second.",
+      explorationScale:
+        "Floor of the noise on the weights that read the target columns. The decaying noise never goes below this, so the search keeps trying the five marks even late in a run.",
+      explorationFloor:
+        "Starting size of the target-column noise. It decays with the generation count, and the noise actually used is the larger of that decay and explorationScale.",
+      explorationHalfLifeGenerations:
+        "How many generations it takes for the decaying target noise to fall to half. A smaller number makes the search get quieter faster.",
+      stagnationGenerations:
+        "Generations without a new Best ever before the large noise can start. The Plateau row says Stagnation at this count. One new Best ever subtracts this many generations from the count.",
+      stagnationBoost:
+        "Multiplier on the noise of the scout pairs at the first plateau, and again after each further stretch of stagnationGenerations. Scout once uses this same multiplier.",
+      stagnationBoostCap:
+        "Largest multiplier the plateau is allowed to reach. sigmaCap can stop a weight sooner than this.",
+      sigmaCap:
+        "No single weight is noised by more than this, scout or not. At the plateau cap the scouts sit near a trained weight instead of jumping past it.",
+      recordWindow:
+        "How many recent generations are averaged to decide Best ever. The average is of the parent’s children, not of the single best child. A window that is not full yet does not set a record.",
+      recordMargin:
+        "The record average must beat the previous Best ever by at least this much. A smaller margin accepts tinier improvements and resets the plateau sooner.",
+      bestEverPairs:
+        "Extra pairs copied from Best ever and noised with the small noise. 0 turns them off. They are added on top of the parent’s pairs.",
+      bestGenPairs:
+        "Extra pairs copied from last generation’s best child, with the small noise. They are scored again. They do not become the parent. 0 turns them off.",
+      bestEverAdoptMargin:
+        "During Stagnation, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. A scout never becomes the parent.",
+      stagnationMutateCap:
+        "Share of the parent’s pairs that get the large noise once Stagnation starts, and when you press Scout once. 0.2 is one pair in five. 0 keeps every pair on the small noise, except Scout once still scouts one pair.",
+      limbExplorationScale:
+        "Noise on the shoulder, elbow, hip, knee, and ankle outputs. The waist, neck, and wrists use this too while they are in the trainable list.",
+      skipExplorationScale:
+        "Noise on the shortcut from the target columns straight to the joint outputs. Those weights start at zero. A large value here shakes every joint and the doll stops being able to stand.",
+      bodyExplorationScale:
+        "Noise on the hidden weights. Kept small so balance can shift without rewriting the whole net.",
+      learningRate:
+        "Adam’s step size at generation 0. Each generation moves the parent by about this much in the direction the children ranked. It then decays.",
+      learningRateFloor:
+        "Adam’s step size never falls below this, no matter how many generations have passed.",
+      learningRateHalfLifeGenerations:
+        "How many generations it takes for Adam’s step size to fall to half, down to learningRateFloor.",
+      revertAfterGenerations:
+        "A plateau this long copies Best ever back onto the parent and clears Adam’s memory. 0 leaves the parent where it wandered.",
+      adamBeta1:
+        "How fast Adam forgets the direction of recent steps. Closer to 1 remembers longer. 0.9 is the usual first-moment decay.",
+      adamBeta2:
+        "How fast Adam forgets the size of recent steps. Closer to 1 remembers longer. 0.999 is the usual second-moment decay.",
+      adamEpsilon:
+        "A tiny number added under Adam’s division so a weight that has never moved does not divide by zero.",
+      hiddenInitScale:
+        "Width of the gaussian for a brand new parent's hidden weights. 0 starts them at zero, so the joints hold the standing pose. Restart from scratch uses it. A run that is already going does not.",
+      outputInitScale:
+        "Width of the gaussian for a brand new parent's joint outputs. 0 starts them at zero. A wide value saturates the output and locks each joint at a random stop. Restart from scratch uses it. A run that is already going does not.",
+      randomHiddenScale:
+        "The Random weights button replaces the hidden block with a gaussian of this width, the scale of a trained network rather than a fresh one.",
+      randomOutputScale:
+        "The Random weights button replaces the joint-output block with a gaussian of this width.",
+      goalCloseEnoughMeters:
+        "In a situation that has a marker, a child must be at least this close to it before it can become the parent. The five target levels have no marker, so they ignore this.",
+      eliteMissingGapMeters:
+        "Distance assumed when a score has no marker. It only matters for the marker check, which the target levels skip.",
+      headImpactQuiet:
+        "A stand counts as quiet when the fastest the head was moving downward stays below this, in meters per second.",
     };
     const root = this.$("searchKnobList");
     const search = config.search;
@@ -735,7 +768,10 @@ export class NeuralRagDollWorld {
         if (!Number.isFinite(value)) return;
         applySearchNumbers({ [key]: value });
         try {
-          localStorage.setItem("ragdoll-search", JSON.stringify(this.searchValues()));
+          localStorage.setItem(
+            "ragdoll-search",
+            JSON.stringify(this.searchValues()),
+          );
         } catch (error) {
           /* a quota error still leaves this generation's number in memory */
         }
@@ -760,7 +796,11 @@ export class NeuralRagDollWorld {
     this.trainSaved = true;
     const spec = this.trainSpec();
     const state = this.state;
-    if (state && this.trainKey !== undefined && this.trainKey !== this.trainFingerprint(spec)) {
+    if (
+      state &&
+      this.trainKey !== undefined &&
+      this.trainKey !== this.trainFingerprint(spec)
+    ) {
       state.eliteScore = -1e9;
       state.bestEverScore = -1e9;
       state.bestSmooth = null;
@@ -888,7 +928,8 @@ export class NeuralRagDollWorld {
     state.eliteScore = data.eliteScore;
     const previousMoves = state.parentMoves || 0;
     state.parentMoves = data.parentMoves || 0;
-    state.parentMoveNote = typeof data.parentMoveNote === "string" ? data.parentMoveNote : "";
+    state.parentMoveNote =
+      typeof data.parentMoveNote === "string" ? data.parentMoveNote : "";
     if (state.parentMoves > previousMoves && state.parentMoveNote)
       this.logEvent(state.parentMoveNote);
     if (data.row) {
@@ -898,7 +939,8 @@ export class NeuralRagDollWorld {
     this.sendMs = data.sendMs;
     this.tellMs = data.tellMs;
     this.workerTiming = data.timings || [];
-    if (data.preview) this.trainPreview = this.sim.previewStart(this.world, data.preview);
+    if (data.preview)
+      this.trainPreview = this.sim.previewStart(this.world, data.preview);
     if (data.anchorNote) this.logEvent(data.anchorNote);
     this.visit.trained = true;
     const finished = state.hist[state.hist.length - 1];
@@ -1237,9 +1279,12 @@ export class NeuralRagDollWorld {
     const stagnant = every > 0 && flat >= every;
     this.setStatus(
       6,
-      stagnant ? "Stagnation · " + flat : flat + " / " + (every > 0 ? every : "–"),
+      stagnant
+        ? "Stagnation · " + flat
+        : flat + " / " + (every > 0 ? every : "–"),
     );
-    if (this.statusTips[6]) this.statusTips[6].classList.toggle("stagnant", stagnant);
+    if (this.statusTips[6])
+      this.statusTips[6].classList.toggle("stagnant", stagnant);
     this.setStatus(
       7,
       (this.scoutPending ? "scout next · " : "") +
@@ -1377,14 +1422,13 @@ export class NeuralRagDollWorld {
     config.targets.forEach((spec, index) => {
       const label = document.createElement("label");
       label.className = "ctrl target-toggle";
-      label.title =
-        spec.ride
-          ? "Command for " +
-            spec.id +
-            ". Drag it to tell the doll where you want that part. The mark stays in world coordinates: it goes where you put it and it does NOT follow the torso, so you can see the doll miss it. Its tip sets the angle you want in world terms. In training the mark is planted once and frozen the same way, which is why a fall costs you the head and hand rows."
-          : "Command for " +
-            spec.id +
-            ". Drag it to tell the doll where you want that foot. This one lives on the floor, in world coordinates.";
+      label.title = spec.ride
+        ? "Command for " +
+          spec.id +
+          ". Drag it to tell the doll where you want that part. The mark stays in world coordinates: it goes where you put it and it does NOT follow the torso, so you can see the doll miss it. Its tip sets the angle you want in world terms. In training the mark is planted once and frozen the same way, which is why a fall costs you the head and hand rows."
+        : "Command for " +
+          spec.id +
+          ". Drag it to tell the doll where you want that foot. This one lives on the floor, in world coordinates.";
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = this.markList()[index].on;
@@ -1454,7 +1498,10 @@ export class NeuralRagDollWorld {
       const y = this.toY(target.y);
       const tipX = this.toX(target.x + Math.cos(target.angle) * stick);
       const tipY = this.toY(target.y + Math.sin(target.angle) * stick);
-      this.throws.moveTo(x, y).lineTo(tipX, tipY).stroke({ width: 2, color, alpha: 0.7 });
+      this.throws
+        .moveTo(x, y)
+        .lineTo(tipX, tipY)
+        .stroke({ width: 2, color, alpha: 0.7 });
       this.throws.circle(tipX, tipY, 5).fill(color);
     }
   }
@@ -1484,7 +1531,10 @@ export class NeuralRagDollWorld {
       this.poseGhosts.push(ghost);
     }
     this.markLayer = new PIXI.Container();
-    this.app.stage.addChildAt(this.markLayer, this.app.stage.getChildIndex(this.throws));
+    this.app.stage.addChildAt(
+      this.markLayer,
+      this.app.stage.getChildIndex(this.throws),
+    );
     this.sandboxMarks = [];
     this.previewMarks = [];
     for (let i = 0; i < config.targets.length; i++) {
@@ -1543,7 +1593,13 @@ export class NeuralRagDollWorld {
         sprite.visible = false;
         continue;
       }
-      this.placeGhost(sprite, mark.x, mark.y, mark.angle, parts[config.partIndex[mark.part]]);
+      this.placeGhost(
+        sprite,
+        mark.x,
+        mark.y,
+        mark.angle,
+        parts[config.partIndex[mark.part]],
+      );
       sprite.alpha = 0.5;
     }
   }
@@ -1996,6 +2052,8 @@ export class NeuralRagDollWorld {
     if (
       this.feedX0 &&
       this.feedX0.length >= feedCount &&
+      this.feedCurve &&
+      this.feedCurve.length >= feedCount &&
       this.arcX &&
       this.arcX.length >= arcCount
     )
@@ -2006,6 +2064,7 @@ export class NeuralRagDollWorld {
     this.feedY1 = new Float32Array(feedCount);
     this.feedBucket = new Uint8Array(feedCount);
     this.feedSign = new Uint8Array(feedCount);
+    this.feedCurve = new Uint8Array(feedCount);
     this.arcX = new Float32Array(arcCount);
     this.arcY0 = new Float32Array(arcCount);
     this.arcY1 = new Float32Array(arcCount);
@@ -2029,7 +2088,7 @@ export class NeuralRagDollWorld {
     return Math.min(5, (drive * 6) | 0);
   }
 
-  pushWire(weight, source, x0, y0, x1, y1) {
+  pushWire(weight, source, x0, y0, x1, y1, curve) {
     const at = this.feedUsed;
     this.feedX0[at] = x0;
     this.feedY0[at] = y0;
@@ -2037,6 +2096,7 @@ export class NeuralRagDollWorld {
     this.feedY1[at] = y1;
     this.feedBucket[at] = this.graphMarks(weight, source);
     this.feedSign[at] = weight >= 0 ? 1 : 0;
+    this.feedCurve[at] = curve ? 1 : 0;
     this.feedUsed = at + 1;
   }
 
@@ -2055,20 +2115,30 @@ export class NeuralRagDollWorld {
     context.lineWidth = 1;
     context.setLineDash([]);
     const feedUsed = this.feedUsed;
+    // Input wires share a horizontal departure, so every connection of one input leaves one point.
+    const addFeed = (i) => {
+      const x0 = this.feedX0[i];
+      const y0 = this.feedY0[i];
+      const x1 = this.feedX1[i];
+      const y1 = this.feedY1[i];
+      context.moveTo(x0, y0);
+      if (this.feedCurve[i]) {
+        const dx = (x1 - x0) * 0.45;
+        context.bezierCurveTo(x0 + dx, y0, x1 - dx, y1, x1, y1);
+      } else context.lineTo(x1, y1);
+    };
     for (let bucket = 0; bucket < 6; bucket++) {
       context.beginPath();
       for (let i = 0; i < feedUsed; i++) {
         if (this.feedBucket[i] !== bucket || !this.feedSign[i]) continue;
-        context.moveTo(this.feedX0[i], this.feedY0[i]);
-        context.lineTo(this.feedX1[i], this.feedY1[i]);
+        addFeed(i);
       }
       context.strokeStyle = "rgba(62,207,142," + GRAPH_ALPHA[bucket] + ")";
       context.stroke();
       context.beginPath();
       for (let i = 0; i < feedUsed; i++) {
         if (this.feedBucket[i] !== bucket || this.feedSign[i]) continue;
-        context.moveTo(this.feedX0[i], this.feedY0[i]);
-        context.lineTo(this.feedX1[i], this.feedY1[i]);
+        addFeed(i);
       }
       context.strokeStyle = "rgba(255,77,90," + GRAPH_ALPHA[bucket] + ")";
       context.stroke();
@@ -2132,11 +2202,11 @@ export class NeuralRagDollWorld {
       return;
     }
     missing.textContent = "";
-    const feedforward = layout.feedforward;
+    const ff = layout.ff;
     const recurrent = layout.recurrent;
     const feedbackCount = layout.feedback;
     const inputs = episode.input;
-    const firstAct = episode.network && episode.network.compressed;
+    const ffActs = episode.network && episode.network.ff;
     const feedbackAct = episode.network && episode.network.feedback;
     const feedbackFrom = episode.network && episode.network.feedbackFrom;
     const memoryAct = episode.hidden;
@@ -2179,13 +2249,13 @@ export class NeuralRagDollWorld {
           tag: (i) => this.observationLabel(i).name,
         },
       ];
-      if (feedforward)
+      for (let layer = 0; layer < ff.length; layer++)
         built.push({
-          title: "hidden 1",
-          count: feedforward,
+          title: "hidden " + (layer + 1),
+          count: ff[layer].units,
           radius: 3.5,
           align: "left",
-          tag: (i) => "a" + i,
+          tag: (i) => (ff.length === 1 ? "a" : "h") + i,
         });
       if (feedbackCount)
         built.push({
@@ -2196,11 +2266,11 @@ export class NeuralRagDollWorld {
           tag: (i) => "f" + i,
         });
       built.push({
-        title: feedforward ? "hidden 2" : "recurrent dashed",
+        title: ff.length ? "hidden " + (ff.length + 1) : "recurrent dashed",
         count: recurrent,
-        radius: feedforward ? 3.5 : 5,
+        radius: ff.length ? 3.5 : 5,
         align: "left",
-        tag: (i) => (feedforward ? "b" : "h") + i,
+        tag: (i) => (ff.length === 1 ? "b" : "h") + i,
       });
       built.push({
         title: "",
@@ -2216,7 +2286,8 @@ export class NeuralRagDollWorld {
     columns[0].x = left;
     columns[0].values = inputs;
     let columnCursor = 1;
-    if (feedforward) columns[columnCursor++].values = firstAct;
+    for (let layer = 0; layer < ff.length; layer++)
+      columns[columnCursor++].values = ffActs && ffActs[layer];
     if (feedbackCount) columns[columnCursor++].values = feedbackAct;
     columns[columnCursor++].values = memoryAct;
     columns[columnCursor].x = right;
@@ -2226,38 +2297,54 @@ export class NeuralRagDollWorld {
       columns[i].x = left + ((right - left) * i) / denom;
     const yAt = (column, index) =>
       this.graphSlotY(index, column.count, top, bottom);
-    const inputCount = config.net.inputCount;
-    const feedCount =
-      (feedforward ? feedforward * inputCount : 0) +
-      feedbackCount * joints +
-      recurrent * (feedforward ? feedforward : inputCount) +
-      recurrent * feedbackCount +
-      joints * recurrent;
-    this.ensureGraphBuffers(feedCount, recurrent * recurrent);
+    const recurrentIn = layout.recurrentIn;
+    let feedCount = 0;
+    const countBundle = (count) => {
+      if (count <= GRAPH_WIRE_CAP) feedCount += count;
+    };
+    for (let layer = 0; layer < ff.length; layer++)
+      countBundle(ff[layer].units * ff[layer].in);
+    countBundle(feedbackCount * joints);
+    countBundle(recurrent * recurrentIn);
+    countBundle(recurrent * feedbackCount);
+    countBundle(joints * recurrent);
+    const arcCount = recurrent * recurrent <= GRAPH_WIRE_CAP ? recurrent * recurrent : 0;
+    this.ensureGraphBuffers(feedCount, arcCount);
     this.feedUsed = 0;
     this.arcUsed = 0;
     const inputColumn = columns[0];
     const jointColumn = columns[columns.length - 1];
     const memoryColumn = columns[columns.length - 2];
-    const firstColumn = feedforward ? columns[1] : null;
-    const feedbackColumn = feedbackCount ? columns[feedforward ? 2 : 1] : null;
-    if (feedforward) {
-      for (let unit = 0; unit < feedforward; unit++) {
-        const base = unit * layout.feedforwardStride;
-        const hiddenY = yAt(firstColumn, unit);
-        for (let i = 0; i < config.net.inputCount; i++) {
-          this.pushWire(
-            weights[base + 1 + i],
-            inputs && inputs[i],
-            inputColumn.x,
-            yAt(inputColumn, i),
-            firstColumn.x,
-            hiddenY,
-          );
+    const feedbackColumn = feedbackCount ? columns[1 + ff.length] : null;
+    let prevColumn = inputColumn;
+    let prevValues = inputs;
+    let fromInput = true;
+    for (let layer = 0; layer < ff.length; layer++) {
+      const spec = ff[layer];
+      const column = columns[1 + layer];
+      const acts = ffActs && ffActs[layer];
+      if (spec.units * spec.in <= GRAPH_WIRE_CAP) {
+        for (let unit = 0; unit < spec.units; unit++) {
+          const base = spec.base + unit * spec.stride;
+          const hiddenY = yAt(column, unit);
+          for (let i = 0; i < spec.in; i++) {
+            this.pushWire(
+              weights[base + 1 + i],
+              prevValues && prevValues[i],
+              prevColumn.x,
+              yAt(prevColumn, i),
+              column.x,
+              hiddenY,
+              fromInput,
+            );
+          }
         }
       }
+      prevColumn = column;
+      prevValues = acts;
+      fromInput = false;
     }
-    if (feedbackCount) {
+    if (feedbackCount && feedbackCount * joints <= GRAPH_WIRE_CAP) {
       for (let unit = 0; unit < feedbackCount; unit++) {
         const base = layout.feedbackBase + unit * layout.feedbackStride;
         const feedbackY = yAt(feedbackColumn, unit);
@@ -2273,68 +2360,66 @@ export class NeuralRagDollWorld {
         }
       }
     }
+    const drawRecurrentIn = recurrent * recurrentIn <= GRAPH_WIRE_CAP;
+    const drawRecurrentFeedback = recurrent * feedbackCount <= GRAPH_WIRE_CAP;
+    const drawRecurrentArcs = recurrent * recurrent <= GRAPH_WIRE_CAP;
     for (let unit = 0; unit < recurrent; unit++) {
       const base = layout.recurrentBase + unit * layout.recurrentStride;
       const hiddenY = yAt(memoryColumn, unit);
       let offset = 1;
-      if (feedforward) {
-        for (let i = 0; i < feedforward; i++) {
+      if (drawRecurrentIn) {
+        for (let i = 0; i < recurrentIn; i++) {
           this.pushWire(
             weights[base + offset + i],
-            firstAct && firstAct[i],
-            firstColumn.x,
-            yAt(firstColumn, i),
+            prevValues && prevValues[i],
+            prevColumn.x,
+            yAt(prevColumn, i),
             memoryColumn.x,
             hiddenY,
+            fromInput,
           );
         }
-        offset += feedforward;
-      } else {
-        for (let i = 0; i < config.net.inputCount; i++) {
-          this.pushWire(
-            weights[base + offset + i],
-            inputs && inputs[i],
-            inputColumn.x,
-            yAt(inputColumn, i),
-            memoryColumn.x,
-            hiddenY,
-          );
-        }
-        offset += config.net.inputCount;
       }
-      for (let i = 0; i < feedbackCount; i++) {
-        this.pushWire(
-          weights[base + offset + i],
-          feedbackAct && feedbackAct[i],
-          feedbackColumn.x,
-          yAt(feedbackColumn, i),
-          memoryColumn.x,
-          hiddenY,
-        );
+      offset += recurrentIn;
+      if (drawRecurrentFeedback) {
+        for (let i = 0; i < feedbackCount; i++) {
+          this.pushWire(
+            weights[base + offset + i],
+            feedbackAct && feedbackAct[i],
+            feedbackColumn.x,
+            yAt(feedbackColumn, i),
+            memoryColumn.x,
+            hiddenY,
+          );
+        }
       }
       offset += feedbackCount;
-      for (let other = 0; other < recurrent; other++) {
-        this.pushArc(
-          weights[base + offset + other],
-          memoryAct && memoryAct[other],
-          memoryColumn.x,
-          yAt(memoryColumn, other),
-          hiddenY,
-          other === unit,
-        );
+      if (drawRecurrentArcs) {
+        for (let other = 0; other < recurrent; other++) {
+          this.pushArc(
+            weights[base + offset + other],
+            memoryAct && memoryAct[other],
+            memoryColumn.x,
+            yAt(memoryColumn, other),
+            hiddenY,
+            other === unit,
+          );
+        }
       }
     }
-    for (let joint = 0; joint < joints; joint++) {
-      const base = layout.outputBase + joint * (recurrent + 1);
-      for (let unit = 0; unit < recurrent; unit++) {
-        this.pushWire(
-          weights[base + 1 + unit],
-          memoryAct && memoryAct[unit],
-          memoryColumn.x,
-          yAt(memoryColumn, unit),
-          jointColumn.x,
-          yAt(jointColumn, joint),
-        );
+    if (joints * recurrent <= GRAPH_WIRE_CAP) {
+      for (let joint = 0; joint < joints; joint++) {
+        const base = layout.outputBase + joint * layout.outputStride;
+        for (let unit = 0; unit < recurrent; unit++) {
+          this.pushWire(
+            weights[base + 1 + unit],
+            memoryAct && memoryAct[unit],
+            memoryColumn.x,
+            yAt(memoryColumn, unit),
+            jointColumn.x,
+            yAt(jointColumn, joint),
+          );
+        }
       }
     }
     this.strokeGraph(context);

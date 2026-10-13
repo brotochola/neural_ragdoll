@@ -6,27 +6,49 @@ import { config } from "../config.js";
 const net = config.net;
 const search = config.search;
 
-// Units in one layer. Ratio 0 turns the layer off. Otherwise it is the fraction of the inputs, rounded.
-function unitsFromRatio(ratio) {
-  if (!(ratio > 0)) return 0;
-  return Math.round(net.inputCount * ratio);
+// Positive widths from config.net.hidden. A non-positive entry is dropped. Empty falls back to one unit.
+function hiddenSizes() {
+  const raw = net.hidden;
+  const sizes = [];
+  if (raw && raw.length) {
+    for (let i = 0; i < raw.length; i++) {
+      const count = raw[i] | 0;
+      if (count > 0) sizes.push(count);
+    }
+  }
+  if (!sizes.length) sizes.push(1);
+  return sizes;
 }
 
 function buildLayout() {
   const inputCount = net.inputCount;
-  const first = Math.max(1, unitsFromRatio(net.hidden1Ratio));
-  const second = unitsFromRatio(net.hidden2Ratio);
-  const feedforward = second > 0 ? first : 0;
-  const recurrent = second > 0 ? second : first;
-  const feedback = net.feedbackUnits > 0 ? net.feedbackUnits : 0;
+  const sizes = hiddenSizes();
+  const recurrent = sizes[sizes.length - 1];
+  const ff = [];
+  let cursor = 0;
+  let incoming = inputCount;
+  for (let layer = 0; layer < sizes.length - 1; layer++) {
+    const units = sizes[layer];
+    const stride = 1 + incoming;
+    const block = units * stride;
+    ff.push({ units, in: incoming, stride, base: cursor, block });
+    cursor += block;
+    incoming = units;
+  }
+  // First tanh layer, or 0 when the only hidden layer is the recurrent one. probe-targets.js reads these two.
+  const feedforward = ff.length ? ff[0].units : 0;
   const feedforwardStride = 1 + inputCount;
+  // Weights that multiply the raw observation. Later tanh layers read the layer before them.
+  const inputBlock = ff.length ? ff[0].block : 0;
+  const feedback = net.feedbackUnits > 0 ? net.feedbackUnits : 0;
   const feedbackStride = 1 + net.jointCount;
-  const recurrentStride = 1 + (feedforward || inputCount) + feedback + recurrent;
-  const feedforwardBlock = feedforward * feedforwardStride;
   const feedbackBlock = feedback * feedbackStride;
+  const feedbackBase = cursor;
+  cursor += feedbackBlock;
+  const recurrentIn = ff.length ? ff[ff.length - 1].units : inputCount;
+  const recurrentStride = 1 + recurrentIn + feedback + recurrent;
   const recurrentBlock = recurrent * recurrentStride;
-  const feedbackBase = feedforwardBlock;
-  const recurrentBase = feedforwardBlock + feedbackBlock;
+  const recurrentBase = cursor;
   // Direct path from the target-error columns to each joint's output.
   // Without it, moving the neck to a head command requires the error to survive a
   // compression 99 -> 50 -> 25 and then the output layer has to find it again, all from
@@ -36,16 +58,19 @@ function buildLayout() {
   const outputStride = 1 + recurrent + skip;
   return {
     inputCount,
+    ff,
     feedforward,
     feedback,
     recurrent,
+    recurrentIn,
     skip,
     skipFrom,
     outputStride,
     feedforwardStride,
     feedbackStride,
     recurrentStride,
-    feedforwardBlock,
+    feedforwardBlock: inputBlock,
+    inputBlock,
     feedbackBlock,
     feedbackBase,
     recurrentBase,
@@ -57,7 +82,7 @@ function buildLayout() {
 const layout = buildLayout();
 
 export class ElmanNetwork {
-  // One layer: the first is the Elman, with memory. Two layers: the first compresses with no memory and the second is the only one that remembers.
+  // The last hidden layer is the Elman, with memory. Every layer before it is tanh of the previous layer, with no memory. One hidden layer means that layer is the Elman.
   static get layout() {
     return layout;
   }
@@ -81,28 +106,36 @@ export class ElmanNetwork {
       : new Float32Array(ElmanNetwork.weightCount);
     this.hidden = new Float32Array(layout.recurrent);
     this.nextHidden = new Float32Array(layout.recurrent);
-    this.compressed = new Float32Array(layout.feedforward);
+    this.ff = [];
+    for (let layer = 0; layer < layout.ff.length; layer++)
+      this.ff.push(new Float32Array(layout.ff[layer].units));
+    this.compressed = this.ff.length ? this.ff[0] : new Float32Array(0);
     this.feedback = new Float32Array(layout.feedback);
     this.feedbackFrom = new Float32Array(net.jointCount);
     this.action = new Float32Array(net.jointCount);
   }
 
   // One step forward. Writes the new action and leaves `hidden` at this step's state.
-  // The feedback layer is tanh(bias + weights · previous action), with no memory. It enters only the recurrent layer.
-  // With one layer, each hidden unit is leak * previous + (1 - leak) * tanh(bias + weights · input + weights · feedback + weights · hidden).
-  // With two, the first is tanh(bias + weights · input), with no memory. The second is the Elman.
+  // Each layer before the last is tanh(bias + weights · previous layer), with no memory.
+  // The last layer is leak * previous + (1 - leak) * tanh(bias + weights · incoming + weights · feedback + weights · hidden).
+  // The feedback layer is tanh(bias + weights · previous action), with no memory. It enters only the last layer.
   // Each joint: tanh(bias + weights · new hidden).
   forward(input) {
     const layout = ElmanNetwork.layout;
     const weights = this.weights;
     const leak = net.hiddenLeak;
     let cursor = 0;
-    if (layout.feedforward) {
-      for (let unit = 0; unit < layout.feedforward; unit++) {
+    let incoming = input;
+    const ff = layout.ff;
+    for (let layer = 0; layer < ff.length; layer++) {
+      const spec = ff[layer];
+      const acts = this.ff[layer];
+      for (let unit = 0; unit < spec.units; unit++) {
         let sum = weights[cursor++];
-        for (let i = 0; i < layout.inputCount; i++) sum += weights[cursor++] * input[i];
-        this.compressed[unit] = Math.tanh(sum);
+        for (let i = 0; i < spec.in; i++) sum += weights[cursor++] * incoming[i];
+        acts[unit] = Math.tanh(sum);
       }
+      incoming = acts;
     }
     this.feedbackFrom.set(this.action);
     for (let unit = 0; unit < layout.feedback; unit++) {
@@ -110,8 +143,7 @@ export class ElmanNetwork {
       for (let i = 0; i < net.jointCount; i++) sum += weights[cursor++] * this.feedbackFrom[i];
       this.feedback[unit] = Math.tanh(sum);
     }
-    const incoming = layout.feedforward ? this.compressed : input;
-    const incomingCount = layout.feedforward || layout.inputCount;
+    const incomingCount = ff.length ? layout.recurrentIn : layout.inputCount;
     for (let unit = 0; unit < layout.recurrent; unit++) {
       let sum = weights[cursor++];
       for (let i = 0; i < incomingCount; i++) sum += weights[cursor++] * incoming[i];
@@ -178,10 +210,10 @@ function explorationOf(index, scale, boost) {
   if (outputJointMask && index < layout.outputBase) return 0;
   if (index < layout.outputBase) {
     const inFeedback = index >= layout.feedbackBase && index < layout.feedbackBase + layout.feedbackBlock;
-    const readsInput = !inFeedback && (layout.feedforward ? index < layout.feedforwardBlock : index >= layout.recurrentBase);
+    const readsInput = !inFeedback && (layout.inputBlock ? index < layout.inputBlock : index >= layout.recurrentBase);
     if (readsInput) {
-      const stride = layout.feedforward ? layout.feedforwardStride : layout.recurrentStride;
-      const origin = layout.feedforward ? 0 : layout.recurrentBase;
+      const stride = layout.inputBlock ? layout.feedforwardStride : layout.recurrentStride;
+      const origin = layout.inputBlock ? 0 : layout.recurrentBase;
       const local = (index - origin) % stride;
       const targetLocal = net.targetInputIndex + 1;
       if (local >= targetLocal && local < targetLocal + net.targetInputCount) sigma = scale * extra;

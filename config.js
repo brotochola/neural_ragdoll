@@ -50,8 +50,7 @@ export const config = {
     rewardFrameOffset: 1, // Sample the score this many frames after a new action, not on the action frame.
   },
   net: {
-    hidden1Ratio: 0.3205, // 50 units at the current 156 inputs. The net that stood was this size. A ratio of 1 builds one hidden unit per input and the recurrent matrix blows up.
-    hidden2Ratio: 0.16, // 25 units, the recurrent layer. 0 turns it off and the first layer becomes the one with memory.
+    hidden: [47, 31, 40, 0], // Counts, input toward the outputs. The last layer is the recurrent one. These two widths are what 0.3 and 0.2 built at 156 inputs.
     feedbackUnits: 0, // Nonlinear summary of the previous action. It enters the recurrent layer only.
     skipTargetInputs: false, // Each joint output also reads the target columns directly, not only through the hidden units. That makes "move this joint toward this command" a one-layer problem. Off for now: it was tried and it hurt skill 1 (0.45 at gen 480 against 0.95 at gen 160 without it), and there is no evidence it helps. See the README.
     jointCount: 14, // Motor joints, and the width of the action vector. Waist, neck, and six joints on each side.
