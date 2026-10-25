@@ -13,6 +13,8 @@
   --floor: #8a958e;
   --accent: #d9481c;
   --mark: #2a7fb8;
+  --box: #b7a17a;
+  --box-edge: #8a7552;
   --ok: #2f8a4f;
   --bad: #b8402b;
   --doll-shirt: #c94a3d;
@@ -28,6 +30,7 @@
     --bg: #151917; --panel: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --floor: #6d7871;
     --accent: #ff7a4d; --mark: #5fb1e8; --ok: #5cc27d; --bad: #f07a62;
     --doll-shirt: #e0604f; --doll-shirt-back: #a8463a; --doll-jean: #5b8fc4; --doll-jean-back: #3d6690; --doll-skin: #f0c070;
+    --box: #6e5f45; --box-edge: #a8916a;
     color-scheme: dark;
   }
 }
@@ -35,6 +38,7 @@
   --bg: #151917; --panel: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --floor: #6d7871;
   --accent: #ff7a4d; --mark: #5fb1e8; --ok: #5cc27d; --bad: #f07a62;
   --doll-shirt: #e0604f; --doll-shirt-back: #a8463a; --doll-jean: #5b8fc4; --doll-jean-back: #3d6690; --doll-skin: #f0c070;
+  --box: #6e5f45; --box-edge: #a8916a;
   color-scheme: dark;
 }
 body { background: var(--bg); color: var(--ink); font-family: var(--display); }
@@ -115,7 +119,9 @@ function buildEps() {
   cur().episodes.forEach((e, i) => {
     const b = document.createElement('button');
     b.className = 'ep'; b.setAttribute('aria-pressed', i === epIndex);
-    const walk = e.walk ? `<span>${e.walkDist.toFixed(2)} / ${e.walkCmd.toFixed(2)} m ${e.walk.dir > 0 ? '→' : '←'}</span>` : '';
+    const walk = e.box
+      ? `<span>box ${Math.round(e.box.top * 100)} cm · ${e.onTop ? 'on top' : 'not on top'}</span>`
+      : e.walk ? `<span>${e.walkDist.toFixed(2)} / ${e.walkCmd.toFixed(2)} m ${e.walk.dir > 0 ? '→' : '←'}</span>` : '';
     b.innerHTML = `<strong>Episode ${e.seed + 1}</strong><span>${e.stoodUp ? 'ends standing' : 'ends down'} · ${Math.round(e.standShare * 100)}% up</span>${walk}`;
     b.onclick = () => { epIndex = i; reset(); };
     box.appendChild(b);
@@ -175,6 +181,12 @@ function draw() {
     ctx.strokeStyle = css('--rule'); ctx.lineWidth = whole ? 2 : 1;
     ctx.beginPath(); ctx.moveTo(sx(m), groundY); ctx.lineTo(sx(m), groundY + (whole ? 18 : 9)); ctx.stroke();
     if (whole) ctx.fillText(Math.round(m) + ' m', sx(m), groundY + H * 0.08);
+  }
+  // the box to climb
+  if (e.box) {
+    ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 3;
+    const bx = sx(e.box.x0), bw = (e.box.x1 - e.box.x0) * k, bt = sy(e.box.top), bh = groundY - bt;
+    ctx.fillRect(bx, bt, bw, bh); ctx.strokeRect(bx, bt, bw, bh);
   }
   // head mark
   if (f.mx != null) {

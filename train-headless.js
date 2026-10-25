@@ -127,6 +127,8 @@ function runEpisode(sim, job, isStanding) {
     headHit: workerEpisode.headHit ? 1 : 0,
     walkDist: stats.walkDist || 0,
     walkCmd: stats.walkCmd || 0,
+    climbOnTop: stats.climbOnTop || 0,
+    climbHeight: stats.climbHeight || 0,
     trace: options.trace ? workerEpisode.trace : undefined,
   };
 }
@@ -317,6 +319,14 @@ function obeys(row, spec) {
 
 function skillPass(skill, row) {
   const group = commandGroup(skill);
+  if (group === 'climb') {
+    // On top of the box at the end, upright over it, standing for half the last window, and
+    // the head never touched anything on the way.
+    const frames = row.windowFrames || 0;
+    if (!(frames > 0) || row.headHit || !row.climbOnTop) return false;
+    if ((row.headHeight || 0) - (row.climbHeight || 0) < config.body.standingHeadMeters) return false;
+    return row.windowStood / frames >= 0.5;
+  }
   if (group === 'walk') {
     // Walked without falling: the head never touched the floor, it is high at the end, the doll
     // was standing for most of the last window, and the torso kept up with the marks.
@@ -345,7 +355,7 @@ function skillPass(skill, row) {
 }
 
 function skillKey(skill) {
-  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix'][skill] || 'stand';
+  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix', 'climb'][skill] || 'stand';
 }
 
 function targetGainText() {
@@ -528,6 +538,7 @@ async function runMain() {
       parentMoveNote: state.parentMoveNote || "",
       flatGens: state.flatGens || 0,
       skill: state.skill || 1,
+      climbMax: state.climbMax || 0,
       placeScale: state.placeScale || 0,
       footRatio: state.footRatio > 0 ? state.footRatio : 0,
       heldFoot: state.heldFoot > 0 ? state.heldFoot : 0,
@@ -609,6 +620,7 @@ async function runMain() {
     state.gen = saved.gen || 0;
     state.phase = saved.phase || config.curriculum.phases[0].id;
     state.skill = saved.skill || opts.skill || 1;
+    state.climbMax = saved.climbMax || 0;
     state.placeScale = saved.placeScale || 0;
     state.footRatio = saved.footRatio > 0 ? saved.footRatio : 0;
     state.heldFoot = saved.heldFoot > 0 ? saved.heldFoot : 0;
@@ -726,7 +738,7 @@ async function runMain() {
         ? state.residualSearch.ask(opts.pairs, randomNormal)
         : state.ask(null, opts.pairs, randomNormal),
       random,
-      mode: trainingMode(state.skill | 0, state.gen, state.shiftMeters || 0),
+      mode: Object.assign(trainingMode(state.skill | 0, state.gen, state.shiftMeters || 0), { climbMax: state.climbMax || 0 }),
       runJobs: (jobs) => pool.run(jobs),
       decorate(job, child, asked) {
         if (useResidual) {
@@ -791,6 +803,29 @@ async function runMain() {
       if ((row.walkDist || 0) > bestWalk) bestWalk = row.walkDist || 0;
     }
     meanWalk /= scores.length;
+    // CLIMB curriculum: raise the box cap when the recent climb episodes succeed often enough.
+    if ((state.skill | 0) === 8) {
+      const c = config.climb;
+      if (!(state.climbMax > 0)) state.climbMax = c.startCap;
+      let tried = 0;
+      let made = 0;
+      for (const row of scores) {
+        if (!(row.climbHeight > 0)) continue;
+        tried++;
+        if (row.climbOnTop && !row.headHit) made++;
+      }
+      state.climbLog = state.climbLog || [];
+      state.climbLog.push([made, tried]);
+      if (state.climbLog.length > c.capWindow) state.climbLog.shift();
+      const sumMade = state.climbLog.reduce((a, r) => a + r[0], 0);
+      const sumTried = state.climbLog.reduce((a, r) => a + r[1], 0);
+      state.climbRate = sumTried ? sumMade / sumTried : 0;
+      if (state.climbLog.length >= c.capWindow && state.climbRate >= c.capPassRate && state.climbMax < c.maxCap) {
+        state.climbMax = Math.min(c.maxCap, state.climbMax + c.capStep);
+        state.climbLog.length = 0;
+        log('climb cap -> ' + state.climbMax.toFixed(2) + ' m (recent climbs ' + Math.round(sumMade / sumTried * 100) + '%)');
+      }
+    }
     if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, start: last.start, stood: last.stood, gap: last.gap, stance: meanStance, alive: meanAlive, foot: meanFoot, steps: meanSteps, walk: meanWalk, bestWalk, closed: meanClosed, leaned: meanLeaned, bestLean, bestClosed, bestSwing, stoodLeanN });
     if (state.bestEverScore > before) {
       const file = saveBackup('best-ever', state);
@@ -904,12 +939,16 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
     let bodyN = 0;
     let walkDistSum = 0;
     let walkCmdSum = 0;
+    let climbTopSum = 0;
+    let climbHeightSum = 0;
     const obey = { head: [0, 0], hand: [0, 0], foot: [0, 0] };
     for (const row of rows) {
       if (skillPass(skill, row)) ok++;
       if (row.stoodUp) stood++;
       walkDistSum += row.walkDist || 0;
       walkCmdSum += row.walkCmd || 0;
+      climbTopSum += row.climbOnTop || 0;
+      climbHeightSum += row.climbHeight || 0;
       fitnessSum += row.fitness;
       windowSum += row.windowFrames ? row.windowStood / row.windowFrames : 0;
       footSum += ((row.footL || 0) + (row.footR || 0)) / 2;
@@ -956,6 +995,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
       footObey: obey.foot[1] ? obey.foot[0] / obey.foot[1] : 0,
       walkDist: count ? walkDistSum / count : 0,
       walkCmd: count ? walkCmdSum / count : 0,
+      climbTop: count ? climbTopSum / count : 0,
+      climbHeight: count ? climbHeightSum / count : 0,
     };
   }
 
@@ -975,7 +1016,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
       + ' obey h' + Math.round((row.headObey || 0) * 100)
       + ' m' + Math.round((row.handObey || 0) * 100)
       + ' p' + Math.round((row.footObey || 0) * 100)
-      + (row.walkCmd ? ' walked ' + (row.walkDist || 0).toFixed(2) + '/' + row.walkCmd.toFixed(2) + 'm' : '');
+      + (row.walkCmd ? ' walked ' + (row.walkDist || 0).toFixed(2) + '/' + row.walkCmd.toFixed(2) + 'm' : '')
+      + (row.climbHeight ? ' ontop ' + Math.round(row.climbTop * 100) + '% box ' + row.climbHeight.toFixed(2) + 'm' : '');
   }
 
   function skillReached(row) {
@@ -1152,7 +1194,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
           const leaned = last && last.leaned != null ? ' leaned ' + last.leaned.toFixed(3) + ' swing ' + (last.bestSwing || 0).toFixed(3) + ' land ' + (last.bestClosed || 0).toFixed(3) + '/' + (last.stoodLeanN || 0) : '';
           const steps = last && last.steps != null ? ' steps ' + last.steps.toFixed(2) : '';
           const walked = last && last.walk ? ' walked ' + last.walk.toFixed(3) + ' best ' + last.bestWalk.toFixed(2) : '';
-          log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + walked + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
+          const climbed = (state.skill | 0) === 8 ? ' climb cap ' + (state.climbMax || 0).toFixed(2) + ' rate ' + (state.climbRate || 0).toFixed(2) : '';
+          log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + walked + climbed + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
           saveTrainState(state);
         }
         if (opts.quickEvery > 0 && state.gen % opts.quickEvery === 0) {

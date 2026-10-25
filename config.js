@@ -37,9 +37,11 @@ const rewardTotalInputCount =
   Number(rewardTotalNow) +
   Number(rewardTotalPrevious) +
   Number(rewardTotalNext);
-// Walk inputs, appended last: sin and cos of a gait clock, and the commanded speed with its sign.
-// All three are 0 outside the walk level, so a net trained to stand is unchanged by them.
-const walkInputCount = 3;
+// Walk inputs, appended last: sin and cos of a gait clock, the commanded speed with its sign,
+// then three terrain numbers for the climb level: a box ahead (0/1), the distance from the feet
+// to its near edge, and its height. All 0 when there is no walk and no box, so a net trained to
+// stand is unchanged by them.
+const walkInputCount = 6;
 
 export const config = {
   physics: {
@@ -220,7 +222,27 @@ export const config = {
   // 1 stand, 2 head, 3 hands, 4 feet, 5 all five at once.
   // 6 walk: no foot marks, and the head and hand marks slide forward at a commanded speed.
   // 7 mix: each training episode is a stand (1) or a walk (6), so one net keeps both. Eval runs both.
-  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix"],
+  // 8 climb: a box ahead, the marks slide forward and rise by its height. Trained mixed with walks and stands.
+  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb"],
+  climb: {
+    boxHalfWidth: 1, // The box is a 2 m platform, long enough to stand on.
+    nearMin: 0.45, // Near edge of the box, ahead of the feet midpoint, in metres.
+    nearMax: 0.8,
+    minHeight: 0.05, // Training heights are drawn between minHeight and the curriculum cap.
+    startCap: 0.08, // Curriculum cap at the start of a climb run.
+    maxCap: 0.6, // The cap never goes past this.
+    capStep: 0.02, // The cap rises this much when recent training climbs succeed often enough.
+    capPassRate: 0.4, // Share of climb episodes in the last capWindow generations that must succeed.
+    capWindow: 10,
+    evalHeights: [0.1, 0.15, 0.2, 0.25, 0.3], // Held-out eval boxes, cycled.
+    speedMin: 0.2, // m/s. The marks move a little slower than on flat ground.
+    speedMax: 0.35,
+    seconds: 8, // Climb episodes are longer than the 6 s default.
+    liftRamp: 0.3, // A mark rises over this many metres of x as it passes the near edge.
+    onTopSlack: 0.03, // A foot is on top when its centre is at least box top - this, inside the box in x.
+    mixClimb: 0.5, // Skill 8 training: share of climb episodes. The rest split between walks and stands.
+    mixWalk: 0.25,
+  },
   walk: {
     minSpeed: 0.2, // m/s. The marks of head and hands slide at a speed drawn in this range.
     maxSpeed: 0.45,
@@ -492,6 +514,7 @@ export const config = {
       supine: 0.6,
       prone: 0.6,
       walk: 0.6,
+      climb: 0.5, // Skill 8: ends with a foot on top of the box, upright, the head never touched anything.
       mix: 1, // Skill 7: both the stand bar and the walk bar (its rate is the worse of the two, as a share of its bar).
     }, // Fraction of held-out episodes that must pass each kind.
     walkGoalMeters: 2, // Marker distance used by the walk eval.
@@ -547,7 +570,7 @@ export function setTrainingByPhases(on) {
 
 export function setSkill(level) {
   const id = level | 0;
-  config.skill.level = id < 1 ? 1 : id > 7 ? 7 : id;
+  config.skill.level = id < 1 ? 1 : id > 8 ? 8 : id;
 }
 
 export function activeTrainingPhase() {

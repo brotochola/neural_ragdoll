@@ -65,6 +65,8 @@ for (let e = 0; e < n; e++) {
   episodes.push({
     seed: i,
     walk: start.walk || null,
+    box: ep.climbBox ? { x0: +ep.climbBox.x0.toFixed(3), x1: +ep.climbBox.x1.toFixed(3), top: +ep.climbBox.top.toFixed(3) } : null,
+    onTop: s.climbOnTop ? true : false,
     fitness: +s.fitness.toFixed(3),
     stoodUp: !!s.stoodUp,
     standShare: s.windowFrames ? +(s.windowStood / s.windowFrames).toFixed(2) : 0,
@@ -72,7 +74,7 @@ for (let e = 0; e < n; e++) {
     walkCmd: +(s.walkCmd || 0).toFixed(2),
     frames,
   });
-  console.log('episode', i, 'fitness', s.fitness.toFixed(2), 'stoodUp', s.stoodUp, 'standShare', episodes[e].standShare, start.walk ? 'walked ' + episodes[e].walkDist + '/' + episodes[e].walkCmd + ' m' : '');
+  console.log('episode', i, 'fitness', s.fitness.toFixed(2), 'stoodUp', s.stoodUp, 'standShare', episodes[e].standShare, start.walk ? 'walked ' + episodes[e].walkDist + '/' + episodes[e].walkCmd + ' m' : '', ep.climbBox ? 'box ' + ep.climbBox.top.toFixed(2) + ' m, on top ' + !!s.climbOnTop : '');
 }
 sim.destroyWorld(world);
 fs.writeFileSync(out, JSON.stringify({ skill, fps: config.physics.hz / every, shapes, episodes }));

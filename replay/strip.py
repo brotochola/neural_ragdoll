@@ -61,6 +61,9 @@ for ax, fi in zip(axes, picks):
             ax.plot([x1, x2], [y1, y2], color=col, linewidth=sh["r"] * 2 * 72 / 2.2 * 1.6, solid_capstyle="round")
         else:
             ax.add_patch(Polygon(rect(x, y, a, sh["hx"], sh["hy"]), color=col))
+    if ep.get("box"):
+        b = ep["box"]
+        ax.add_patch(Polygon([(b["x0"], 0), (b["x1"], 0), (b["x1"], b["top"]), (b["x0"], b["top"])], color="#b7a17a"))
     if f.get("mx") is not None:
         ax.add_patch(Circle((f["mx"], f["my"]), 0.12, fill=False, ls="--", color="#2a7fb8"))
     ax.axhline(0, color="#888", lw=1)

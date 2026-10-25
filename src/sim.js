@@ -230,6 +230,9 @@ function buildObservationLabels() {
     labels.push({ name: "gait clock sin", tip: "Walk level only: sine of a clock with period config.walk.periodSeconds. Zero otherwise." });
     labels.push({ name: "gait clock cos", tip: "Walk level only: cosine of the same clock. Zero otherwise." });
     labels.push({ name: "walk command", tip: "Walk level only: commanded speed with its direction, over config.walk.maxSpeed. Zero otherwise." });
+    labels.push({ name: "box ahead", tip: "Climb level only: 1 while there is a box. Zero otherwise." });
+    labels.push({ name: "box distance", tip: "Climb level only: near edge of the box minus the feet midpoint, in metres, clamped to -1..1." });
+    labels.push({ name: "box height", tip: "Climb level only: height of the box top over 0.5 m." });
   }
   if (labels.length !== config.net.inputCount)
     throw new Error("observation labels " + labels.length);
@@ -453,6 +456,13 @@ export function fillTrainingStart(out, randomSource, mode) {
   // MIX: a stand or a walk, drawn here so both twins of a pair get the same task.
   if (out.commands === "mix")
     out.commands = randomSource() < (config.walk.mixWalkShare ?? 0.5) ? "walk" : "none";
+  // CLIMB training mixes in walks and stands, so the earlier skills are not forgotten.
+  // The eval (mode.eval) is always a climb.
+  if (out.commands === "climb" && !(mode && mode.eval)) {
+    const roll = randomSource();
+    const c = config.climb;
+    out.commands = roll < c.mixClimb ? "climb" : roll < c.mixClimb + c.mixWalk ? "walk" : "none";
+  }
   // The sandbox does not come in here. The level decides the marks, and the pair shares this draw.
   const list = ensureTargets(out);
   const meters = config.start.targetJitterMeters;
@@ -462,6 +472,7 @@ export function fillTrainingStart(out, randomSource, mode) {
   // WALK: the body marks slide at a commanded speed (see moveWalkMarks). The feet carry no
   // mark at all: a frozen foot mark would charge every step the doll takes.
   out.walk = null;
+  out.climb = null;
   if (commands === "walk") {
     const w = config.walk;
     out.walk = {
@@ -470,10 +481,33 @@ export function fillTrainingStart(out, randomSource, mode) {
       delay: w.delaySeconds,
     };
   }
+  // CLIMB: a walk toward a box. The marks rise by the box height as they pass its near edge.
+  if (commands === "climb") {
+    const c = config.climb;
+    let height;
+    if (mode && mode.climbMax > 0) {
+      const cap = Math.max(c.minHeight, mode.climbMax);
+      height = c.minHeight + randomSource() * (cap - c.minHeight);
+    } else {
+      const list = c.evalHeights;
+      height = list[(randomSource() * list.length) | 0];
+    }
+    out.climb = {
+      near: c.nearMin + randomSource() * (c.nearMax - c.nearMin),
+      height,
+    };
+    out.walk = {
+      dir: 1,
+      speed: c.speedMin + randomSource() * (c.speedMax - c.speedMin),
+      delay: config.walk.delaySeconds,
+    };
+    out.frames = Math.round(c.seconds * config.physics.hz);
+  }
+  const walking = commands === "walk" || commands === "climb";
   for (let i = 0; i < list.length; i++) {
     const target = list[i];
     const spec = config.targets[i];
-    if (commands === "walk" && !spec.ride) {
+    if (walking && !spec.ride) {
       target.on = false;
       target.gain = 0;
       target.dx = 0;
@@ -859,6 +893,9 @@ export function summariseEpisode(rows, offset, count, out) {
   let closed = 0;
   let leaned = 0;
   let walkDist = 0;
+  let climbOnTop = 0;
+  let climbHeight = 0;
+  let headHit = 0;
   const last = offset + count;
   for (let i = offset; i < last; i++) {
     const row = rows[i];
@@ -874,6 +911,9 @@ export function summariseEpisode(rows, offset, count, out) {
     closed += row.closed || 0;
     leaned += row.leaned || 0;
     walkDist += row.walkDist || 0;
+    climbOnTop += row.climbOnTop || 0;
+    climbHeight += row.climbHeight || 0;
+    headHit += row.headHit || 0;
     if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
     if (!row.stoodUp) stoodUp = false;
   }
@@ -895,6 +935,9 @@ export function summariseEpisode(rows, offset, count, out) {
   out.closed = closed / n;
   out.leaned = leaned / n;
   out.walkDist = walkDist / n;
+  out.climbOnTop = climbOnTop / n;
+  out.climbHeight = climbHeight / n;
+  out.headHit = headHit / n;
   return out;
 }
 
@@ -1517,8 +1560,23 @@ export function createSim(box) {
       if (this.options.walk && this.options.targets) {
         for (let i = 0; i < config.targets.length; i++) {
           const target = this.options.targets[i];
-          if (target && config.targets[i].ride) target.walkBase = target.x || 0;
+          if (target && config.targets[i].ride) {
+            target.walkBase = target.x || 0;
+            target.walkBaseY = target.y || 0;
+          }
         }
+      }
+      this.climbBox = null;
+      this.climbTopFrames = 0;
+      const climb = this.options.climb;
+      if (climb && climb.height > 0) {
+        const mid =
+          ((this.measure.partX[config.partIndex.footLeft] || 0) +
+            (this.measure.partX[config.partIndex.footRight] || 0)) / 2;
+        const half = config.climb.boxHalfWidth;
+        const x0 = mid + climb.near;
+        this.objects.push(spawnStaticBox(world, x0 + half, half, climb.height / 2));
+        this.climbBox = { x0, x1: x0 + 2 * half, top: climb.height };
       }
       this.measure.targets = episodeTargets(this.options);
       measureProximity(world, this.measure);
@@ -1690,6 +1748,16 @@ export function createSim(box) {
           input[cursor++] = 0;
           input[cursor++] = 0;
         }
+        const box = this.climbBox;
+        if (box) {
+          input[cursor++] = 1;
+          input[cursor++] = clamp(box.x0 - footMid, -1, 1);
+          input[cursor++] = box.top / 0.5;
+        } else {
+          input[cursor++] = 0;
+          input[cursor++] = 0;
+          input[cursor++] = 0;
+        }
       }
       if (cursor !== config.net.inputCount)
         throw new Error("observation length " + cursor);
@@ -1824,6 +1892,19 @@ export function createSim(box) {
       }
       return false;
     }
+    // A foot centre at least box top - slack, and inside the box in x.
+    footOnTop() {
+      const box = this.climbBox;
+      if (!box) return false;
+      const slack = config.climb.onTopSlack;
+      const P = config.partIndex;
+      for (const part of [P.footLeft, P.footRight]) {
+        const x = this.measure.partX[part] || 0;
+        const y = this.measure.partY[part] || 0;
+        if (x > box.x0 && x < box.x1 && y > box.top - slack) return true;
+      }
+      return false;
+    }
     // WALK: the head and hand marks are still frozen in height, but their x slides at the
     // commanded speed once the delay is over. The same position rows that make the doll
     // stand now pay it to keep up, and the upright and contact rows still charge a fall.
@@ -1840,11 +1921,20 @@ export function createSim(box) {
       this.measure.walkDir = walk.dir;
       this.measure.walkSpeed = this.frame / config.physics.hz > (walk.delay || 0) ? walk.speed : 0;
       const offset = this.walkOffset();
+      const box = this.climbBox;
+      const ramp = config.climb.liftRamp || 0.3;
       for (let i = 0; i < config.targets.length; i++) {
         if (!config.targets[i].ride) continue;
         const target = this.options.targets[i];
-        if (target && target.on && target.walkBase != null)
+        if (target && target.on && target.walkBase != null) {
           target.x = target.walkBase + offset;
+          // Climb: the mark rises by the box height as it passes the near edge.
+          if (box && target.walkBaseY != null) {
+            let k = (target.x - box.x0) / ramp;
+            k = k < 0 ? 0 : k > 1 ? 1 : k;
+            target.y = target.walkBaseY + k * box.top;
+          }
+        }
       }
     }
     // The episode owns the clock. The small net only says how to move hip, knee, and ankle.
@@ -2524,6 +2614,9 @@ export function createSim(box) {
           ? this.options.walk.dir * ((this.measure.centerX || 0) - (this.walkStartX || 0))
           : 0,
         walkCmd: this.options.walk ? Math.abs(this.walkOffset()) : 0,
+        // Climb: is a foot on top of the box at the end, and the box height.
+        climbOnTop: this.climbBox ? (this.footOnTop() ? 1 : 0) : 0,
+        climbHeight: this.climbBox ? this.climbBox.top : 0,
       };
     }
     get weights() {

@@ -125,6 +125,30 @@ export class ElmanNetwork {
     return out;
   }
 
+  // Weights saved with an older observation (fewer walk inputs) and/or a narrower walk skip,
+  // converted to this net. New input columns and new walk-skip weights are 0, so the converted
+  // net behaves exactly like the old one while the new inputs are 0.
+  // oldWalkSkip is how many walk-skip weights each joint row had (0 before the skip existed).
+  static convert(source, oldInputCount, oldWalkSkip) {
+    const layout = ElmanNetwork.layout;
+    if (!source || !layout.ff.length) return null;
+    const first = layout.ff[0];
+    const oldFirstStride = 1 + oldInputCount;
+    const newFirstStride = 1 + layout.inputCount;
+    const oldOutStride = layout.outputStride - layout.walkSkip + oldWalkSkip;
+    const middle = layout.outputBase - first.block;
+    const expected = first.units * oldFirstStride + middle + net.jointCount * oldOutStride;
+    if (source.length !== expected || oldInputCount > layout.inputCount || oldWalkSkip > layout.walkSkip) return null;
+    const out = new Float32Array(ElmanNetwork.weightCount);
+    let from = 0;
+    for (let unit = 0; unit < first.units; unit++)
+      for (let i = 0; i < oldFirstStride; i++) out[unit * newFirstStride + i] = source[from++];
+    for (let i = 0; i < middle; i++) out[first.block + i] = source[from++];
+    for (let joint = 0; joint < net.jointCount; joint++)
+      for (let i = 0; i < oldOutStride; i++) out[layout.outputBase + joint * layout.outputStride + i] = source[from++];
+    return out;
+  }
+
   // Weights saved before the walk skip existed: every joint output row gets walkSkip zero
   // weights at its end. Behaviour is unchanged while the walk inputs are 0.
   static widenOutputs(source) {
