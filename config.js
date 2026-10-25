@@ -37,6 +37,9 @@ const rewardTotalInputCount =
   Number(rewardTotalNow) +
   Number(rewardTotalPrevious) +
   Number(rewardTotalNext);
+// Walk inputs, appended last: sin and cos of a gait clock, and the commanded speed with its sign.
+// All three are 0 outside the walk level, so a net trained to stand is unchanged by them.
+const walkInputCount = 3;
 
 export const config = {
   physics: {
@@ -65,7 +68,9 @@ export const config = {
     rewardTotalNow, // Append the reward total from this decision.
     rewardTotalPrevious, // Append the reward total from the previous decision, one action interval ago.
     rewardTotalNext, // Append the reward total estimated one physics frame ahead.
-    inputCount: sensedInputCount + rewardTotalInputCount, // Full observation length.
+    walkInputCount, // Gait clock sin, cos, and signed commanded speed. Last in the observation.
+    walkInputIndex: sensedInputCount + rewardTotalInputCount,
+    inputCount: sensedInputCount + rewardTotalInputCount + walkInputCount, // Full observation length.
     freshInputExplorationScale: 0.04, // Noise on columns after sensedInputCount (reward totals, when on).
     hiddenLeak: 0.75, //0.6, // Fraction of the previous hidden state kept each step.
   },
@@ -218,6 +223,7 @@ export const config = {
     minSpeed: 0.2, // m/s. The marks of head and hands slide at a speed drawn in this range.
     maxSpeed: 0.45,
     delaySeconds: 0.5, // The marks stay put this long, so the doll settles before it has to move.
+    periodSeconds: 0.9, // One full gait-clock cycle: a left step and a right step.
     maxStandSpeed: 1.2, // isStanding's centre-of-mass speed limit while walking. 0.5 when standing.
     passShare: 0.6, // A walk episode passes when the torso covered this share of the commanded distance...
     standShare: 0.6, // ...and the doll was standing for this share of the last window, and is up at the end.
@@ -262,13 +268,14 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 16,
+    version: 17,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
     wideWeight: 0.5, // Extra copy of a ride target's position row, on wideSpanMeters. Feet do not get one.
     wideSpanMeters: 1.5, // Span of that copy. The tight span has already flattened by the time a fall reaches this.
     upright: 1.5, // torsoCos + head/standingHead - 1. +this standing, -this lying flat.
+    walkSpeed: 3, // Walk level only: +this when the centre of mass moves at the commanded speed. In the upright row.
     planted: 1.5, // Added to the upright row: +this with both feet down, -this with one up. 0 on the walk level.
     // The score is the target rows, the upright row, and four contact rows. The body marks
     // are planted upright and then frozen, and a penalised part on the floor pays its contact

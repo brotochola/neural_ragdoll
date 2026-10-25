@@ -213,7 +213,18 @@ function uprightRow(measure) {
     const both = measure.touch[part.footLeft] && measure.touch[part.footRight];
     feet = planted * (both ? 1 : -1);
   }
-  return weight.upright * mix + feet;
+  // WALK: pay forward speed of the centre of mass, as a share of the commanded speed. Without
+  // it, standing still was a comfortable optimum: with the mark 1.8 m away, closing 30 cm moved
+  // the position rows by almost nothing, and any step risked a fall. Gated by head height, so
+  // diving forward does not pay. Capped at 1.2x the command, and walking backwards costs.
+  let walk = 0;
+  if (measure && measure.walking && measure.walkSpeed > 0 && weight.walkSpeed) {
+    let ratio = (measure.walkDir * (measure.centerVelocityX || 0)) / measure.walkSpeed;
+    if (ratio > 1.2) ratio = 1.2;
+    else if (ratio < -1) ratio = -1;
+    walk = weight.walkSpeed * ratio * height * height;
+  }
+  return weight.upright * mix + feet + walk;
 }
 export function markError(measure, targetIndex) {
   const spec = config.targets[targetIndex];

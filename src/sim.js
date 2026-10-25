@@ -226,6 +226,11 @@ function buildObservationLabels() {
       name: "reward total next",
       tip: "Reward total if every part kept its current speed for one physics frame. No collision or motor.",
     });
+  if (config.net.walkInputCount) {
+    labels.push({ name: "gait clock sin", tip: "Walk level only: sine of a clock with period config.walk.periodSeconds. Zero otherwise." });
+    labels.push({ name: "gait clock cos", tip: "Walk level only: cosine of the same clock. Zero otherwise." });
+    labels.push({ name: "walk command", tip: "Walk level only: commanded speed with its direction, over config.walk.maxSpeed. Zero otherwise." });
+  }
   if (labels.length !== config.net.inputCount)
     throw new Error("observation labels " + labels.length);
   return labels;
@@ -1492,6 +1497,8 @@ export function createSim(box) {
         : 0.5;
       this.measure.plantedWeight = this.options.walk ? 0 : config.reward.planted || 0;
       this.measure.walking = !!this.options.walk;
+      this.measure.walkSpeed = 0;
+      this.measure.walkDir = 0;
       if (this.options.walk && this.options.targets) {
         for (let i = 0; i < config.targets.length; i++) {
           const target = this.options.targets[i];
@@ -1655,6 +1662,20 @@ export function createSim(box) {
         }
         this.previousRewardTotal = scored.total;
       }
+      // Walk inputs: a gait clock and the commanded speed. Zero when this is not a walk.
+      const walk = this.options.walk;
+      if (config.net.walkInputCount) {
+        if (walk) {
+          const phase = (2 * Math.PI * this.frame) / (config.physics.hz * (config.walk.periodSeconds || 1));
+          input[cursor++] = Math.sin(phase);
+          input[cursor++] = Math.cos(phase);
+          input[cursor++] = (walk.dir * walk.speed) / (config.walk.maxSpeed || 1);
+        } else {
+          input[cursor++] = 0;
+          input[cursor++] = 0;
+          input[cursor++] = 0;
+        }
+      }
       if (cursor !== config.net.inputCount)
         throw new Error("observation length " + cursor);
       this.network.forward(input);
@@ -1799,6 +1820,10 @@ export function createSim(box) {
     }
     moveWalkMarks() {
       if (!this.options.walk || !this.options.targets) return;
+      const walk = this.options.walk;
+      // What the speed row asks for right now: nothing during the delay.
+      this.measure.walkDir = walk.dir;
+      this.measure.walkSpeed = this.frame / config.physics.hz > (walk.delay || 0) ? walk.speed : 0;
       const offset = this.walkOffset();
       for (let i = 0; i < config.targets.length; i++) {
         if (!config.targets[i].ride) continue;

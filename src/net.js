@@ -99,6 +99,27 @@ export class ElmanNetwork {
     return Float32Array.from(source);
   }
 
+  // Weights saved with fewer inputs, widened to this net: every extra input column, at the end
+  // of each first-layer row, gets weight 0. The widened net behaves exactly like the old one
+  // as long as the new inputs are 0. Returns null when the shapes cannot be matched.
+  static widen(source, oldInputCount) {
+    const layout = ElmanNetwork.layout;
+    const extra = layout.inputCount - oldInputCount;
+    if (!source || !(extra > 0) || !layout.ff.length) return null;
+    const first = layout.ff[0];
+    const oldStride = 1 + oldInputCount;
+    if (source.length !== ElmanNetwork.weightCount - extra * first.units) return null;
+    const out = new Float32Array(ElmanNetwork.weightCount);
+    let from = 0;
+    let to = 0;
+    for (let unit = 0; unit < first.units; unit++) {
+      for (let i = 0; i < oldStride; i++) out[to++] = source[from++];
+      to += extra;
+    }
+    while (from < source.length) out[to++] = source[from++];
+    return out;
+  }
+
   constructor(weights) {
     const layout = ElmanNetwork.layout;
     this.weights = weights && weights.length === ElmanNetwork.weightCount
