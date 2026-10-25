@@ -193,6 +193,7 @@ function readArgs() {
     else if (key === '--from') { out.from = val; i++; }
     else if (key === '--gate-targets') out.gateTargets = true;
     else if (key === '--target-mean') { out.targetMean = +val; i++; }
+    else if (key === '--no-ramp') out.noRamp = true; // Full-length training episodes from the first generation.
     else if (key === '--only') out.only = true; // Stop after the starting skill instead of climbing the ladder.
   }
   return out;
@@ -451,6 +452,7 @@ async function runMain() {
   if (opts.residualSearch) config.skill.residualSearch = true;
   if (opts.gateTargets) config.eval.gateTargets = true;
   if (opts.targetMean != null && Number.isFinite(opts.targetMean)) config.reward.targetMean = opts.targetMean;
+  if (opts.noRamp) config.skill.rampGenerations = 0;
   const backupDir = path.join(root, 'backups');
   fs.mkdirSync(backupDir, { recursive: true });
   const logPath = path.join(backupDir, 'train-log.txt');

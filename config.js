@@ -226,6 +226,7 @@ export const config = {
     delaySeconds: 0.5, // The marks stay put this long, so the doll settles before it has to move.
     periodSeconds: 0.9, // One full gait-clock cycle: a left step and a right step.
     dirs: [1], // Walk directions drawn. The doll faces +x and the hip extends only 22 degrees, so backwards is a different, harder skill.
+    footNearMeters: 0.02, // Walk standing check only: a foot this close to the floor counts as down. The reward still uses real touch.
     maxStandSpeed: 1.2, // isStanding's centre-of-mass speed limit while walking. 0.5 when standing.
     passShare: 0.6, // A walk episode passes when the torso covered this share of the commanded distance...
     standShare: 0.6, // ...and the doll was standing for this share of the last window, and is up at the end.

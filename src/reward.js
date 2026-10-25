@@ -114,14 +114,23 @@ export function isStanding(measure) {
   if (!measure || !measure.touch) return false;
   const left = measure.touch[part.footLeft];
   const right = measure.touch[part.footRight];
-  if (measure.walking ? !(left || right) : !(left && right)) return false;
+  // Walking: a foot within config.walk.footNearMeters of the floor counts as down. Measured on a
+  // walking net: when Box2D said no foot touched, the lower foot was under 2 cm away in 90% of
+  // those frames, a stride skimming the floor and not a flight phase. The REWARD keeps the strict
+  // touch (planted term), so it still pays to put the foot down properly.
+  const near = config.walk.footNearMeters || 0;
+  const clear = measure.clearance;
+  const nearL = left || (near > 0 && clear && clear[part.footLeft] < near);
+  const nearR = right || (near > 0 && clear && clear[part.footRight] < near);
+  if (measure.walking ? !(nearL || nearR) : !(left && right)) return false;
   for (let i = 0; i < measure.touch.length; i++) {
     if (i !== part.footLeft && i !== part.footRight && measure.touch[i]) return false;
   }
+  // Walking: no torso-spin limit. A stride pitches the torso past 1.5 rad/s in ~19% of frames;
+  // that limit measures stillness, not a fall. Tilt, head height and contacts still decide.
   if (measure.walking)
     return (measure.torsoCos || 0) > standingCos
       && measure.headHeight > config.body.standingHeadMeters
-      && Math.abs(measure.torsoSpin) < 1.5
       && Math.abs(measure.centerVelocityX) < (measure.standSpeedLimit || 0.5);
   return (measure.torsoCos || 0) > standingCos
     && measure.headHeight > config.body.standingHeadMeters
