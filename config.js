@@ -232,7 +232,7 @@ export const config = {
     startCap: 0.05, // Curriculum cap at the start of a climb run.
     maxCap: 0.6, // The cap never goes past this.
     capStep: 0.02, // The cap rises this much when recent training climbs succeed often enough.
-    capPassRate: 0.4, // Share of climb episodes in the last capWindow generations that must succeed.
+    capPassRate: 0.25, // Was 0.4: the noisy children sat at 22-27% while the parent climbed 2-3 cm in 10 of 12. Share of climb episodes in the last capWindow generations that must succeed.
     capWindow: 10,
     evalHeights: [0.1, 0.15, 0.2, 0.25, 0.3], // Held-out eval boxes, cycled.
     speedMin: 0.2, // m/s. The marks move a little slower than on flat ground.
@@ -295,7 +295,7 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 19,
+    version: 20,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
@@ -303,7 +303,7 @@ export const config = {
     wideSpanMeters: 1.5, // Span of that copy. The tight span has already flattened by the time a fall reaches this.
     upright: 1.5, // torsoCos + head/standingHead - 1. +this standing, -this lying flat.
     walkSpeed: 3, // Walk level only: +this when the centre of mass moves at the commanded speed. In the upright row.
-    climbFoot: 1, // Climb level only: +this per foot on top of the box. In the upright row.
+    climbFoot: 2, // Was 1, light next to walkSpeed 3. Climb level only: +this per foot on top of the box. In the upright row.
     planted: 1.5, // Added to the upright row: +this with both feet down, -this with one up. Walk level: +this with at least one foot down, -this with both up (no hopping).
     // The score is the target rows, the upright row, and four contact rows. The body marks
     // are planted upright and then frozen, and a penalised part on the floor pays its contact
