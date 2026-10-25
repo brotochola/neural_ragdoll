@@ -225,11 +225,11 @@ export const config = {
   // 8 climb: a box ahead, the marks slide forward and rise by its height. Trained mixed with walks and stands.
   commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb"],
   climb: {
-    boxHalfWidth: 1, // The box is a 2 m platform, long enough to stand on.
+    boxHalfWidth: 3, // A 6 m platform. At 2 m a good climber walked off the far end before the episode ended and scored as not on top.
     nearMin: 0.45, // Near edge of the box, ahead of the feet midpoint, in metres.
     nearMax: 0.8,
-    minHeight: 0.05, // Training heights are drawn between minHeight and the curriculum cap.
-    startCap: 0.08, // Curriculum cap at the start of a climb run.
+    minHeight: 0.02, // Training heights are drawn between minHeight and the curriculum cap.
+    startCap: 0.05, // Curriculum cap at the start of a climb run.
     maxCap: 0.6, // The cap never goes past this.
     capStep: 0.02, // The cap rises this much when recent training climbs succeed often enough.
     capPassRate: 0.4, // Share of climb episodes in the last capWindow generations that must succeed.
