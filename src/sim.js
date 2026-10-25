@@ -487,7 +487,8 @@ export function fillTrainingStart(out, randomSource, mode) {
     let height;
     if (mode && mode.climbMax > 0) {
       const cap = Math.max(c.minHeight, mode.climbMax);
-      height = c.minHeight + randomSource() * (cap - c.minHeight);
+      const low = Math.max(c.minHeight, cap - (c.band || cap));
+      height = low + randomSource() * (cap - low);
     } else {
       const list = c.evalHeights;
       height = list[(randomSource() * list.length) | 0];

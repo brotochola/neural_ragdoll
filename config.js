@@ -231,6 +231,7 @@ export const config = {
     minHeight: 0.02, // Training heights are drawn between minHeight and the curriculum cap.
     startCap: 0.05, // Curriculum cap at the start of a climb run.
     maxCap: 0.6, // The cap never goes past this.
+    band: 0.04, // Training heights are drawn in [cap - band, cap]: at the frontier, not mostly trivial 2-5 cm boxes.
     capStep: 0.02, // The cap rises this much when recent training climbs succeed often enough.
     capPassRate: 0.25, // Was 0.4: the noisy children sat at 22-27% while the parent climbed 2-3 cm in 10 of 12. Share of climb episodes in the last capWindow generations that must succeed.
     capWindow: 10,
@@ -238,7 +239,7 @@ export const config = {
     speedMin: 0.2, // m/s. The marks move a little slower than on flat ground.
     speedMax: 0.35,
     seconds: 8, // Climb episodes are longer than the 6 s default.
-    liftZone: 0.35, // Approach zone before the near edge where a raised foot is paid (reward.climbLift).
+    liftZone: 0.6, // Was 0.35: the trailing foot of a wide split stance never entered it. Approach zone before the near edge where a raised foot is paid (reward.climbLift).
     liftRamp: 0.3, // A mark rises over this many metres of x as it passes the near edge.
     onTopSlack: 0.03, // Both feet must be on top to pass. A foot is on top when its centre is at least box top - this, inside the box in x.
     mixClimb: 0.5, // Skill 8 training: share of climb episodes. The rest split between walks and stands.
@@ -296,7 +297,7 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 21,
+    version: 22,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.

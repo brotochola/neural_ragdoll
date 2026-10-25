@@ -19,6 +19,7 @@ const out = arg('--out', 'replay.json');
 const every = +arg('--every', 2); // Keep one frame in this many. 2 = 30 fps.
 const seconds = +arg('--seconds', 0); // 0 = the eval length.
 const firstSeed = +arg('--first', 0);
+const boxHeight = +arg('--height', 0); // Climb: force this box height instead of the eval draw.
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -44,6 +45,7 @@ for (let e = 0; e < n; e++) {
   const mode = evalMode(skill);
   if (seconds > 0) mode.seconds = seconds;
   const start = sim.fillTrainingStart({}, rand, mode);
+  if (boxHeight > 0 && start.climb) start.climb.height = boxHeight;
   world.rebuild();
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: i % config.cadence.actionEveryNFrames }, start));
   const frames = [];
