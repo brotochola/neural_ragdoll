@@ -450,6 +450,9 @@ export function fillTrainingStart(out, randomSource, mode) {
     mode && mode.commands != null
       ? mode.commands
       : config.commands[level] || "none";
+  // MIX: a stand or a walk, drawn here so both twins of a pair get the same task.
+  if (out.commands === "mix")
+    out.commands = randomSource() < (config.walk.mixWalkShare ?? 0.5) ? "walk" : "none";
   // The sandbox does not come in here. The level decides the marks, and the pair shares this draw.
   const list = ensureTargets(out);
   const meters = config.start.targetJitterMeters;

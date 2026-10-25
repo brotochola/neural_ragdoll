@@ -318,9 +318,13 @@ function obeys(row, spec) {
 function skillPass(skill, row) {
   const group = commandGroup(skill);
   if (group === 'walk') {
-    // Up at the end, standing for most of the last window, and the torso kept up with the marks.
+    // Walked without falling: the head never touched the floor, it is high at the end, the doll
+    // was standing for most of the last window, and the torso kept up with the marks.
+    // Not row.stoodUp (15 straight standing frames at the end): a stride leans past 15 degrees
+    // for a frame or two, and that broke the streak in 80% of episodes that were walking fine
+    // (measured: standing 86% of the last 0.5 s, the misses mostly a brief tilt).
     const frames = row.windowFrames || 0;
-    if (!(frames > 0) || !row.stoodUp) return false;
+    if (!(frames > 0) || row.headHit || !row.headHigh) return false;
     if (row.windowStood / frames < config.walk.standShare) return false;
     return row.walkCmd > 0 && row.walkDist >= config.walk.passShare * row.walkCmd;
   }
@@ -341,7 +345,7 @@ function skillPass(skill, row) {
 }
 
 function skillKey(skill) {
-  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk'][skill] || 'stand';
+  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix'][skill] || 'stand';
 }
 
 function targetGainText() {
@@ -867,6 +871,17 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
   }
 
   async function evaluateSkill(weights, skill, n, trace) {
+    // MIX: run the stand eval and the walk eval. Its rate is the worse of the two, each as a
+    // share of its own bar, so 1 means both passed.
+    if (skill === 7) {
+      const stand = await evaluateSkill(weights, 1, n, trace);
+      const walk = await evaluateSkill(weights, 6, n, trace);
+      const rate = Math.min(1, stand.rate / config.eval.passRate.stand, walk.rate / config.eval.passRate.walk);
+      return Object.assign({}, walk, {
+        skill: 7, key: 'mix', rate, ok: Math.round(rate * n), n,
+        fitness: (stand.fitness + walk.fitness) / 2, stand, walk,
+      });
+    }
     const rows = await pool.run(skillJobs(weights, skill, n, 0, trace));
     if (rows.some((row) => !row || !Number.isFinite(row.fitness))) throw new Error('eval returned an empty score');
     if (trace) {
@@ -945,6 +960,7 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
   }
 
   function fmtSkill(row) {
+    if (row.key === 'mix') return 'mix ' + row.rate.toFixed(2) + ' [ ' + fmtSkill(row.stand) + ' ] [ ' + fmtSkill(row.walk) + ' ]';
     return row.key + ' ' + row.ok + '/' + row.n + '=' + row.rate.toFixed(2)
       + ' fitness ' + (row.fitness || 0).toFixed(4)
       + ' stood ' + row.stood.toFixed(2)

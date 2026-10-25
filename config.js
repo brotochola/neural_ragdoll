@@ -219,7 +219,8 @@ export const config = {
   // listed here sits on its anatomical neutral, which is what standing already is.
   // 1 stand, 2 head, 3 hands, 4 feet, 5 all five at once.
   // 6 walk: no foot marks, and the head and hand marks slide forward at a commanded speed.
-  commands: ["", "none", "head", "hand", "foot", "all", "walk"],
+  // 7 mix: each training episode is a stand (1) or a walk (6), so one net keeps both. Eval runs both.
+  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix"],
   walk: {
     minSpeed: 0.2, // m/s. The marks of head and hands slide at a speed drawn in this range.
     maxSpeed: 0.45,
@@ -229,7 +230,8 @@ export const config = {
     footNearMeters: 0.02, // Walk standing check only: a foot this close to the floor counts as down. The reward still uses real touch.
     maxStandSpeed: 1.2, // isStanding's centre-of-mass speed limit while walking. 0.5 when standing.
     passShare: 0.6, // A walk episode passes when the torso covered this share of the commanded distance...
-    standShare: 0.6, // ...and the doll was standing for this share of the last window, and is up at the end.
+    standShare: 0.6,
+    mixWalkShare: 0.5, // Skill 7: share of training episodes that are walks. The rest are stands. // ...and the doll was standing for this share of the last window, and is up at the end.
   },
   // How much of its own row each target puts into the reward. The ramp for turning one group on
   // without disturbing the others: 0 takes it out of the score and out of the network's inputs.
@@ -490,6 +492,7 @@ export const config = {
       supine: 0.6,
       prone: 0.6,
       walk: 0.6,
+      mix: 1, // Skill 7: both the stand bar and the walk bar (its rate is the worse of the two, as a share of its bar).
     }, // Fraction of held-out episodes that must pass each kind.
     walkGoalMeters: 2, // Marker distance used by the walk eval.
     walkClosingMeters: 0.5, // A walk passes when the gap to the marker shrinks by at least this.
@@ -544,7 +547,7 @@ export function setTrainingByPhases(on) {
 
 export function setSkill(level) {
   const id = level | 0;
-  config.skill.level = id < 1 ? 1 : id > 6 ? 6 : id;
+  config.skill.level = id < 1 ? 1 : id > 7 ? 7 : id;
 }
 
 export function activeTrainingPhase() {
