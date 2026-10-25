@@ -259,7 +259,30 @@ function uprightRow(measure) {
       }
     }
   }
-  return weight.upright * mix + feet + walk + climb;
+  // GAIT (walk and climb): the walker learned ~1 m splits with the feet skimming the floor. That
+  // works on flat ground and cannot step onto a box: the pelvis never gets over the front foot.
+  // Stride: -gaitStride per 0.3 m of stance past gaitStrideMeters, capped at -gaitStride.
+  // Clearance: with one foot down and the other up, +gaitLift x swing-foot height / gaitLiftMeters,
+  // capped at +gaitLift. Both feet up still pays the planted penalty, so this is not a hop.
+  let gait = 0;
+  if (measure && measure.walking && measure.touch && measure.partY) {
+    if (weight.gaitStride) {
+      let over = ((measure.stanceWidth || 0) - (weight.gaitStrideMeters || 0.5)) / 0.3;
+      over = over < 0 ? 0 : over > 1 ? 1 : over;
+      gait -= weight.gaitStride * over;
+    }
+    if (weight.gaitLift) {
+      const left = measure.touch[part.footLeft];
+      const right = measure.touch[part.footRight];
+      if (left !== right) {
+        const swing = left ? part.footRight : part.footLeft;
+        let lift = ((measure.partY[swing] || 0) - config.skill.footGroundMeters) / (weight.gaitLiftMeters || 0.08);
+        lift = lift < 0 ? 0 : lift > 1 ? 1 : lift;
+        gait += weight.gaitLift * lift;
+      }
+    }
+  }
+  return weight.upright * mix + feet + walk + climb + gait;
 }
 export function markError(measure, targetIndex) {
   const spec = config.targets[targetIndex];
