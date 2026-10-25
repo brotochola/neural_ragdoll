@@ -248,6 +248,15 @@ function uprightRow(measure) {
       const x = measure.partX[p] || 0;
       const y = measure.partY[p] || 0;
       if (x > box.x0 && x < box.x1 && y > box.top - slack) climb += weight.climbFoot;
+      // Lift: a foot in the approach zone before the near edge is paid for its height, up to
+      // the box top. The walking gait skims the floor (<2 cm), so the parent climbed 5 cm boxes
+      // 7/12 and 8 cm boxes 0/12: nothing paid for raising the foot until it was already on top.
+      const zone = config.climb.liftZone || 0;
+      if (weight.climbLift && zone > 0 && x > box.x0 - zone && x < box.x0 + 0.05 && box.top > 0) {
+        let lift = (y - config.skill.footGroundMeters) / box.top;
+        lift = lift < 0 ? 0 : lift > 1 ? 1 : lift;
+        climb += weight.climbLift * lift;
+      }
     }
   }
   return weight.upright * mix + feet + walk + climb;
