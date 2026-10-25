@@ -1,0 +1,211 @@
+<title>Neural Ragdoll Replays</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one stage per skill, the doll in a lab strip with a metre ruler on the floor; controls and episode chips under it. */
+:root {
+  --bg: #eef0ec;
+  --panel: #f8f9f6;
+  --ink: #1d2320;
+  --muted: #5d6862;
+  --rule: #c9cfc9;
+  --floor: #8a958e;
+  --accent: #d9481c;
+  --mark: #2a7fb8;
+  --ok: #2f8a4f;
+  --bad: #b8402b;
+  --doll-shirt: #c94a3d;
+  --doll-shirt-back: #9c3a30;
+  --doll-jean: #3f6f9f;
+  --doll-jean-back: #2c4f72;
+  --doll-skin: #e9b35a;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151917; --panel: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --floor: #6d7871;
+    --accent: #ff7a4d; --mark: #5fb1e8; --ok: #5cc27d; --bad: #f07a62;
+    --doll-shirt: #e0604f; --doll-shirt-back: #a8463a; --doll-jean: #5b8fc4; --doll-jean-back: #3d6690; --doll-skin: #f0c070;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151917; --panel: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --floor: #6d7871;
+  --accent: #ff7a4d; --mark: #5fb1e8; --ok: #5cc27d; --bad: #f07a62;
+  --doll-shirt: #e0604f; --doll-shirt-back: #a8463a; --doll-jean: #5b8fc4; --doll-jean-back: #3d6690; --doll-skin: #f0c070;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--display); }
+.wrap { max-width: 920px; margin: 0 auto; padding-block: 20px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 20px; }
+header { display: grid; gap: 6px; }
+h1 { font-size: clamp(1.6rem, 5vw, 2.4rem); font-weight: 800; letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+.lede { color: var(--muted); margin: 0; max-width: 62ch; line-height: 1.5; font-size: 0.95rem; }
+.tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.tab { font: 700 0.85rem var(--display); letter-spacing: 0.04em; text-transform: uppercase; padding: 8px 14px; border: 1.5px solid var(--rule); background: transparent; color: var(--muted); border-radius: 999px; cursor: pointer; }
+.tab[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); }
+.stage { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+canvas { display: block; width: 100%; aspect-ratio: 16 / 9; max-width: 100%; }
+.hud { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 10px 14px; border-top: 1px solid var(--rule); font: 0.8rem var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.hud b { color: var(--ink); font-weight: 500; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-weight: 500; }
+.pill.up { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.pill.down { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.btn { font: 700 0.85rem var(--display); padding: 9px 16px; border-radius: 6px; border: none; background: var(--ink); color: var(--panel); cursor: pointer; min-width: 84px; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1.5px solid var(--rule); min-width: 0; }
+input[type="range"] { flex: 1 1 200px; accent-color: var(--accent); min-width: 0; }
+.eps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.ep { text-align: left; font: 0.78rem var(--mono); padding: 10px 12px; border: 1.5px solid var(--rule); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; display: grid; gap: 4px; }
+.ep strong { font: 700 0.9rem var(--display); color: var(--ink); }
+.ep[aria-pressed="true"] { border-color: var(--accent); }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font: 0.78rem var(--mono); color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.legend .lm::before { border: 2px dashed var(--mark); background: transparent; }
+.legend .lu::before { background: var(--ok); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Neural Ragdoll Replays</h1>
+    <p class="lede" id="lede"></p>
+  </header>
+  <div class="tabs" id="tabs" role="group" aria-label="Skill"></div>
+  <div class="stage">
+    <canvas id="cv" width="1280" height="720" aria-label="Ragdoll replay"></canvas>
+    <div class="hud" id="hud"></div>
+  </div>
+  <div class="controls">
+    <button class="btn" id="play">Pause</button>
+    <button class="btn ghost" id="speed">1×</button>
+    <input type="range" id="scrub" min="0" max="1" step="1" value="0" aria-label="Time">
+  </div>
+  <div class="legend"><span class="lm">Head mark the reward pulls toward</span><span class="lu">Counts as standing</span></div>
+  <div class="eps" id="eps"></div>
+</div>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const sets = DATA.sets;
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let setIndex = 0, epIndex = 0, frame = 0, playing = true, speed = 1, acc = 0, camX = null;
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function cur() { return sets[setIndex]; }
+function ep() { return cur().episodes[epIndex]; }
+
+function buildTabs() {
+  const box = document.getElementById('tabs');
+  box.innerHTML = '';
+  sets.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'tab'; b.textContent = s.label; b.setAttribute('aria-pressed', i === setIndex);
+    b.onclick = () => { setIndex = i; epIndex = 0; reset(); buildTabs(); };
+    box.appendChild(b);
+  });
+}
+function buildEps() {
+  const box = document.getElementById('eps');
+  box.innerHTML = '';
+  cur().episodes.forEach((e, i) => {
+    const b = document.createElement('button');
+    b.className = 'ep'; b.setAttribute('aria-pressed', i === epIndex);
+    const walk = e.walk ? `<span>${e.walkDist.toFixed(2)} / ${e.walkCmd.toFixed(2)} m ${e.walk.dir > 0 ? '→' : '←'}</span>` : '';
+    b.innerHTML = `<strong>Episode ${e.seed + 1}</strong><span>${e.stoodUp ? 'ends standing' : 'ends down'} · ${Math.round(e.standShare * 100)}% up</span>${walk}`;
+    b.onclick = () => { epIndex = i; reset(); };
+    box.appendChild(b);
+  });
+}
+function reset() {
+  frame = 0; acc = 0; camX = null;
+  const sc = document.getElementById('scrub');
+  sc.max = ep().frames.length - 1; sc.value = 0;
+  document.getElementById('lede').textContent = cur().lede;
+  buildEps();
+}
+
+const LEFT = [3, 4, 5, 6, 7, 8], RIGHT = [9, 10, 11, 12, 13, 14];
+function partColor(i) {
+  if (i === 2) return css('--doll-skin');
+  if (i === 0 || i === 1 || i === 15) return css('--doll-shirt');
+  if (i === 5) return css('--doll-skin');
+  if (i === 11) return css('--doll-skin');
+  if (i === 8 || i === 14) return css('--ink');
+  if (i === 6 || i === 7) return css('--doll-jean-back');
+  if (i === 12 || i === 13) return css('--doll-jean');
+  if (i === 3 || i === 4) return css('--doll-shirt-back');
+  return css('--doll-shirt');
+}
+function drawPart(i, x, y, a, s, k) {
+  const sh = DATA.shapes[i];
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(-a);
+  ctx.fillStyle = ctx.strokeStyle = partColor(i);
+  if (sh.circle) { ctx.beginPath(); ctx.arc(0, 0, sh.r * k, 0, Math.PI * 2); ctx.fill(); }
+  else if (sh.capsule) {
+    ctx.lineCap = 'round'; ctx.lineWidth = sh.r * 2 * k;
+    ctx.beginPath(); ctx.moveTo(-sh.ax * k, sh.ay * k); ctx.lineTo(sh.ax * k, -sh.ay * k); ctx.stroke();
+    if (sh.ax === 0 && sh.ay === 0) { ctx.beginPath(); ctx.arc(0, 0, sh.r * k, 0, Math.PI * 2); ctx.fill(); }
+  } else {
+    const w = sh.hx * 2 * k, h = sh.hy * 2 * k, r = Math.min(w, h) * 0.35;
+    ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, r); ctx.fill();
+  }
+  ctx.restore();
+}
+function draw() {
+  const e = ep(), f = e.frames[Math.min(frame, e.frames.length - 1)];
+  const W = cv.width, H = cv.height, k = H / 2.4, groundY = H * 0.86;
+  const torsoX = f.p[0];
+  if (camX == null) camX = torsoX; else camX += (torsoX - camX) * 0.08;
+  const sx = (x) => W / 2 + (x - camX) * k, sy = (y) => groundY - y * k;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = css('--panel'); ctx.fillRect(0, 0, W, H);
+  // floor and metre ruler
+  ctx.strokeStyle = css('--floor'); ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(W, groundY); ctx.stroke();
+  ctx.fillStyle = css('--muted'); ctx.font = `${Math.round(H * 0.028)}px IBM Plex Mono, monospace`; ctx.textAlign = 'center';
+  const left = camX - W / 2 / k, right = camX + W / 2 / k;
+  for (let m = Math.floor(left * 4) / 4; m <= right; m += 0.25) {
+    const whole = Math.abs(m - Math.round(m)) < 1e-6;
+    ctx.strokeStyle = css('--rule'); ctx.lineWidth = whole ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(sx(m), groundY); ctx.lineTo(sx(m), groundY + (whole ? 18 : 9)); ctx.stroke();
+    if (whole) ctx.fillText(Math.round(m) + ' m', sx(m), groundY + H * 0.08);
+  }
+  // head mark
+  if (f.mx != null) {
+    ctx.setLineDash([8, 6]); ctx.strokeStyle = css('--mark'); ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(sx(f.mx), sy(f.my), 0.12 * k, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  }
+  const order = [...LEFT, 15, 0, 1, 2, ...RIGHT];
+  for (const i of order) drawPart(i, sx(f.p[i * 3]), sy(f.p[i * 3 + 1]), f.p[i * 3 + 2], 1, k);
+  // standing light
+  ctx.fillStyle = f.up ? css('--ok') : css('--bad');
+  ctx.beginPath(); ctx.arc(W - 30, 30, 10, 0, Math.PI * 2); ctx.fill();
+  const t = frame / DATA.fps;
+  document.getElementById('hud').innerHTML =
+    `<span>t <b>${t.toFixed(2)} s</b></span><span>torso x <b>${torsoX.toFixed(2)} m</b></span>` +
+    `<span>head <b>${f.p[7].toFixed(2)} m</b></span><span class="pill ${f.up ? 'up' : 'down'}">${f.up ? 'standing' : 'not standing'}</span>` +
+    `<span>episode fitness <b>${e.fitness.toFixed(2)}</b></span>`;
+  document.getElementById('scrub').value = frame;
+}
+let last = performance.now();
+function loop(now) {
+  const dt = (now - last) / 1000; last = now;
+  if (playing) {
+    acc += dt * DATA.fps * speed;
+    while (acc >= 1) { acc -= 1; frame++; if (frame >= ep().frames.length) { frame = 0; camX = null; } }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+document.getElementById('play').onclick = (ev) => { playing = !playing; ev.target.textContent = playing ? 'Pause' : 'Play'; };
+document.getElementById('speed').onclick = (ev) => { speed = speed === 1 ? 0.5 : speed === 0.5 ? 2 : 1; ev.target.textContent = speed + '×'; };
+document.getElementById('scrub').oninput = (ev) => { frame = +ev.target.value; acc = 0; };
+if (reduce) { playing = false; document.getElementById('play').textContent = 'Play'; }
+buildTabs(); reset(); requestAnimationFrame(loop);
+</script>

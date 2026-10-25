@@ -262,13 +262,14 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 15,
+    version: 16,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
     wideWeight: 0.5, // Extra copy of a ride target's position row, on wideSpanMeters. Feet do not get one.
     wideSpanMeters: 1.5, // Span of that copy. The tight span has already flattened by the time a fall reaches this.
     upright: 1.5, // torsoCos + head/standingHead - 1. +this standing, -this lying flat.
+    planted: 1.5, // Added to the upright row: +this with both feet down, -this with one up. 0 on the walk level.
     // The score is the target rows, the upright row, and four contact rows. The body marks
     // are planted upright and then frozen, and a penalised part on the floor pays its contact
     // row. Hands and feet are not penalised.

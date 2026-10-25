@@ -1490,6 +1490,8 @@ export function createSim(box) {
       this.measure.standSpeedLimit = this.options.walk
         ? config.walk.maxStandSpeed
         : 0.5;
+      this.measure.plantedWeight = this.options.walk ? 0 : config.reward.planted || 0;
+      this.measure.walking = !!this.options.walk;
       if (this.options.walk && this.options.targets) {
         for (let i = 0; i < config.targets.length; i++) {
           const target = this.options.targets[i];

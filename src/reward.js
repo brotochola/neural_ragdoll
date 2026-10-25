@@ -73,7 +73,7 @@ terms.push({
     weight.upright +
     " standing, -" +
     weight.upright +
-    " lying flat.",
+    " lying flat. Plus " + (weight.planted || 0) + " with both feet on the floor, minus that with one up (not while walking).",
   v: 0,
   scoreOnly: false,
 });
@@ -108,11 +108,21 @@ export function targetPositionWeight(spec) {
 }
 
 // Standing: both feet down, nothing else touching, torso upright, head high, a real base, and still.
+// While walking (measure.walking) one foot down is enough and the stance width is not checked:
+// a stride always has a foot in the air, and the feet cross each other.
 export function isStanding(measure) {
-  if (!measure || !measure.touch || !measure.touch[part.footLeft] || !measure.touch[part.footRight]) return false;
+  if (!measure || !measure.touch) return false;
+  const left = measure.touch[part.footLeft];
+  const right = measure.touch[part.footRight];
+  if (measure.walking ? !(left || right) : !(left && right)) return false;
   for (let i = 0; i < measure.touch.length; i++) {
     if (i !== part.footLeft && i !== part.footRight && measure.touch[i]) return false;
   }
+  if (measure.walking)
+    return (measure.torsoCos || 0) > standingCos
+      && measure.headHeight > config.body.standingHeadMeters
+      && Math.abs(measure.torsoSpin) < 1.5
+      && Math.abs(measure.centerVelocityX) < (measure.standSpeedLimit || 0.5);
   return (measure.torsoCos || 0) > standingCos
     && measure.headHeight > config.body.standingHeadMeters
     && measure.stanceWidth >= config.body.standingStanceMinMeters
@@ -193,7 +203,17 @@ function uprightRow(measure) {
   let mix = ((measure && measure.torsoCos) || 0) + height - 1;
   if (mix < -1) mix = -1;
   else if (mix > 1) mix = 1;
-  return weight.upright * mix;
+  // Both feet planted: +planted, one foot in the air: -planted. Without it a fresh run learned
+  // to stand on ONE foot (measured: right foot up 95% of the last 3 s, head at 1.68 m), which
+  // the reward barely noticed and isStanding refuses. The walk level sets this to 0 through
+  // measure.plantedWeight, since walking is lifting a foot.
+  const planted = measure && measure.plantedWeight != null ? measure.plantedWeight : weight.planted || 0;
+  let feet = 0;
+  if (planted && measure && measure.touch) {
+    const both = measure.touch[part.footLeft] && measure.touch[part.footRight];
+    feet = planted * (both ? 1 : -1);
+  }
+  return weight.upright * mix + feet;
 }
 export function markError(measure, targetIndex) {
   const spec = config.targets[targetIndex];
@@ -273,7 +293,7 @@ function writeRewardRows(measure, writeRows) {
   if (writeRows) terms[row].v = upright;
   row += 1;
   total += upright;
-  ceiling += weight.upright;
+  ceiling += weight.upright + (weight.planted || 0);
   if (row !== termCount) throw new Error("reward rows " + row);
   scored.total = total;
   scored.max = ceiling;
