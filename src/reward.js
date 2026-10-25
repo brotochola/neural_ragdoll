@@ -210,8 +210,12 @@ function uprightRow(measure) {
   const planted = measure && measure.plantedWeight != null ? measure.plantedWeight : weight.planted || 0;
   let feet = 0;
   if (planted && measure && measure.touch) {
-    const both = measure.touch[part.footLeft] && measure.touch[part.footRight];
-    feet = planted * (both ? 1 : -1);
+    const left = measure.touch[part.footLeft];
+    const right = measure.touch[part.footRight];
+    // Walking needs ONE foot down, not both. Without this the walk level learned to hop:
+    // measured at gen 70, no foot on the floor in 69% of the last 3 s.
+    const ok = measure.walking ? left || right : left && right;
+    feet = planted * (ok ? 1 : -1);
   }
   // WALK: pay forward speed of the centre of mass, as a share of the commanded speed. Without
   // it, standing still was a comfortable optimum: with the mark 1.8 m away, closing 30 cm moved
