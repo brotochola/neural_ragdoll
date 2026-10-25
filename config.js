@@ -55,6 +55,7 @@ export const config = {
   net: {
     hidden: [47, 31, 40, 0], // Counts, input toward the outputs. The last layer is the recurrent one. These two widths are what 0.3 and 0.2 built at 156 inputs.
     feedbackUnits: 0, // Nonlinear summary of the previous action. It enters the recurrent layer only.
+    walkSkip: true, // Each joint output also reads the three walk inputs directly, so a rhythm is a one-layer problem. Zero-initialised.
     skipTargetInputs: false, // Each joint output also reads the target columns directly, not only through the hidden units. That makes "move this joint toward this command" a one-layer problem. Off for now: it was tried and it hurt skill 1 (0.45 at gen 480 against 0.95 at gen 160 without it), and there is no evidence it helps. See the README.
     jointCount: 14, // Motor joints, and the width of the action vector. Waist, neck, and six joints on each side.
     sensedInputCount, // Observation length before optional reward-total columns.
@@ -224,6 +225,7 @@ export const config = {
     maxSpeed: 0.45,
     delaySeconds: 0.5, // The marks stay put this long, so the doll settles before it has to move.
     periodSeconds: 0.9, // One full gait-clock cycle: a left step and a right step.
+    dirs: [1], // Walk directions drawn. The doll faces +x and the hip extends only 22 degrees, so backwards is a different, harder skill.
     maxStandSpeed: 1.2, // isStanding's centre-of-mass speed limit while walking. 0.5 when standing.
     passShare: 0.6, // A walk episode passes when the torso covered this share of the commanded distance...
     standShare: 0.6, // ...and the doll was standing for this share of the last window, and is up at the end.
@@ -405,6 +407,7 @@ export const config = {
     bestEverAdoptMargin: 0, // Was 0.25. 0 turns adoptAnchor off: it replaced the parent on single lucky episodes every generation. // During a plateau, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. Scouts never become the parent.
     stagnationMutateCap: 0, // Was 0.2. The episode ramp lowers the score on its own, so 'plateau' fired during the ramp. // Share of pairs that receive the large noise once a plateau starts. 0 keeps every pair on the small noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
+    walkSkipExplorationScale: 0.15, // Noise on the direct walk-input -> joint weights. Their inputs are 0 off the walk level.
     skipExplorationScale: 0.02, // Noise on the zero-initialised shortcut from the target columns to the joint outputs. Small on purpose: at the full target scale it perturbed every joint's action and the doll could not learn to stand at all.
     bodyExplorationScale: 0.02, // Noise on hidden weights. Small, so balance can shift without a rewrite.
     learningRate: 0.002, // Adam step size at generation 0. A tenth of the hidden-weight noise.

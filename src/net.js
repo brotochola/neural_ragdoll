@@ -55,7 +55,10 @@ function buildLayout() {
   // ONE fitness number. With the shortcut, that linear relation is learned in one step.
   const skip = net.skipTargetInputs ? net.targetInputCount : 0;
   const skipFrom = net.targetInputIndex;
-  const outputStride = 1 + recurrent + skip;
+  // Walk skip: each joint output also reads the walk inputs (gait clock, command) directly.
+  const walkSkip = net.walkSkip ? net.walkInputCount || 0 : 0;
+  const walkFrom = net.walkInputIndex;
+  const outputStride = 1 + recurrent + skip + walkSkip;
   return {
     inputCount,
     ff,
@@ -65,6 +68,8 @@ function buildLayout() {
     recurrentIn,
     skip,
     skipFrom,
+    walkSkip,
+    walkFrom,
     outputStride,
     feedforwardStride,
     feedbackStride,
@@ -117,6 +122,23 @@ export class ElmanNetwork {
       to += extra;
     }
     while (from < source.length) out[to++] = source[from++];
+    return out;
+  }
+
+  // Weights saved before the walk skip existed: every joint output row gets walkSkip zero
+  // weights at its end. Behaviour is unchanged while the walk inputs are 0.
+  static widenOutputs(source) {
+    const layout = ElmanNetwork.layout;
+    const extra = layout.walkSkip;
+    if (!source || !(extra > 0)) return null;
+    const oldStride = layout.outputStride - extra;
+    if (source.length !== layout.outputBase + net.jointCount * oldStride) return null;
+    const out = new Float32Array(ElmanNetwork.weightCount);
+    out.set(source.subarray ? source.subarray(0, layout.outputBase) : source.slice(0, layout.outputBase));
+    for (let joint = 0; joint < net.jointCount; joint++) {
+      for (let i = 0; i < oldStride; i++)
+        out[layout.outputBase + joint * layout.outputStride + i] = source[layout.outputBase + joint * oldStride + i];
+    }
     return out;
   }
 
@@ -177,6 +199,7 @@ export class ElmanNetwork {
       for (let unit = 0; unit < layout.recurrent; unit++) sum += weights[cursor++] * this.nextHidden[unit];
       // Shortcut: the target error goes straight to the joint, not through the hidden-layer bottleneck.
       for (let c = 0; c < layout.skip; c++) sum += weights[cursor++] * input[layout.skipFrom + c];
+      for (let c = 0; c < layout.walkSkip; c++) sum += weights[cursor++] * input[layout.walkFrom + c];
       this.action[joint] = Math.tanh(sum);
     }
     if (cursor !== weights.length) return;
@@ -250,6 +273,7 @@ function explorationOf(index, scale, boost) {
     // The shortcut starts at zero, so it needs a little more noise than a normal weight
     // for the gradient to wake it, but not the large target noise: that changed the
     // action of every joint and broke balance.
+    else if (local > layout.recurrent + layout.skip) sigma = search.walkSkipExplorationScale * extra;
     else if (local > layout.recurrent) sigma = search.skipExplorationScale * extra;
     else sigma = search.limbExplorationScale * extra;
   }

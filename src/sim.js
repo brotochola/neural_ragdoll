@@ -462,7 +462,7 @@ export function fillTrainingStart(out, randomSource, mode) {
   if (commands === "walk") {
     const w = config.walk;
     out.walk = {
-      dir: randomSource() < 0.5 ? -1 : 1,
+      dir: w.dirs && w.dirs.length ? w.dirs[(randomSource() * w.dirs.length) | 0] : 1,
       speed: w.minSpeed + randomSource() * (w.maxSpeed - w.minSpeed),
       delay: w.delaySeconds,
     };
@@ -855,6 +855,7 @@ export function summariseEpisode(rows, offset, count, out) {
   let reach = 0;
   let closed = 0;
   let leaned = 0;
+  let walkDist = 0;
   const last = offset + count;
   for (let i = offset; i < last; i++) {
     const row = rows[i];
@@ -869,6 +870,7 @@ export function summariseEpisode(rows, offset, count, out) {
     reach += row.reach || 0;
     closed += row.closed || 0;
     leaned += row.leaned || 0;
+    walkDist += row.walkDist || 0;
     if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
     if (!row.stoodUp) stoodUp = false;
   }
@@ -889,6 +891,7 @@ export function summariseEpisode(rows, offset, count, out) {
   out.reach = reach / n;
   out.closed = closed / n;
   out.leaned = leaned / n;
+  out.walkDist = walkDist / n;
   return out;
 }
 

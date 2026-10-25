@@ -778,7 +778,14 @@ async function runMain() {
     }
     meanLeaned /= scores.length;
     const meanSteps = scores.reduce((sum, row) => sum + (row.steps || 0), 0) / scores.length;
-    if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, start: last.start, stood: last.stood, gap: last.gap, stance: meanStance, alive: meanAlive, foot: meanFoot, steps: meanSteps, closed: meanClosed, leaned: meanLeaned, bestLean, bestClosed, bestSwing, stoodLeanN });
+    let meanWalk = 0;
+    let bestWalk = -Infinity;
+    for (const row of scores) {
+      meanWalk += row.walkDist || 0;
+      if ((row.walkDist || 0) > bestWalk) bestWalk = row.walkDist || 0;
+    }
+    meanWalk /= scores.length;
+    if (last) curve.push({ gen: state.gen, mean: last.mean, best: last.best, start: last.start, stood: last.stood, gap: last.gap, stance: meanStance, alive: meanAlive, foot: meanFoot, steps: meanSteps, walk: meanWalk, bestWalk, closed: meanClosed, leaned: meanLeaned, bestLean, bestClosed, bestSwing, stoodLeanN });
     if (state.bestEverScore > before) {
       const file = saveBackup('best-ever', state);
       log('best-ever gen ' + state.gen + ' score ' + state.bestEverScore.toFixed(3) + ' ' + file);
@@ -1126,7 +1133,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
           const closed = last && last.closed != null ? ' closed ' + last.closed.toFixed(3) : '';
           const leaned = last && last.leaned != null ? ' leaned ' + last.leaned.toFixed(3) + ' swing ' + (last.bestSwing || 0).toFixed(3) + ' land ' + (last.bestClosed || 0).toFixed(3) + '/' + (last.stoodLeanN || 0) : '';
           const steps = last && last.steps != null ? ' steps ' + last.steps.toFixed(2) : '';
-          log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
+          const walked = last && last.walk ? ' walked ' + last.walk.toFixed(3) + ' best ' + last.bestWalk.toFixed(2) : '';
+          log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + walked + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
           saveTrainState(state);
         }
         if (opts.quickEvery > 0 && state.gen % opts.quickEvery === 0) {
