@@ -212,7 +212,16 @@ export const config = {
   // Which group of targets gets a real command at each level of the ladder. Anything not
   // listed here sits on its anatomical neutral, which is what standing already is.
   // 1 stand, 2 head, 3 hands, 4 feet, 5 all five at once.
-  commands: ["", "none", "head", "hand", "foot", "all"],
+  // 6 walk: no foot marks, and the head and hand marks slide forward at a commanded speed.
+  commands: ["", "none", "head", "hand", "foot", "all", "walk"],
+  walk: {
+    minSpeed: 0.2, // m/s. The marks of head and hands slide at a speed drawn in this range.
+    maxSpeed: 0.45,
+    delaySeconds: 0.5, // The marks stay put this long, so the doll settles before it has to move.
+    maxStandSpeed: 1.2, // isStanding's centre-of-mass speed limit while walking. 0.5 when standing.
+    passShare: 0.6, // A walk episode passes when the torso covered this share of the commanded distance...
+    standShare: 0.6, // ...and the doll was standing for this share of the last window, and is up at the end.
+  },
   // How much of its own row each target puts into the reward. The ramp for turning one group on
   // without disturbing the others: 0 takes it out of the score and out of the network's inputs.
   targetGains: { head: 1.3, handR: 1.3, handL: 1.3, footR: 1.5, footL: 1.5 },
@@ -384,15 +393,16 @@ export const config = {
     // looked at eliteScore, so a child of the anchor could become the parent. The guard now
     // also requires the child to come from the parent.
     bestGenPairs: 1, // Extra pairs copied from last generation's best child, small noise. Re-scored; not the parent.
-    bestEverAdoptMargin: 0.25, // During a plateau, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. Scouts never become the parent.
-    stagnationMutateCap: 0.2, // Share of pairs that receive the large noise once a plateau starts. 0 keeps every pair on the small noise.
+    elitism: false, // Promote a child that beat the record on one episode. Off: see net.js tell().
+    bestEverAdoptMargin: 0, // Was 0.25. 0 turns adoptAnchor off: it replaced the parent on single lucky episodes every generation. // During a plateau, a small-noise child replaces the parent when it beats its twin and the parent average by this much. A Best ever copy only has to beat the parent average. Scouts never become the parent.
+    stagnationMutateCap: 0, // Was 0.2. The episode ramp lowers the score on its own, so 'plateau' fired during the ramp. // Share of pairs that receive the large noise once a plateau starts. 0 keeps every pair on the small noise.
     limbExplorationScale: 0.05, // Noise on shoulder, elbow, hip, knee, and ankle outputs.
     skipExplorationScale: 0.02, // Noise on the zero-initialised shortcut from the target columns to the joint outputs. Small on purpose: at the full target scale it perturbed every joint's action and the doll could not learn to stand at all.
     bodyExplorationScale: 0.02, // Noise on hidden weights. Small, so balance can shift without a rewrite.
     learningRate: 0.002, // Adam step size at generation 0. A tenth of the hidden-weight noise.
     learningRateFloor: 0.0005, // Adam step size never drops below this.
     learningRateHalfLifeGenerations: 8000, // Generations for the Adam step size to halve.
-    revertAfterGenerations: 400, // A plateau this long copies Best ever back onto the parent and clears Adam. 0 leaves the parent where it wandered.
+    revertAfterGenerations: 0, // Was 400. It reverted to a record set on the short ramp episodes. // A plateau this long copies Best ever back onto the parent and clears Adam. 0 leaves the parent where it wandered.
     trainableJointIndexes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], // All 14: waist, neck, shoulders, elbows, wrists, hips, knees, ankles. The neck and the wrists used to be frozen, which left the head and both hand rotation rows unreachable.
     adamBeta1: 0.9, // Adam first-moment decay.
     adamBeta2: 0.999, // Adam second-moment decay.
@@ -522,7 +532,7 @@ export function setTrainingByPhases(on) {
 
 export function setSkill(level) {
   const id = level | 0;
-  config.skill.level = id < 1 ? 1 : id > 5 ? 5 : id;
+  config.skill.level = id < 1 ? 1 : id > 6 ? 6 : id;
 }
 
 export function activeTrainingPhase() {

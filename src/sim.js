@@ -451,9 +451,28 @@ export function fillTrainingStart(out, randomSource, mode) {
   const radians = config.start.targetJitterRadians;
   const commands = out.commands;
   const asksFoot = commands === "foot" || commands === "all";
+  // WALK: the body marks slide at a commanded speed (see moveWalkMarks). The feet carry no
+  // mark at all: a frozen foot mark would charge every step the doll takes.
+  out.walk = null;
+  if (commands === "walk") {
+    const w = config.walk;
+    out.walk = {
+      dir: randomSource() < 0.5 ? -1 : 1,
+      speed: w.minSpeed + randomSource() * (w.maxSpeed - w.minSpeed),
+      delay: w.delaySeconds,
+    };
+  }
   for (let i = 0; i < list.length; i++) {
     const target = list[i];
     const spec = config.targets[i];
+    if (commands === "walk" && !spec.ride) {
+      target.on = false;
+      target.gain = 0;
+      target.dx = 0;
+      target.dy = 0;
+      target.turn = 0;
+      continue;
+    }
     if (commands === "foot" && spec.ride) {
       target.on = false;
       target.gain = 0;
@@ -1467,6 +1486,16 @@ export function createSim(box) {
         stampTrainTargets(this.measure, this.options);
         placeSkillBoxes(this);
       }
+      this.walkStartX = this.measure.centerX || 0;
+      this.measure.standSpeedLimit = this.options.walk
+        ? config.walk.maxStandSpeed
+        : 0.5;
+      if (this.options.walk && this.options.targets) {
+        for (let i = 0; i < config.targets.length; i++) {
+          const target = this.options.targets[i];
+          if (target && config.targets[i].ride) target.walkBase = target.x || 0;
+        }
+      }
       this.measure.targets = episodeTargets(this.options);
       measureProximity(world, this.measure);
     }
@@ -1704,6 +1733,7 @@ export function createSim(box) {
       const frame = this.frame + (this.options.phase || 0);
       const acting = frame % config.cadence.actionEveryNFrames === 0;
       this.measure.targets = episodeTargets(this.options);
+      this.moveWalkMarks();
       readBodyState(this.world, this.measure);
       // Marks are not replanted here: they are planted once in reset() and stay frozen in
       // the world, all five. Replanting every frame made the body marks chase the feet,
@@ -1755,6 +1785,25 @@ export function createSim(box) {
         return true;
       }
       return false;
+    }
+    // WALK: the head and hand marks are still frozen in height, but their x slides at the
+    // commanded speed once the delay is over. The same position rows that make the doll
+    // stand now pay it to keep up, and the upright and contact rows still charge a fall.
+    walkOffset() {
+      const walk = this.options.walk;
+      if (!walk) return 0;
+      const t = this.frame / config.physics.hz - (walk.delay || 0);
+      return t > 0 ? walk.dir * walk.speed * t : 0;
+    }
+    moveWalkMarks() {
+      if (!this.options.walk || !this.options.targets) return;
+      const offset = this.walkOffset();
+      for (let i = 0; i < config.targets.length; i++) {
+        if (!config.targets[i].ride) continue;
+        const target = this.options.targets[i];
+        if (target && target.on && target.walkBase != null)
+          target.x = target.walkBase + offset;
+      }
     }
     // The episode owns the clock. The small net only says how to move hip, knee, and ankle.
     applyScriptedGait() {
@@ -2427,6 +2476,12 @@ export function createSim(box) {
         reach: Math.abs(this.placeExtra || 0),
         closed: this.swingPeak || 0,
         leaned: this.gapCloseCount ? this.bodyCloseSum / this.gapCloseCount : 0,
+        // Walk: metres the centre of mass moved along the commanded direction, and the
+        // distance the marks moved. Zero when the episode is not a walk.
+        walkDist: this.options.walk
+          ? this.options.walk.dir * ((this.measure.centerX || 0) - (this.walkStartX || 0))
+          : 0,
+        walkCmd: this.options.walk ? Math.abs(this.walkOffset()) : 0,
       };
     }
     get weights() {

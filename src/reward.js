@@ -118,7 +118,7 @@ export function isStanding(measure) {
     && measure.stanceWidth >= config.body.standingStanceMinMeters
     && measure.stanceWidth <= config.body.standingStanceMaxMeters
     && Math.abs(measure.torsoSpin) < 1.5
-    && Math.abs(measure.centerVelocityX) < 0.5;
+    && Math.abs(measure.centerVelocityX) < (measure.standSpeedLimit || 0.5);
 }
 
 function angleErrorCos(targetAngle, partSin, partCos) {

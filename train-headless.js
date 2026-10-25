@@ -125,6 +125,8 @@ function runEpisode(sim, job, isStanding) {
     closed: stats.closed || 0,
     leaned: stats.leaned || 0,
     headHit: workerEpisode.headHit ? 1 : 0,
+    walkDist: stats.walkDist || 0,
+    walkCmd: stats.walkCmd || 0,
     trace: options.trace ? workerEpisode.trace : undefined,
   };
 }
@@ -191,6 +193,7 @@ function readArgs() {
     else if (key === '--from') { out.from = val; i++; }
     else if (key === '--gate-targets') out.gateTargets = true;
     else if (key === '--target-mean') { out.targetMean = +val; i++; }
+    else if (key === '--only') out.only = true; // Stop after the starting skill instead of climbing the ladder.
   }
   return out;
 }
@@ -313,6 +316,13 @@ function obeys(row, spec) {
 
 function skillPass(skill, row) {
   const group = commandGroup(skill);
+  if (group === 'walk') {
+    // Up at the end, standing for most of the last window, and the torso kept up with the marks.
+    const frames = row.windowFrames || 0;
+    if (!(frames > 0) || !row.stoodUp) return false;
+    if (row.windowStood / frames < config.walk.standShare) return false;
+    return row.walkCmd > 0 && row.walkDist >= config.walk.passShare * row.walkCmd;
+  }
   if (group === 'none') {
     // "Standing" is a FRACTION of the final window, not all 180 frames with none missing.
     // It used to be windowStood === windowFrames: one stumble in three seconds failed the
@@ -330,7 +340,7 @@ function skillPass(skill, row) {
 }
 
 function skillKey(skill) {
-  return ['', 'stand', 'head', 'hand', 'foot', 'all'][skill] || 'stand';
+  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk'][skill] || 'stand';
 }
 
 function targetGainText() {
@@ -868,10 +878,14 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
     let handMarkSum = 0;
     let bodySum = 0;
     let bodyN = 0;
+    let walkDistSum = 0;
+    let walkCmdSum = 0;
     const obey = { head: [0, 0], hand: [0, 0], foot: [0, 0] };
     for (const row of rows) {
       if (skillPass(skill, row)) ok++;
       if (row.stoodUp) stood++;
+      walkDistSum += row.walkDist || 0;
+      walkCmdSum += row.walkCmd || 0;
       fitnessSum += row.fitness;
       windowSum += row.windowFrames ? row.windowStood / row.windowFrames : 0;
       footSum += ((row.footL || 0) + (row.footR || 0)) / 2;
@@ -916,6 +930,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
       headObey: obey.head[1] ? obey.head[0] / obey.head[1] : 0,
       handObey: obey.hand[1] ? obey.hand[0] / obey.hand[1] : 0,
       footObey: obey.foot[1] ? obey.foot[0] / obey.foot[1] : 0,
+      walkDist: count ? walkDistSum / count : 0,
+      walkCmd: count ? walkCmdSum / count : 0,
     };
   }
 
@@ -933,7 +949,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
       + ' handMark ' + (row.handMark == null ? 0 : row.handMark).toFixed(3)
       + ' obey h' + Math.round((row.headObey || 0) * 100)
       + ' m' + Math.round((row.handObey || 0) * 100)
-      + ' p' + Math.round((row.footObey || 0) * 100);
+      + ' p' + Math.round((row.footObey || 0) * 100)
+      + (row.walkCmd ? ' walked ' + (row.walkDist || 0).toFixed(2) + '/' + row.walkCmd.toFixed(2) + 'm' : '');
   }
 
   function skillReached(row) {
@@ -941,6 +958,19 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
   }
 
   let gateEval = null;
+
+  // The best held-out eval of this run, by pass rate and then fitness. Saved on its own file
+  // so a later wobble in the parent never loses it: backups/best-skill<N>.json.
+  const bestEval = {};
+  function noteBestEval(state, row) {
+    const prev = bestEval[row.skill];
+    const better = !prev || row.rate > prev.rate || (row.rate === prev.rate && row.fitness > prev.fitness);
+    if (!better) return;
+    bestEval[row.skill] = { rate: row.rate, fitness: row.fitness, gen: state.gen, theta: state.theta.slice() };
+    const file = path.join(backupDir, 'best-skill' + row.skill + '.json');
+    fs.writeFileSync(file, JSON.stringify({ role: 'best-eval', skill: row.skill, gen: state.gen, eval: row, inputCount: config.net.inputCount, theta: Array.from(state.theta) }));
+    log('best eval skill ' + row.skill + ' gen ' + state.gen + ' rate ' + row.rate.toFixed(2) + ' -> ' + path.basename(file));
+  }
 
   function reloadStand(state) {
     const saved = JSON.parse(fs.readFileSync(path.join(backupDir, 'g200_s7p368_phase_1791767817432.json'), 'utf8'));
@@ -1057,7 +1087,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
       writeStatus(state, { baseline });
     }
 
-    for (let skill = state.skill; skill <= 5; skill++) {
+    const lastSkill = opts.only ? state.skill : state.skill >= 6 ? 6 : 5;
+    for (let skill = state.skill; skill <= lastSkill; skill++) {
       state.skill = skill;
       setSkill(skill);
       const gen0 = state.gen;
@@ -1102,6 +1133,7 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
           latest = await evaluateSkill(state.theta, skill, opts.evalN);
           evalLog.push({ gen: state.gen, skill, who: 'theta', eval: latest });
           log('EVAL gen ' + state.gen + ' ' + fmtSkill(latest));
+          noteBestEval(state, latest);
           writeStatus(state, { latest });
           saveTrainState(state);
           if (skillReached(latest)) break;
@@ -1110,6 +1142,13 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
       if (!(latest && skillReached(latest))) {
         latest = await evaluateSkill(state.theta, skill, opts.evalN);
         log('FINAL skill ' + skill + ' ' + fmtSkill(latest));
+      }
+      if (latest) noteBestEval(state, latest);
+      const kept = bestEval[skill];
+      if (!skillReached(latest) && kept && kept.rate > latest.rate) {
+        state.theta.set(kept.theta);
+        latest = await evaluateSkill(state.theta, skill, opts.evalN);
+        log('restored best eval of gen ' + kept.gen + ': ' + fmtSkill(latest));
       }
       let ever = null;
       const frozenMain = config.skill.residualSearch && state.residualSearch && skill >= 2;
@@ -1143,8 +1182,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
       }
       const file = saveBackup('phase', state, { eval: latest, passed: true, skill });
       log('PASS skill ' + skill + ' ' + skillKey(skill) + ' ' + fmtSkill(latest) + ' ' + file);
-      if (skill === 5) {
-        log('DONE the whole ladder: all five targets under command');
+      if (skill === lastSkill) {
+        log(skill === 5 ? 'DONE the whole ladder: all five targets under command' : 'DONE skill ' + skill);
         break;
       }
       state.m = new Float32Array(weightCount);

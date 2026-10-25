@@ -535,7 +535,12 @@ export class EvolutionSearch {
     const hasGoal = row.goalX != null;
     const goalGate = row.gap ?? search.eliteMissingGapMeters;
     const goalOpen = !hasGoal || goalGate < search.goalCloseEnoughMeters;
+    // search.elitism off: a child scored on ONE episode never replaces the parent. Measured
+    // on a fresh skill-1 run: with it on (plus adoptAnchor), the parent changed 97 times in
+    // 200 generations on lucky single episodes and the eval went 14/20 -> 0/20. The Adam
+    // step on the ranked antithetic gradient is what learns; the held-out eval keeps the best.
     if (
+      search.elitism !== false &&
       parentBestIndex >= 0 &&
       values[parentBestIndex] > (this.eliteScore ?? -1e9) &&
       goalOpen
