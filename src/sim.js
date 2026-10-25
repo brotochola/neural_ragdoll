@@ -1248,6 +1248,15 @@ export function createSim(box) {
     for (let i = 0; i < count; i++)
       measure.touch[i] = measure.clearance[i] < gap;
     measure.touch[config.partIndex.head] = measure.headContact !== 0;
+    // A foot also touches when Box2D says it is pressed on the floor. The sole ray starts at the
+    // foot centre, so a foot resting on its heel with the toe tilted up 0.14 rad read 9 mm of
+    // clearance while its contact amount was 0.75: planted, but "in the air" for isStanding.
+    const feet = measure.footContact;
+    if (feet) {
+      const pressed = config.skill.stanceContact || 0.3;
+      if (feet[0] > pressed) measure.touch[config.partIndex.footLeft] = true;
+      if (feet[1] > pressed) measure.touch[config.partIndex.footRight] = true;
+    }
   }
 
   // Pose one physics frame ahead if every part keeps its current speed. No collision, motor, or joint.

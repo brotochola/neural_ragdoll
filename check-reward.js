@@ -20,6 +20,9 @@ function fakeMeasure(spec, dx, dy, angle, extra) {
     partCos[i] = Math.cos(angle);
     touch[i] = false;
   }
+  // A standing doll: both feet on the floor, so the planted term pays.
+  touch[config.partIndex.footLeft] = true;
+  touch[config.partIndex.footRight] = true;
   const measure = {
     partX,
     partY,
@@ -87,7 +90,7 @@ const uprightOf = (torsoCos, headHeight) => {
   return config.reward.upright * mix;
 };
 // El measure falso nace parado: torsoCos 1, cabeza a 1.6 m. Eso es la fila de parado entera.
-const upright = uprightOf(1, 1.6);
+const upright = uprightOf(1, 1.6) + (config.reward.planted || 0); // Both feet down: the planted term pays.
 const frame = (spec, dx, dy, angle) => positionOf(spec, dx, dy) + hr * Math.cos(angle) + upright;
 const positionRowOf = (spec, dx, dy) => scoreByTarget(fakeMeasure(spec, dx, dy, 0))[config.targets.indexOf(spec)].position;
 

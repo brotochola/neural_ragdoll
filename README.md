@@ -12,6 +12,57 @@ node serve.js
 Then open http://localhost:8765/. Box2D is loaded from a CDN build (`PhaserBox2D.min.js`).
 Headless training uses the vendored copy and needs no server.
 
+## Stand and walk: trained weights
+
+`trained/stand-and-walk.json` is one network that does both. Held-out evals, 40 episodes each:
+
+| skill | passes | bar |
+|---|---|---|
+| stand (1) | 37/40 | 0.8 |
+| walk (6) | 38/40, 1.87 m walked against 1.76 m asked | 0.6 |
+
+```
+node train-headless.js --from trained/stand-and-walk.json --skill 7 --eval-only --eval-n 40
+node record-episodes.js --weights trained/stand-and-walk.json --skill 6 --n 4 --out replay/walk.json
+node replay/build.js replay/ragdoll-replays.html "Walk|...|replay/walk.json"   # canvas replay page
+python3 replay/strip.py replay/walk.json walk.png 0 12                        # PNG frame strip
+```
+
+`trained/stand.json` (stand only, 39/40) and `trained/walk.json` (walk only, 36/40, forgot how to
+stand still) are the steps on the way. How it got there, in order, each one measured:
+
+1. **The parent was swapped on single lucky episodes.** `adoptAnchor` fires once the record is
+   flat for 100 generations, and the episode ramp lowers the score by itself, so it fired every
+   generation: 97 parent swaps in 200 generations, the stand eval went 14/20 → 0/20.
+   `search.elitism = false`, `bestEverAdoptMargin = 0`, `stagnationMutateCap = 0`,
+   `revertAfterGenerations = 0`. The ranked antithetic Adam step does the learning; the trainer
+   keeps the best held-out eval in `backups/best-skill<N>.json`.
+2. **It stood on one foot.** Right foot up 95% of the last 3 s, head at 1.68 m. The upright row
+   now adds `reward.planted` (+1.5 both feet down, −1.5 otherwise). Stand passed at gen 150.
+3. **Walk (skill 6).** No foot marks; the head and hand marks slide forward at 0.2–0.45 m/s
+   (`config.walk`). Forward only: the doll faces +x and the hip extends 22°.
+4. **Standing still was a comfortable optimum** (200 gens, 0.00 m). The upright row pays
+   `reward.walkSpeed` × forward COM speed / commanded speed, gated by head height².
+5. **Gait clock.** Three inputs, last in the observation: sin and cos of a 0.9 s clock and the
+   signed command, all 0 off the walk level. `net.walkSkip` wires them straight to the joint
+   outputs (zero-initialised): through the leaky recurrent layer the clock arrived flattened.
+   `ElmanNetwork.widen` / `widenOutputs` pad old weights with zeros, so a net trained to stand
+   is unchanged.
+6. **It learned to hop** (no foot down 69% of the time). On the walk level the planted term pays
+   one foot down and charges both up.
+7. **Walk standing check.** While walking, a foot within 2 cm counts as down (90% of the
+   "airborne" frames were a stride skimming the floor), and there is no torso-spin limit (stride
+   pitch). A walk passes when the head never touched the floor, it is high at the end, the doll
+   stood ≥ 60% of the last 3 s and the torso covered ≥ 60% of the command. The old
+   "15 straight standing frames at the end" broke on a one-frame stride lean.
+8. **Sole ray bug.** A foot resting on its heel with the toe up 0.14 rad read 9 mm of clearance
+   with a contact amount of 0.75. `touch` for a foot is now also true when Box2D says it is
+   pressed (`footContact > skill.stanceContact`).
+9. **Skill 7 `mix`**: each training pair is a stand or a walk; the eval runs both and passes only
+   when both bars pass. Started from the walker, it passed at gen ~105.
+
+`--only` stops after the starting skill, `--no-ramp` trains full-length episodes from the start.
+
 ## The reward
 
 One frame is the ten target rows, one upright row, and four contact penalties. A target's position uses `|dx| + |dy|`, and head and hands add a wide copy of that curve so a fall still has slope after the tight span has flattened. The upright row is half torso angle and half head height. Contact is the mean pressure of each group, not a cliff at the first touch.
