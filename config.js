@@ -239,7 +239,7 @@ export const config = {
     speedMax: 0.35,
     seconds: 8, // Climb episodes are longer than the 6 s default.
     liftRamp: 0.3, // A mark rises over this many metres of x as it passes the near edge.
-    onTopSlack: 0.03, // A foot is on top when its centre is at least box top - this, inside the box in x.
+    onTopSlack: 0.03, // Both feet must be on top to pass. A foot is on top when its centre is at least box top - this, inside the box in x.
     mixClimb: 0.5, // Skill 8 training: share of climb episodes. The rest split between walks and stands.
     mixWalk: 0.25,
   },
@@ -295,7 +295,7 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 18,
+    version: 19,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
@@ -303,6 +303,7 @@ export const config = {
     wideSpanMeters: 1.5, // Span of that copy. The tight span has already flattened by the time a fall reaches this.
     upright: 1.5, // torsoCos + head/standingHead - 1. +this standing, -this lying flat.
     walkSpeed: 3, // Walk level only: +this when the centre of mass moves at the commanded speed. In the upright row.
+    climbFoot: 1, // Climb level only: +this per foot on top of the box. In the upright row.
     planted: 1.5, // Added to the upright row: +this with both feet down, -this with one up. Walk level: +this with at least one foot down, -this with both up (no hopping).
     // The score is the target rows, the upright row, and four contact rows. The body marks
     // are planted upright and then frozen, and a penalised part on the floor pays its contact

@@ -878,6 +878,20 @@ function placedBodyTargets(measure) {
   return on ? placed / on : 0;
 }
 
+// How many feet are on top of the box: centre inside it in x and at least top - slack high.
+export function feetOnBox(measure, box) {
+  if (!box || !measure || !measure.partX) return 0;
+  const slack = config.climb.onTopSlack;
+  const P = config.partIndex;
+  let n = 0;
+  for (const part of [P.footLeft, P.footRight]) {
+    const x = measure.partX[part] || 0;
+    const y = measure.partY[part] || 0;
+    if (x > box.x0 && x < box.x1 && y > box.top - slack) n++;
+  }
+  return n;
+}
+
 export function summariseEpisode(rows, offset, count, out) {
   let fitness = 0;
   let start = 0;
@@ -1578,6 +1592,7 @@ export function createSim(box) {
         this.objects.push(spawnStaticBox(world, x0 + half, half, climb.height / 2));
         this.climbBox = { x0, x1: x0 + 2 * half, top: climb.height };
       }
+      this.measure.climbBox = this.climbBox;
       this.measure.targets = episodeTargets(this.options);
       measureProximity(world, this.measure);
     }
@@ -1892,18 +1907,11 @@ export function createSim(box) {
       }
       return false;
     }
-    // A foot centre at least box top - slack, and inside the box in x.
+    // BOTH foot centres at least box top - slack, and inside the box in x. One foot was not
+    // enough: the first climb run learned to lunge, front foot on the box and back foot on the
+    // floor, and held it to the end.
     footOnTop() {
-      const box = this.climbBox;
-      if (!box) return false;
-      const slack = config.climb.onTopSlack;
-      const P = config.partIndex;
-      for (const part of [P.footLeft, P.footRight]) {
-        const x = this.measure.partX[part] || 0;
-        const y = this.measure.partY[part] || 0;
-        if (x > box.x0 && x < box.x1 && y > box.top - slack) return true;
-      }
-      return false;
+      return feetOnBox(this.measure, this.climbBox) === 2;
     }
     // WALK: the head and hand marks are still frozen in height, but their x slides at the
     // commanded speed once the delay is over. The same position rows that make the doll

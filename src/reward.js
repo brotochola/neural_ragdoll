@@ -237,7 +237,20 @@ function uprightRow(measure) {
     else if (ratio < -1) ratio = -1;
     walk = weight.walkSpeed * ratio * height * height;
   }
-  return weight.upright * mix + feet + walk;
+  // CLIMB: +climbFoot for each foot on top of the box (centre inside it in x, at least
+  // top - onTopSlack high). Paying per foot makes the second foot worth as much as the first,
+  // so the lunge the first climb run settled into (one foot up, one down) is half the pay.
+  let climb = 0;
+  const box = measure && measure.climbBox;
+  if (box && weight.climbFoot && measure.partX) {
+    const slack = config.climb.onTopSlack;
+    for (const p of [part.footLeft, part.footRight]) {
+      const x = measure.partX[p] || 0;
+      const y = measure.partY[p] || 0;
+      if (x > box.x0 && x < box.x1 && y > box.top - slack) climb += weight.climbFoot;
+    }
+  }
+  return weight.upright * mix + feet + walk + climb;
 }
 export function markError(measure, targetIndex) {
   const spec = config.targets[targetIndex];

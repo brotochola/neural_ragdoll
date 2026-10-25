@@ -320,7 +320,7 @@ function obeys(row, spec) {
 function skillPass(skill, row) {
   const group = commandGroup(skill);
   if (group === 'climb') {
-    // On top of the box at the end, upright over it, standing for half the last window, and
+    // Both feet on top of the box at the end, upright over it, standing for half the last window, and
     // the head never touched anything on the way.
     const frames = row.windowFrames || 0;
     if (!(frames > 0) || row.headHit || !row.climbOnTop) return false;
