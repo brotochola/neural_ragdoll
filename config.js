@@ -258,7 +258,8 @@ export const config = {
     top: 0.35, // plank top above the floor, at rest
     ropeLength: 2.2,
     ropeInset: 0.05, // ropes this far in from the plank ends
-    density: 30,
+    ropeDensity: 150,
+    density: 300,
     // m/s given to the plank at the start; training draws in [pushMin, pushMax]. SWING_PUSH_MAX sets a
     // gentler range to start from (a run with pushes up to 1.2 m/s learned to stand less, not more).
     pushMin: Math.min(0.2, +(globalThis.process?.env?.SWING_PUSH_MAX || 1.2) / 2),

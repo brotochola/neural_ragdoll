@@ -573,6 +573,9 @@ export function fillTrainingStart(out, randomSource, mode) {
       push: (mode && mode.eval ? w.evalPush : w.pushMin + randomSource() * Math.max(0, cap - w.pushMin)) * (randomSource() < 0.5 ? -1 : 1),
     };
     out.drop = w.top + 0.02;
+    // Start upright: the random start tilt of the other levels, on a plank that moves away underfoot,
+    // tipped every controller over within a second, even with no push.
+    out.tilt = 0;
     out.settle = Math.max(out.settle || 0, 10);
     out.frames = Math.round(w.seconds * config.physics.hz);
   }
@@ -1634,7 +1637,7 @@ export function createSim(box) {
         position: vector(rx, (barY + plankY) / 2), size: vector(0.01, ropeHalf),
         // Own category, colliding with nothing: the doll's chest and thighs collide with the default
         // (floor) category, so a group index alone let the body lean on the ropes. Joints still hold them.
-        density: 2, friction: 0, categoryBits: 0x10, maskBits: 0,
+        density: config.swing.ropeDensity || 2, friction: 0, categoryBits: 0x10, maskBits: 0,
       }).bodyId;
       objects.push(rope);
       world.CreateRevoluteJoint({
