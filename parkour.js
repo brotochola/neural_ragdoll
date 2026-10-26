@@ -232,6 +232,7 @@ SPEC.push(['jumpWin', 0.9, 0.3]);
 SPEC.push(['takeoff', 0.3, 0.15], ['kStride', 1.0, 0.5]);
 SPEC.push(['jumpMargin', 0.2, 0.15]);
 SPEC.push(['jumpTrail', 0, 0.4]);
+SPEC.push(['landLean', 0, 0.15], ['landKnee', 0, 0.3], ['landPlace', 0, 0.25]);
 
 if (dumpRunStates) {
   const v = JSON.parse(fs.readFileSync(init, 'utf8')).best;

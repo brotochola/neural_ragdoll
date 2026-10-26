@@ -42,7 +42,9 @@ export const SPEC = [
   ['jumpArm', 0, 0.4], // arm swing amplitude
 ];
 // Added later and kept out of SPEC so older parameter vectors keep their layout (parkour.js appends it):
-// jumpTrail, the trailing thigh in the air (+ = brought forward and up, to clear a box).
+// jumpTrail, the trailing thigh in the air (+ = brought forward and up, to clear a box);
+// landLean, landKnee, landPlace: changes for the stride that lands from a jump (a 1 m hole was cleared
+// and the runner then fell on its face after the landing).
 
 export function decode(v) {
   const p = {};
@@ -81,6 +83,8 @@ export function makeController(world) {
       st.t = 0;
       st.flight = false;
       st.strides++;
+      // the stride that lands from a jump: its own lean, knee and next placement (land* parameters)
+      st.landing = st.jumping;
       st.jumping = !!st.jumpNext;
       st.jumpNext = false;
       [stance, swing] = [swing, stance];
@@ -89,12 +93,13 @@ export function makeController(world) {
     const torso = angleOf(0);
     const d = (m.centerX || 0) - world.px[stance.foot];
     const v = (m.centerVelocityX || 0) - (m.walkSpeed || 0);
-    const lean = p.lean + (J2 ? p.jumpLean : 0);
+    const L2 = !!st.landing && !J2;
+    const lean = p.lean + (J2 ? p.jumpLean : 0) + (L2 ? p.landLean || 0 : 0);
     if (!st.flight) {
       const push = d > p.pushD;
       const stanceHip = angleOf(stance.thigh) - torso;
       action[stance.hip] = command(stance.hip, stanceHip + (torso - lean) - (push ? p.hipPush + (J2 ? p.jumpHipPush : 0) : 0));
-      action[stance.knee] = command(stance.knee, push ? p.pushKnee + (J2 ? p.jumpKnee : 0) : p.kneeLoad);
+      action[stance.knee] = command(stance.knee, push ? p.pushKnee + (J2 ? p.jumpKnee : 0) : p.kneeLoad + (L2 ? p.landKnee || 0 : 0));
       action[stance.ankle] = command(stance.ankle, (push ? p.pushAnkle + (J2 ? p.jumpAnkle : 0) : 0) - angleOf(stance.shin));
       action[swing.hip] = command(swing.hip, p.swingHip + (J2 ? p.jumpHip : 0) - torso);
       action[swing.knee] = command(swing.knee, p.tuck + (J2 ? p.jumpTuck : 0));
@@ -102,7 +107,7 @@ export function makeController(world) {
     } else {
       // flight: the leg that pushed trails, the other reaches for the landing
       // st.placeAdj: set by the caller to lengthen (+) or shorten (-) this step (hitting a take-off spot)
-      const placeW = p.place + (J2 ? p.jumpPlace : 0) + p.cd * d + p.cv * v + (st.placeAdj || 0);
+      const placeW = p.place + (J2 ? p.jumpPlace : 0) + (L2 ? p.landPlace || 0 : 0) + p.cd * d + p.cv * v + (st.placeAdj || 0);
       action[swing.hip] = command(swing.hip, placeW - torso);
       // in a jump the landing knee stays tucked while rising, extends as the body comes down
       const falling = (m.centerVelocityY || 0) < 0;
