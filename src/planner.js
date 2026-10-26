@@ -14,14 +14,20 @@ import { soleOf, handOf, pelvisOf, PARTS } from "./pose.js";
 // The lead foot is the right one (the front one in the starting stance).
 function stepUpKeys(keys, h, e, q) {
   const top = h;
-  keys.push({ dur: q.shiftT, pelvis: { x: 'backFoot', y: 0.9 }, torso: 0, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false, support: 'back' });
-  keys.push({ dur: q.liftT, pelvis: { x: 'backFoot', y: 0.9 }, torso: q.stepLean * 0.5, feet: ['hold', { x: e - q.kneeBack, y: top + q.liftY }], hands: [null, null], planted: [true, false], grip: false });
-  keys.push({ dur: q.placeT, pelvis: { x: 'backFoot', y: 0.88 }, torso: q.stepLean, feet: ['hold', { x: e + q.footX, y: top }], hands: [null, null], planted: [true, false], grip: false });
-  keys.push({ dur: q.shiftT, pelvis: { x: e + q.footX - q.loadBack, y: top + q.loadY }, torso: q.stepLean, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false, support: 'front' });
-  keys.push({ dur: q.riseT, pelvis: { x: e + q.footX, y: top + 0.88 }, torso: q.stepLean * 0.5, feet: ['hold', 'hold'], hands: [null, null], planted: [false, true], grip: false });
-  keys.push({ dur: q.trailT * 0.5, pelvis: { x: e + q.footX, y: top + 0.9 }, torso: 0, feet: [{ x: e + 0.02, y: top + q.trailLift }, 'hold'], hands: [null, null], planted: [false, true], grip: false });
-  keys.push({ dur: q.trailT * 0.5, pelvis: { x: e + q.footX + 0.05, y: top + 0.9 }, torso: 0, feet: [{ x: e + q.footX - 0.12, y: top }, 'hold'], hands: [null, null], planted: [false, true], grip: false });
-  keys.push({ dur: q.standT, pelvis: { x: e + q.footX - 0.05, y: top + 0.92 }, torso: 0, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false });
+  // x given as { front: dx } / { back: dx } is relative to where that foot ACTUALLY is when the key
+  // starts: the foot rarely lands exactly on its planned spot, and hips planned over the planned spot
+  // went 17 cm past the real foot and fell forward.
+  keys.push({ dur: q.shiftT, pelvis: { x: { back: 0.04 }, y: 0.9 }, torso: 0, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false, support: 'back' });
+  keys.push({ dur: q.liftT, pelvis: { x: { back: 0.04 }, y: 0.9 }, torso: q.stepLean * 0.5, feet: ['hold', { x: e - q.kneeBack, y: top + q.liftY }], hands: [null, null], planted: [true, false], grip: false });
+  keys.push({ dur: q.placeT, pelvis: { x: { back: 0.04 }, y: 0.88 }, torso: q.stepLean, feet: ['hold', { x: e + q.footX, y: top }], hands: [null, null], planted: [true, false], grip: false });
+  keys.push({ dur: q.shiftT, pelvis: { x: { front: -q.loadBack }, y: top + q.loadY }, torso: q.stepLean, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false, support: 'front' });
+  // RISE with both feet still pushing (the back one too), hips moving over the front foot; only then
+  // does the back foot leave (letting go at once left the hips behind and it fell backward).
+  keys.push({ dur: q.riseT, pelvis: { x: { front: q.riseOver }, y: top + q.pushY }, torso: q.stepLean * 0.5, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false, support: 'front' });
+  keys.push({ dur: q.riseT * 0.6, pelvis: { x: { front: q.riseOver }, y: top + 0.88 }, torso: q.stepLean * 0.3, feet: ['hold', 'hold'], hands: [null, null], planted: [false, true], grip: false, support: 'front' });
+  keys.push({ dur: q.trailT * 0.5, pelvis: { x: { front: q.riseOver }, y: top + 0.9 }, torso: 0, feet: [{ x: e + 0.02, y: top + q.trailLift }, 'hold'], hands: [null, null], planted: [false, true], grip: false, support: 'front' });
+  keys.push({ dur: q.trailT * 0.5, pelvis: { x: { front: q.riseOver }, y: top + 0.9 }, torso: 0, feet: [{ x: { front: -q.trailBack }, y: top }, 'hold'], hands: [null, null], planted: [false, true], grip: false, support: 'front' });
+  keys.push({ dur: q.standT, pelvis: { x: { front: -q.trailBack / 2 }, y: top + 0.92 }, torso: 0, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false });
   return keys;
 }
 
@@ -43,7 +49,7 @@ export function climbPlan(h, e, p = {}) {
     trailX: 0.33, trailLift: 0.2, trailT: 0.8,
     standX: 0.26, standT: 1.0,
     mantleAbove: 0.62,
-    shiftT: 0.8, stepLean: -0.15, kneeBack: 0.10, loadY: 0.5, loadBack: 0.15,
+    shiftT: 0.8, stepLean: -0.15, kneeBack: 0.10, loadY: 0.5, loadBack: 0.15, riseOver: 0.0, trailBack: 0.14, pushY: 0.72,
   }, p);
   const top = h;
   const hand = { x: e + q.handX, y: top + 0.02 };
@@ -85,7 +91,9 @@ export function makePlanRunner(keys, world, hz) {
   let from = null;
   let to = null;
   const lerp = (a, b, u) => a + (b - a) * u;
-  const resolve = (spec, current) => (spec === 'hold' ? { x: current.x, y: current.y, angle: 0 } : spec ? { x: spec.x, y: spec.y, angle: 0 } : null);
+  let curFeet = null;
+  const relX = (x) => (typeof x === 'object' && x ? (x.front != null ? curFeet[1].x + x.front : curFeet[0].x + x.back) : x);
+  const resolve = (spec, current) => (spec === 'hold' ? { x: current.x, y: current.y, angle: 0 } : spec ? { x: relX(spec.x), y: spec.y, angle: 0 } : null);
   function now() {
     const pv = pelvisOf(world);
     return {
@@ -96,10 +104,11 @@ export function makePlanRunner(keys, world, hz) {
   }
   function start(i) {
     const cur = now();
+    curFeet = cur.feet;
     from = to || cur;
     const key = keys[i];
     to = {
-      pelvis: key.pelvis === 'hold' ? cur.pelvis : key.pelvis.x === 'backFoot' ? { x: cur.feet[0].x + 0.04, y: key.pelvis.y } : key.pelvis, torso: key.torso,
+      pelvis: key.pelvis === 'hold' ? cur.pelvis : { x: relX(key.pelvis.x), y: key.pelvis.y }, torso: key.torso,
       feet: key.feet.map((f, j) => resolve(f, cur.feet[j])),
       hands: key.hands.map((hd, j) => resolve(hd, cur.hands[j])),
       planted: key.planted, grip: key.grip, support: key.support || null,
