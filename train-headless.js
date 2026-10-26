@@ -198,6 +198,8 @@ function readArgs() {
     else if (key === '--gate-targets') out.gateTargets = true;
     else if (key === '--target-mean') { out.targetMean = +val; i++; }
     else if (key === '--no-ramp') out.noRamp = true; // Full-length training episodes from the first generation.
+    else if (key === '--getup-cap') { out.getupCap = +val; i++; } // Resume the get-up curriculum at this depth.
+    else if (key === '--climb-cap') { out.climbCap = +val; i++; } // Resume a box-height curriculum at this height.
     else if (key === '--only') out.only = true; // Stop after the starting skill instead of climbing the ladder.
   }
   return out;
@@ -1174,6 +1176,8 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
         log('resumed gen ' + state.gen + ' skill ' + (state.skill || 1));
       }
     }
+    if (opts.getupCap > 0) state.getupMax = opts.getupCap;
+    if (opts.climbCap > 0) state.climbMax = opts.climbCap;
     if (opts.skillSet) state.skill = opts.skill;
     else if (!(state.skill > 0)) state.skill = opts.skill || 1;
     setSkill(state.skill);

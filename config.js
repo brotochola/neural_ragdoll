@@ -359,7 +359,7 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 24,
+    version: 25,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
@@ -372,6 +372,8 @@ export const config = {
     gaitLift: 1, // Walk and climb: one foot down, the other paid for its height, full at gaitLiftMeters.
     gaitLiftMeters: 0.08,
     climbLift: 1.5, // Climb level only: a foot in the approach zone before the edge earns this times its height over the box top (capped at 1).
+    getupOver: 2, // Get-up only: +this with the centre of mass right over the feet midpoint, 0 at getupOverMeters away.
+    getupOverMeters: 0.3,
     getupHips: 2, // Get-up only: +this x pelvis height over the standing torso height. In the upright row.
     climbFoot: 2, // Was 1, light next to walkSpeed 3. Climb level only: +this per foot on top of the box. In the upright row.
     planted: 1.5, // Added to the upright row: +this with both feet down, -this with one up. Walk level: +this with at least one foot down, -this with both up (no hopping).

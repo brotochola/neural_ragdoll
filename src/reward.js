@@ -293,6 +293,16 @@ function uprightRow(measure) {
     h = h < 0 ? 0 : h > 1 ? 1 : h;
     hips = weight.getupHips * h;
   }
+  // GETUP balance: pay the centre of mass over the feet, full when right above their midpoint and
+  // nothing past getupOverMeters. From a deep squat the net threw itself backwards and rolled into
+  // an arm plank, which barely pays contact (hands and feet are free). Rising needs the weight over
+  // the feet first; in the plank the feet are ~0.8 m away and this pays nothing.
+  if (measure && measure.getup && weight.getupOver && measure.partX) {
+    const mid = ((measure.partX[part.footLeft] || 0) + (measure.partX[part.footRight] || 0)) / 2;
+    let k = 1 - Math.abs((measure.centerX || 0) - mid) / (weight.getupOverMeters || 0.3);
+    k = k < 0 ? 0 : k;
+    hips += weight.getupOver * k;
+  }
   return weight.upright * mix + feet + walk + climb + gait + hips;
 }
 export function markError(measure, targetIndex) {
