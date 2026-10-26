@@ -52,14 +52,14 @@ const SPEC = [
   ['stepUp', 0.42, 0.08], // highest step up with the feet alone
   ['handRise', 0.35, 0.1], // hands go down when the ground rises this much within 0.6 m ahead
   ['handPull', 0.35, 0.15], // with hands down the hips sit this share of the way from the feet to the hands
-  ['leanK', 0.5, 0.2], // trunk leans in by this share of the slope angle ahead
+  ['leanK', 0.25, 0.15], // trunk leans in by this share of the slope angle ahead
   ['handLean', 0.35, 0.2], // and this much more when scrambling
   ['clear', 0.12, 0.05], // a moving foot clears the ground in between by this much
   ['tFoot', 0.8, 0.2], // seconds per foot move (weight shift, then the step)
   ['tHand', 0.6, 0.2], // seconds per hand move
   ['shift', 0.35, 0.1], // share of a foot move spent shifting the weight before lifting the foot
-  ['kHip', 1.0, 0.4], // balance by hips (as in the pose executor), on two feet
-  ['kAnkle', 2.0, 0.6], // balance by ankles
+  ['kHip', 0.3, 0.2], // balance by hips (as in the pose executor), on two feet
+  ['kAnkle', 0.8, 0.3], // higher ankle and hip gains made a body standing on one foot oscillate and fall in 3 s // balance by ankles
   ['torsoGain', 0.4, 0.3], // supporting legs turn the trunk back to its lean
   ['handReach', 0.62, 0.08], // hands go this far at most from the shoulder
   ['footSlope', 0.6, 0.12], // steepest ground a foot stands on without hands (rad)
@@ -188,7 +188,7 @@ function episode(p, seed, record) {
       const hx = hands.reduce((a, h) => a + h.x, 0) / hands.length;
       x = x + p.handPull * (hx - x);
     }
-    leanNow = -p.leanK * slopeAhead(x);
+    leanNow = -Math.max(-0.1, Math.min(0.3, p.leanK * slopeAhead(x))); // on the feet alone, a little lean into the slope at most
     let y = ground(x) + (scrambling() ? p.hipHands : p.hipH) + SOLE;
     if (scrambling()) {
       // trunk toward the hands (or where they are going): lean = angle of hips->hands from vertical, less a bit
@@ -262,8 +262,9 @@ function episode(p, seed, record) {
     const goal = { pelvis: pelvisGoal, torso: leanCur, feet, hands, gripping, planted, torsoGain: p.torsoGain };
     const actual = pose.actualOf(world);
     const support = move.kind === 'foot' ? lim.foot[1 - move.k].x : undefined;
-    const jt = scrambling() ? pose.jointTargets(goal, actual) : pose.balancedTargets(goal, m, { planted, support, kHip: p.kHip, kAnkle: p.kAnkle, kAnkleVel: 0.15, kHipVel: 0.1 }, actual);
+    const jt = lim.grip[0] || lim.grip[1] ? pose.jointTargets(goal, actual) : pose.balancedTargets(goal, m, { planted, support, kHip: p.kHip, kAnkle: p.kAnkle, kAnkleVel: 0.4, kHipVel: 0.2 }, actual);
     pose.commandsFor(world, jt, tmp);
+    if (process.env.DEBUG_PEL && ep.frame % 6 === 0) { const pv = pose.pelvisOf(world); console.log('   f', (ep.frame / HZ).toFixed(2), move.kind + (move.k != null ? move.k : ''), 's', s.toFixed(2), 'pel goal', pelvisGoal.x.toFixed(2), pelvisGoal.y.toFixed(2), 'act', pv.x.toFixed(2), pv.y.toFixed(2), 'torso', pv.angle.toFixed(2), 'lean', leanCur.toFixed(2), 'com', (m.centerX || 0).toFixed(2), 'feet', feet.map((f) => f.x.toFixed(2) + ',' + f.y.toFixed(2)).join(' '), 'planted', planted.join(',')); }
     for (let j = 0; j < J; j++) this.action[j] = tmp[j];
     for (let k = 0; k < 2; k++) {
       let near = false;

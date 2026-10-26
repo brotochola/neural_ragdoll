@@ -106,7 +106,7 @@ function drive(e) {
   }
   const goal = { pelvis: targets.hips, torso: state.lean, feet, hands: targets.hands, gripping: held, planted, torsoGain: 0.4 };
   const actual = pose.actualOf(world);
-  const jt = held[0] || held[1] || !state.balance ? pose.jointTargets(goal, actual) : pose.balancedTargets(goal, m, { planted, kHip: 1.0, kAnkle: 2.0, kAnkleVel: 0.15, kHipVel: 0.1 }, actual);
+  const jt = held[0] || held[1] || !state.balance ? pose.jointTargets(goal, actual) : pose.balancedTargets(goal, m, { planted, kHip: 0.3, kAnkle: 0.8, kAnkleVel: 0.4, kHipVel: 0.2 }, actual);
   pose.commandsFor(world, jt, tmp);
   for (let j = 0; j < J; j++) e.action[j] = tmp[j];
   // "agarra": the hand closes once it is at its mark (closing on the way caught whatever it brushed),
