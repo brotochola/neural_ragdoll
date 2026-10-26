@@ -263,7 +263,11 @@ const rand = makeSeededRandom(4242);
 const normal = () => randomNormalSample(rand);
 const mean = new Float64Array(SPEC.length);
 if (init) { const saved = JSON.parse(fs.readFileSync(init, 'utf8')).best; for (let d = 0; d < SPEC.length && d < saved.length; d++) mean[d] = saved[d]; }
-const sigma = Float64Array.from(SPEC.map((s) => s[2] * sigmaScale));
+// --only prefixes: search only the parameters whose names start with one of them (e.g. jump,land);
+// the others stay at the --init values (a full search drifted the running gait it depends on).
+const only = arg('--only', null);
+const searched = (name) => !only || only.split(',').some((q) => name.startsWith(q));
+const sigma = Float64Array.from(SPEC.map((s) => (searched(s[0]) ? s[2] * sigmaScale : 0)));
 const floor = SPEC.map((s) => s[2] * 0.15);
 let best = null;
 const save = (extra = {}) => fs.writeFileSync(out, JSON.stringify(Object.assign({ mode, speedMin, speedMax, gapMin, gapMax, floorH, boxH, boxW, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass }, extra)));
@@ -291,7 +295,7 @@ for (let it = 0; it < iters; it++) {
     for (const c of top) s += (c.v[d] - m) ** 2;
     s = Math.sqrt(s / top.length);
     mean[d] = 0.7 * m + 0.3 * mean[d];
-    sigma[d] = Math.max(floor[d], 0.7 * s + 0.3 * sigma[d]);
+    sigma[d] = searched(SPEC[d][0]) ? Math.max(floor[d], 0.7 * s + 0.3 * sigma[d]) : 0;
   }
   if (it % 5 === 0 || it === iters - 1) console.log('iter', it, 'held-out best', best.score.toFixed(3), 'pass', best.pass + '/12', 'gen best', cands[0].score.toFixed(3));
 }
