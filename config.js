@@ -406,6 +406,8 @@ export const config = {
     gaitStrideMeters: 0.5,
     gaitLift: 1, // Walk and climb: one foot down, the other paid for its height, full at gaitLiftMeters.
     gaitLiftMeters: 0.08,
+    gaitClock: +(globalThis.process?.env?.GAIT_CLOCK || 0), // Walk: periodic reward on the gait clock, per foot (reward.js). Set with GAIT_CLOCK=2 for the walk expert run.
+    gaitClockSwingSpeed: 1, // m/s of forward foot speed that pays the full swing credit.
     climbLift: 1.5, // Climb level only: a foot in the approach zone before the edge earns this times its height over the box top (capped at 1).
     getupTrack: 6, // Get-up imitation: +this with the joints on the reference, exp(-error / getupTrackScale).
     getupTrackScale: 0.3,

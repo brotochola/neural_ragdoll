@@ -495,7 +495,7 @@ async function runMain() {
   if (opts.gateTargets) config.eval.gateTargets = true;
   if (opts.targetMean != null && Number.isFinite(opts.targetMean)) config.reward.targetMean = opts.targetMean;
   if (opts.noRamp) config.skill.rampGenerations = 0;
-  const backupDir = path.join(root, 'backups');
+  const backupDir = process.env.BACKUP_DIR ? path.resolve(root, process.env.BACKUP_DIR) : path.join(root, 'backups'); // BACKUP_DIR: separate folder for a parallel run
   fs.mkdirSync(backupDir, { recursive: true });
   const logPath = path.join(backupDir, 'train-log.txt');
   const statePath = path.join(backupDir, 'train-state.json');

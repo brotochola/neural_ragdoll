@@ -284,6 +284,31 @@ function uprightRow(measure) {
       }
     }
   }
+  // GAIT CLOCK (periodic reward composition, Siekmann et al. 2021): the clock the net sees says
+  // which foot should swing. Left swings while sin(phase) > 0, right while sin(phase) < 0. The
+  // walker scooted: the right foot did every step (in the air 45-64% of the time), the left
+  // stayed planted and dragged (3-7%). Per foot: in its swing half, + for being off the floor and
+  // moving forward; in its stance half, + for being down and not sliding. Weighted by |sin| so
+  // the switch-over moments (double support) are free.
+  if (measure && measure.walking && measure.walkSpeed > 0 && weight.gaitClock && measure.gaitPhase != null && measure.touch) {
+    const sn = Math.sin(measure.gaitPhase);
+    const vx = measure.partVX;
+    const dir = measure.walkDir || 1;
+    for (const [p, sign] of [[part.footLeft, 1], [part.footRight, -1]]) {
+      const w = sn * sign; // > 0: this foot's swing half, < 0: its stance half
+      const down = !!measure.touch[p];
+      const v = vx ? dir * (vx[p] || 0) : 0;
+      if (w > 0) {
+        let fwd = v / (weight.gaitClockSwingSpeed || 1);
+        fwd = fwd < -1 ? -1 : fwd > 1 ? 1 : fwd;
+        gait += weight.gaitClock * w * ((down ? -1 : 1) + fwd) * 0.5;
+      } else {
+        let slide = Math.abs(v) / 0.5;
+        slide = slide > 1 ? 1 : slide;
+        gait += weight.gaitClock * -w * ((down ? 1 : -1) - slide) * 0.5;
+      }
+    }
+  }
   // GETUP: pay pelvis height, up to the standing torso height. The first get-up runs settled into
   // a plank on the arms with the legs flat: torso off the floor, head a little higher, and nothing
   // paid for getting the knees under the body and the hips up, which is the step to standing.

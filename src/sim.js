@@ -2289,6 +2289,9 @@ export function createSim(box) {
       // What the speed row asks for right now: nothing during the delay.
       this.measure.walkDir = walk.dir;
       this.measure.walkSpeed = this.frame / config.physics.hz > (walk.delay || 0) ? walk.speed : 0;
+      // The same clock the net sees, for the periodic gait reward (reward.js).
+      this.measure.gaitPhase = (2 * Math.PI * this.frame) / (config.physics.hz * (config.walk.periodSeconds || 1));
+      this.measure.partVX = this.world.vx;
       const offset = this.walkOffset();
       const box = this.climbBox;
       const ramp = config.climb.liftRamp || 0.3;
