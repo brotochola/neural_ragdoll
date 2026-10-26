@@ -1917,6 +1917,33 @@ export function createSim(box) {
       }
       // STAIRS: n steps of rise x run starting near the feet, then a landing. Each step is a static box
       // from its front edge to the end of the landing, (i+1) x rise tall. this.climbBox is the first.
+      // TERRAIN: extra static blocks (uneven ground, steps) and loose dynamic boxes, placed relative to
+      // the feet at the start: options.terrain = { statics: [{dx, w, h}], dynamics: [{dx, w, h, density}] }.
+      this.terrain = null;
+      const terrain = this.options.terrain;
+      if (terrain) {
+        const mid =
+          ((this.measure.partX[config.partIndex.footLeft] || 0) +
+            (this.measure.partX[config.partIndex.footRight] || 0)) / 2;
+        this.terrain = { statics: [], dynamics: [] };
+        for (const b of terrain.statics || []) {
+          const id = spawnStaticBox(world, mid + b.dx + b.w / 2, b.w / 2, b.h / 2);
+          this.objects.push(id);
+          this.terrain.statics.push({ x0: mid + b.dx, x1: mid + b.dx + b.w, top: b.h, side: 1 });
+          this.grippable.push({ id, cx: mid + b.dx + b.w / 2, cy: b.h / 2 });
+        }
+        for (const b of terrain.dynamics || []) {
+          const id = CreateBoxPolygon({
+            worldId: world.worldId, type: dynamicBody,
+            position: vector(mid + b.dx + b.w / 2, (b.y || 0) + b.h / 2), size: vector(b.w / 2, b.h / 2),
+            density: b.density || 20, friction: 0.8,
+          }).bodyId;
+          world.thrownIds.push(id);
+          world.thrownShapes.push(world.shapeOf(id));
+          this.objects.push(id);
+          this.terrain.dynamics.push(id);
+        }
+      }
       this.stairs = null;
       const stairs = this.options.stairs;
       if (stairs && stairs.n > 0) {

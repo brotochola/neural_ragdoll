@@ -55,6 +55,8 @@ const run = args.includes('--run');
 const stairsN = +arg('--stairs', 0);
 const stairRise = +arg('--rise', 0.1);
 const stairTread = +arg('--tread', 0.3);
+// --bumps H: uneven ground from 1 m to 7 m ahead, blocks 0.2-0.6 m wide and up to H tall.
+const bumps = +arg('--bumps', 0);
 if (arg('--period', null)) config.walk.periodSeconds = +arg('--period', 0.9);
 if (speedMax > 0) config.walk.maxStandSpeed = Math.max(config.walk.maxStandSpeed, speedMax * 1.6);
 const decode = (v) => Object.assign(decodeBase(v), { track, clock });
@@ -63,6 +65,16 @@ function episode(p, seed, record) {
   const r = makeSeededRandom(3000 + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   if (speedMax > 0) start.walk.speed = speedMin + r() * (speedMax - speedMin);
+  if (bumps > 0) {
+    const statics = [];
+    let x = 1.0;
+    while (x < 7) {
+      const w = 0.2 + r() * 0.4;
+      statics.push({ dx: x, w, h: 0.01 + r() * (bumps - 0.01) });
+      x += w + 0.1 + r() * 0.5;
+    }
+    start.terrain = { statics };
+  }
   if (stairsN > 0) {
     start.stairs = { n: stairsN, rise: stairRise, run: stairTread, near: 0.6 + r() * 0.3, landing: 2 };
     start.frames = Math.round((6 + stairsN * 1.6) * config.physics.hz);
