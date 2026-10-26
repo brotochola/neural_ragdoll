@@ -1795,6 +1795,17 @@ export function createSim(box) {
       }
       this.measure.climbBox = this.climbBox;
       if (this.options.getup) getupMarks(this.measure, this.options);
+      // BOARD: the foot marks sit on the plank, not on the floor. Planted at floor height they were
+      // 13 cm under the feet, and a net trained to put its feet on their marks stepped off a still
+      // plank within 2 s.
+      if (this.board && this.options.targets) {
+        const top = config.board.pivotHeight + 2 * config.board.halfThick;
+        for (let i = 0; i < config.targets.length; i++) {
+          if (config.targets[i].ride) continue;
+          const target = this.options.targets[i];
+          if (target) target.y = top + config.skill.footGroundMeters;
+        }
+      }
       this.measure.targets = episodeTargets(this.options);
       measureProximity(world, this.measure);
     }
