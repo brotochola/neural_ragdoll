@@ -125,8 +125,11 @@ function episode(frames, seed, record) {
     const fr = world.py[P.footRight];
     const low = Math.min(fl, fr);
     const high = Math.max(fl, fr);
-    bestFoot = Math.max(bestFoot, Math.min(1, low / top) * 0.7 + Math.min(1, high / top) * 0.3);
-    bestHip = Math.max(bestHip, Math.min(1, (world.py[P.torso] - top) / config.body.torsoHeightMeters));
+    // Progress only counts with the head up: the first search lay on the floor with both feet
+    // propped on the box (head 0.13 m), which paid the feet-on-top terms.
+    const headUpNow = Math.max(0, Math.min(1, (m.headHeight - top) / standHead));
+    if (m.headHeight > 0.9) bestFoot = Math.max(bestFoot, Math.min(1, low / top) * 0.7 + Math.min(1, high / top) * 0.3);
+    bestHip = Math.max(bestHip, Math.min(1, (world.py[P.torso] - top) / config.body.torsoHeightMeters) * (0.5 + 0.5 * headUpNow));
     if (record && f % 2 === 0) {
       const p = [];
       for (let i = 0; i < world.parts.length; i++) p.push(+world.px[i].toFixed(3), +world.py[i].toFixed(3), +Math.atan2(world.s[i], world.c[i]).toFixed(3));
@@ -135,13 +138,14 @@ function episode(frames, seed, record) {
     if (f < last) continue;
     const onTop = ep.footOnTop ? (ep.footOnTop() ? 1 : 0) : 0;
     const head = Math.max(0, Math.min(1, (m.headHeight - top) / standHead));
-    score += 2 * onTop + 2 * head + Math.max(0, m.torsoCos) + (onTop && isStanding(m) ? 3 : 0);
+    score += 2 * head + onTop * (0.5 + 2 * head) + Math.max(0, m.torsoCos) * head + (onTop && isStanding(m) ? 3 : 0);
     n++;
   }
   const s = ep.stats;
   const frames2 = s.windowFrames || 0;
   const pass = !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
-  return { score: score / Math.max(1, n) + 1.5 * bestFoot + 0.5 * Math.max(0, bestHip), pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
+  const why = 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
+  return { why, score: score / Math.max(1, n) + 1.5 * bestFoot + 0.5 * Math.max(0, bestHip), pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
 }
 
 function evaluate(v) {
@@ -158,6 +162,16 @@ function evaluate(v) {
   return { score: s / seeds + pass, pass, top };
 }
 
+// --show: replay the --init motion on --seeds starts, print why each passes or not, save a recording.
+if (args.includes('--show')) {
+  const v = JSON.parse(fs.readFileSync(init, 'utf8')).best;
+  for (let i = 0; i < seeds; i++) {
+    const r = episode(decode(v), i, i === 0);
+    console.log('seed', i, 'score', r.score.toFixed(2), 'pass', r.pass, 'onTop', r.onTop, r.why);
+    if (i === 0) fs.writeFileSync(out, JSON.stringify({ side, height, poses: r.poses }));
+  }
+  process.exit(0);
+}
 let mean = new Float64Array(dims);
 if (init) {
   const saved = JSON.parse(fs.readFileSync(init, 'utf8')).best;
