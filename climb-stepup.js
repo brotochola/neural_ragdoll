@@ -104,6 +104,7 @@ function episode(p, seed, record) {
   let bestRise = 0; // highest head over the box top while both feet are on it
   let tipped = 0; // frames with the torso tipped past ~80 degrees: the hands search flipped head-first onto the box
   let allFrames = 0;
+  let inverted = 0; // the torso went past horizontal at some point (a dive or flip)
   let stepsUp = 0; // stairs: highest step with both feet on it and the head up
   let bestHip = 0;
   const poses = record ? [] : null;
@@ -124,6 +125,7 @@ function episode(p, seed, record) {
     allFrames++;
     if (ep.stairs && m.headHeight > 1.0) for (let k = stepsUp; k < ep.stairs.length; k++) if (feetOnBox(m, ep.stairs[k]) === 2) stepsUp = k + 1;
     if (m.torsoCos < 0.2) tipped++;
+    if (m.torsoCos < 0) inverted = 1;
     if (m.headHeight > 0.9) {
       bestFoot = Math.max(bestFoot, Math.min(1, low / top) * 0.7 + Math.min(1, high / top) * 0.3);
       if (b) bestFeetOn = Math.max(bestFeetOn, feetOnBox(m, b));
@@ -141,7 +143,8 @@ function episode(p, seed, record) {
     const head = Math.max(0, Math.min(1, (m.headHeight - top) / standHead));
     // Only being on the box pays at the end: the second search stood still in front of it, which
     // the head-height term paid almost in full.
-    const on = b ? feetOnBox(m, b) : 0;
+    // Feet on the box count only with the head well above it (it dived and hung head-down).
+    const on = b && m.headHeight > top + 0.5 ? feetOnBox(m, b) : 0;
     score += on * (0.5 + head) + onTop * (2 * head + Math.max(0, m.torsoCos)) + (onTop && isStanding(m) ? 3 : 0);
     n++;
   }
@@ -150,7 +153,7 @@ function episode(p, seed, record) {
   const pass = (!ep.stairs || stepsUp === ep.stairs.length) && !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
   const why = (ep.stairs ? 'steps ' + stepsUp + '/' + ep.stairs.length + ' ' : '') + 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
   const boxInfo = ep.climbBox ? { x0: ep.climbBox.x0, x1: ep.climbBox.x1, top: ep.climbBox.top } : null;
-  return { boxInfo, why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise - 4 * tipped / Math.max(1, allFrames) + 2 * stepsUp, pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
+  return { boxInfo, why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise - 4 * tipped / Math.max(1, allFrames) + 2 * stepsUp - 6 * inverted, pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
 }
 
 // seedBase: each generation draws new practice starts. With 3 fixed ones the 0.3 m search passed
