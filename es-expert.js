@@ -23,6 +23,10 @@ const sigma = +arg('--sigma', 0.02);
 const lr = +arg('--lr', 0.003);
 const evalN = +arg('--eval-n', 20);
 const evalEvery = +arg('--eval-every', 5);
+// --falls file: half the starts are real falls from the course (course.js --dump-falls), lying as they
+// fell, with the blocks around them rebuilt; the other half the usual lying starts.
+const fallsFile = arg('--falls', null);
+const falls = fallsFile ? JSON.parse(fs.readFileSync(path.resolve(root, fallsFile), 'utf8')) : null;
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -39,14 +43,28 @@ const saved = JSON.parse(fs.readFileSync(path.join(root, from), 'utf8'));
 const handover = saved.handover;
 let theta = Float64Array.from(saved.theta);
 
+let useFalls = false;
 function run(w, seed, phase) {
   setSkill(9);
   const rand = makeSeededRandom(seed);
   const start = sim.fillTrainingStart({}, rand, evalMode(9));
+  let side = start.tilt > 0 ? 'up' : 'down';
+  if (falls && (useFalls || rand() < 0.5)) {
+    const f = falls[Math.floor(rand() * falls.length)];
+    const P = config.partIndex;
+    const mid = (f.pose[P.footLeft * 3] + f.pose[P.footRight * 3]) / 2;
+    start.startPose = f.pose;
+    start.startVel = f.vel;
+    start.tilt = 0;
+    start.drop = 0;
+    start.settle = 0;
+    start.terrain = { statics: f.blocks.map((b) => ({ dx: b.x0 - mid, w: b.x1 - b.x0, h: b.top })) };
+    side = f.pose[2] > 0 ? 'up' : 'down'; // torso turned back (face up) or forward (face down)
+  }
   world.rebuild();
   const ep = new sim.Episode(world, w, start.tilt || 0, start.drop || 0, Object.assign({ phase }, start));
   const stand = new ElmanNetwork(Float32Array.from(standW));
-  const t0 = handover[start.tilt > 0 ? 'up' : 'down'];
+  const t0 = handover[side];
   const origDecide = ep.decide.bind(ep);
   ep.decide = function () {
     origDecide();
@@ -66,8 +84,16 @@ function run(w, seed, phase) {
 function evaluate(w, n) {
   let ok = 0;
   for (let i = 0; i < n; i++) if (run(w, config.eval.seed + 9 * 10007 + i * 17, i % 6).pass) ok++;
-  return ok;
+  if (!falls) return ok;
+  // With falls: the official lying starts plus as many real course falls (fixed seeds).
+  useFalls = true;
+  let okF = 0;
+  for (let i = 0; i < n; i++) if (run(w, 777000 + i * 13, i % 6).pass) okF++;
+  useFalls = false;
+  lastFalls = okF;
+  return ok + okF;
 }
+let lastFalls = 0;
 
 const rng = makeSeededRandom(31337);
 const normal = () => randomNormalSample(rng);
@@ -75,7 +101,7 @@ const N = theta.length;
 const m = new Float64Array(N);
 const v = new Float64Array(N);
 let best = evaluate(Float32Array.from(theta), evalN);
-console.log('start eval getup ' + best + '/' + evalN);
+console.log('start eval getup ' + best + '/' + evalN * (falls ? 2 : 1) + (falls ? ' (course falls ' + lastFalls + '/' + evalN + ')' : ''));
 let seedBase = 500000;
 for (let g = 0; g < gens; g++) {
   const seeds = Array.from({ length: seedsPer }, () => seedBase++);
@@ -122,7 +148,7 @@ for (let g = 0; g < gens; g++) {
   let msg = 'gen ' + g + ' mean fitness ' + mean.toFixed(3) + ' training passes ' + passes + '/' + pairs * 2 * seedsPer;
   if ((g + 1) % evalEvery === 0) {
     const ok = evaluate(Float32Array.from(theta), evalN);
-    msg += ' | EVAL getup ' + ok + '/' + evalN;
+    msg += ' | EVAL getup ' + ok + '/' + evalN * (falls ? 2 : 1) + (falls ? ' (course falls ' + lastFalls + '/' + evalN + ')' : '');
     if (ok >= best) {
       best = ok;
       fs.writeFileSync(path.resolve(root, out), JSON.stringify(Object.assign({}, saved, { role: 'getup-expert-es', gen: g, eval: { getup: ok + '/' + evalN }, theta: Array.from(theta) })));

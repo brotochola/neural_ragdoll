@@ -27,6 +27,10 @@ const verbose = args.includes('--verbose');
 // each time the selector hands over to the climb, to tune the climb from real arrivals.
 const dumpFile = arg('--dump-states', null);
 const dumped = [];
+// --dump-falls file: 1.2 s after each fall, the lying body (x relative to the pelvis) and the blocks
+// within 2.5 m, to tune the get-up from real falls on the course.
+const fallsFile = arg('--dump-falls', null);
+const falls = [];
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -84,17 +88,19 @@ function layout(r) {
   // starts 3 m before it and was never tuned on bumps)
   const platformX = 10;
   const platformTop = 0.3;
-  const stairsX = 15;
-  const rise = 0.1;
-  const tread = 0.35;
-  const nSteps = 3;
+  // then two big steps of 0.3 m, each with 2.5 m of flat top (the step climb, repeated); normal stairs
+  // (10-18 cm) are not learned yet.
+  const stairsX = 16;
+  const rise = 0.3;
+  const tread = 3.0;
+  const nSteps = 2;
   const end = stairsX + nSteps * tread + 4;
   statics.push({ dx: platformX, w: end - platformX, h: platformTop });
   for (let i = 0; i < nSteps; i++) statics.push({ dx: stairsX + i * tread, w: end - (stairsX + i * tread), h: platformTop + (i + 1) * rise });
-  // loose light boxes on the platform, 9.5-12 m
+  // loose light boxes on the platform, 11.5-14 m
   const dynamics = [];
   for (let i = 0; i < 3; i++) dynamics.push({ dx: 11.5 + i * 0.8 + r() * 0.3, w: 0.15, h: 0.12, density: 8, y: platformTop });
-  return { statics, dynamics, platformX, platformTop, stairsX, finish: stairsX + nSteps * tread + 1.5, end };
+  return { statics, dynamics, platformX, platformTop, stairsX, finish: stairsX + (nSteps - 1) * tread + 1.5, end };
 }
 
 function run(seed, record) {
@@ -199,6 +205,17 @@ function run(seed, record) {
     const m = this.measure;
     // Fallen? (head low for half a second)
     downT = m.headHeight - groundUnder(world.px[0]) < 0.8 ? downT + 1 / HZ : 0;
+    if (fallsFile && mode === 'getup' && Math.abs(this.frame - this.getupStart - 0.7 * HZ) < 0.5) {
+      const px0 = world.px[0];
+      const pose = [];
+      const vel = [];
+      for (let k = 0; k < world.parts.length; k++) {
+        pose.push(+(world.px[k] - px0).toFixed(4), +world.py[k].toFixed(4), +Math.atan2(world.s[k], world.c[k]).toFixed(4));
+        vel.push(+world.vx[k].toFixed(3), +world.vy[k].toFixed(3), +world.spin[k].toFixed(3));
+      }
+      const near = blocks.filter((b) => b.x1 > px0 - 2.5 && b.x0 < px0 + 2.5).map((b) => ({ x0: +(b.x0 - px0).toFixed(3), x1: +(Math.min(b.x1, px0 + 3) - px0).toFixed(3), top: b.top }));
+      falls.push({ pose, vel, blocks: near });
+    }
     if (downT > 0.5 && mode !== 'getup') {
       setMode('getup');
       getup = new ElmanNetwork(Float32Array.from(getupW));
@@ -268,7 +285,7 @@ function run(seed, record) {
       m.walkDir = 1;
       walkCtl(stopP, this, tmp);
       for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
-      if (modeT > 2) setMode('hold'); // as tuned in stop-search.js
+      if (modeT > 2) setMode(process.env.HOLD_NET ? 'steady' : 'hold'); // as tuned in stop-search.js
     } else if (mode === 'hold') {
       // Stand still on both feet with the pose executor, then decide.
       if (!this.holdFeet) this.holdFeet = [config.partIndex.footLeft, config.partIndex.footRight].map((f) => pose.soleOf(world, f));
@@ -347,4 +364,5 @@ for (let i = 0; i < n; i++) {
 console.log('course finished', ok + '/' + n);
 if (recordFile) fs.writeFileSync(recordFile, JSON.stringify({ skill: 6, fps: HZ / 3, shapes, episodes }));
 if (dumpFile) { fs.writeFileSync(dumpFile, JSON.stringify(dumped)); console.log('states', dumped.length, '->', dumpFile); }
+if (fallsFile) { fs.writeFileSync(fallsFile, JSON.stringify(falls)); console.log('falls', falls.length, '->', fallsFile); }
 sim.destroyWorld(world);
