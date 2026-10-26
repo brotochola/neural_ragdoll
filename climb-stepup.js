@@ -85,6 +85,8 @@ function episode(p, seed, record) {
   let bestFoot = 0; // highest the LOWER foot got, as a share of the box height (both feet up)
   let bestFeetOn = 0; // most feet on the box at once, with the head up
   let bestRise = 0; // highest head over the box top while both feet are on it
+  let tipped = 0; // frames with the torso tipped past ~80 degrees: the hands search flipped head-first onto the box
+  let allFrames = 0;
   let bestHip = 0;
   const poses = record ? [] : null;
   let f = 0;
@@ -101,6 +103,8 @@ function episode(p, seed, record) {
     // Progress only counts with the head up: the first search lay on the floor with both feet
     // propped on the box (head 0.13 m), which paid the feet-on-top terms.
     const headUpNow = Math.max(0, Math.min(1, (m.headHeight - top) / standHead));
+    allFrames++;
+    if (m.torsoCos < 0.2) tipped++;
     if (m.headHeight > 0.9) {
       bestFoot = Math.max(bestFoot, Math.min(1, low / top) * 0.7 + Math.min(1, high / top) * 0.3);
       if (b) bestFeetOn = Math.max(bestFeetOn, feetOnBox(m, b));
@@ -127,7 +131,7 @@ function episode(p, seed, record) {
   const pass = !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
   const why = 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
   const boxInfo = ep.climbBox ? { x0: ep.climbBox.x0, x1: ep.climbBox.x1, top: ep.climbBox.top } : null;
-  return { boxInfo, why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise, pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
+  return { boxInfo, why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise - 4 * tipped / Math.max(1, allFrames), pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
 }
 
 // seedBase: each generation draws new practice starts. With 3 fixed ones the 0.3 m search passed
