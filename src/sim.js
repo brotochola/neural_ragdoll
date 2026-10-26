@@ -1868,9 +1868,13 @@ export function createSim(box) {
         placeSkillBoxes(this);
       }
       this.walkStartX = this.measure.centerX || 0;
+      // On the swing the whole body rides the plank, which moves at up to ~1.2 m/s: the 0.5 m/s
+      // still-standing limit would fail every frame of a good balance.
       this.measure.standSpeedLimit = this.options.walk
         ? config.walk.maxStandSpeed
-        : 0.5;
+        : this.options.swing
+          ? 3
+          : 0.5;
       this.measure.plantedWeight = config.reward.planted || 0; // While walking: one foot down is enough (reward.js).
       this.measure.walking = !!this.options.walk;
       this.measure.getup = !!this.options.getup;
