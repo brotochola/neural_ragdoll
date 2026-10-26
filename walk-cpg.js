@@ -115,7 +115,8 @@ function episode(p, seed) {
   const airEven = Math.max(airL, airR) > 0 ? Math.min(airL, airR) / Math.max(airL, airR) : 0;
   const alt = both * (0.6 * even + 0.4 * airEven);
   const score = 2 * share + 2 * walked + 4 * alt + (pass ? 2 : 0) + (pass && alt > 0.6 ? 2 : 0);
-  return { score, pass: pass ? 1 : 0, alt, steps, airL, airR };
+  const why = 'stood ' + share.toFixed(2) + ' walked ' + (s.walkDist || 0).toFixed(2) + '/' + (s.walkCmd || 0).toFixed(2) + (s.headHit ? ' headHit' : '');
+  return { score, pass: pass ? 1 : 0, alt, steps, airL, airR, why };
 }
 
 function evaluate(v) {
@@ -132,6 +133,15 @@ function evaluate(v) {
   return { score: s / seeds, pass, alt: alt / seeds };
 }
 
+// --show: run the --init rhythm on --seeds walk starts and print what happened.
+if (args.includes('--show')) {
+  const p = decode(JSON.parse(fs.readFileSync(init, 'utf8')).best);
+  for (let i = 0; i < seeds; i++) {
+    const r = episode(p, 100 + i);
+    console.log('seed', i, 'pass', r.pass, 'alt', r.alt.toFixed(2), 'steps', r.steps.join('/'), 'air', r.airL.toFixed(2), r.airR.toFixed(2), r.why);
+  }
+  process.exit(0);
+}
 let mean = new Float64Array(dims);
 if (init) {
   const saved = JSON.parse(fs.readFileSync(init, 'utf8')).best;
