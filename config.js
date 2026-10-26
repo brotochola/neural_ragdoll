@@ -274,6 +274,13 @@ export const config = {
     // Reverse curriculum: training starts from a pose along a recorded passive fall
     // (make-falls.js -> getup-falls.json), drawn in [cap - band, cap] of the way down. The cap
     // rises as get-ups succeed; at 1 the start is lying still. The eval always starts lying.
+    // Helping hand: an upward force on the pelvis and chest of assist x body weight, fading to 0 as
+    // the pelvis reaches standing torso height. Starts at assistStart and drops assistStep whenever
+    // capPassRate of the last capWindow generations' get-ups end standing. Starts lying, like the
+    // eval. When useAssist is on, the fall library is not used.
+    useAssist: true,
+    assistStart: 1.6, // Below ~1.5 the force never lifts the whole body off the floor; at 1.6 the stand net ends up standing 4/6.
+    assistStep: 0.05,
     fallsFile: "getup-falls.json",
     startCap: 0.25,
     maxCap: 1,

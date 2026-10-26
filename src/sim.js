@@ -565,8 +565,10 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.drop = config.start.downDropMeters;
     out.settle = config.start.downSettleFrames;
     // Training with the fall library: start somewhere along a recorded fall (reverse curriculum).
+    out.assist = 0;
+    if (config.getup.useAssist && mode && mode.getupAssist > 0) out.assist = mode.getupAssist;
     const falls = mode && mode.getupFalls;
-    if (falls && falls.length && mode.getupMax > 0) {
+    if (!config.getup.useAssist && falls && falls.length && mode.getupMax > 0) {
       const g = config.getup;
       const cap = Math.min(g.maxCap, mode.getupMax);
       const low = Math.max(0, cap - g.band);
@@ -2800,6 +2802,19 @@ export function createSim(box) {
       this.airPart = -1;
     }
     stepPhysics() {
+      // Get-up helping hand: lift on pelvis and chest, fading out as the pelvis rises.
+      const assist = this.options.assist || 0;
+      if (assist > 0) {
+        const world = this.world;
+        if (!world.totalMass) world.totalMass = world.parts.reduce((sum, part) => sum + (part.m || 0), 0);
+        let low = 1 - (this.measure.partY[config.partIndex.torso] || 0) / config.body.torsoHeightMeters;
+        low = low < 0 ? 0 : low > 1 ? 1 : low;
+        const force = (assist * world.totalMass * 9.8 * low) / 2;
+        if (force > 0) {
+          b2Body_ApplyForceToCenter(world.parts[config.partIndex.torso].id, vector(0, force), true);
+          b2Body_ApplyForceToCenter(world.parts[config.partIndex.chest].id, vector(0, force), true);
+        }
+      }
       b2World_Step(
         this.world.worldId,
         config.physics.timeStep,

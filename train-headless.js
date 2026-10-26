@@ -198,6 +198,7 @@ function readArgs() {
     else if (key === '--gate-targets') out.gateTargets = true;
     else if (key === '--target-mean') { out.targetMean = +val; i++; }
     else if (key === '--no-ramp') out.noRamp = true; // Full-length training episodes from the first generation.
+    else if (key === '--getup-assist') { out.getupAssist = +val; i++; } // Resume the helping-hand curriculum at this level.
     else if (key === '--getup-cap') { out.getupCap = +val; i++; } // Resume the get-up curriculum at this depth.
     else if (key === '--climb-cap') { out.climbCap = +val; i++; } // Resume a box-height curriculum at this height.
     else if (key === '--only') out.only = true; // Stop after the starting skill instead of climbing the ladder.
@@ -567,6 +568,7 @@ async function runMain() {
       skill: state.skill || 1,
       climbMax: state.climbMax || 0,
       getupMax: state.getupMax || 0,
+      getupAssist: state.getupAssist == null ? null : state.getupAssist,
       placeScale: state.placeScale || 0,
       footRatio: state.footRatio > 0 ? state.footRatio : 0,
       heldFoot: state.heldFoot > 0 ? state.heldFoot : 0,
@@ -650,6 +652,7 @@ async function runMain() {
     state.skill = saved.skill || opts.skill || 1;
     state.climbMax = saved.climbMax || 0;
     state.getupMax = saved.getupMax || 0;
+    state.getupAssist = saved.getupAssist == null ? null : saved.getupAssist;
     state.placeScale = saved.placeScale || 0;
     state.footRatio = saved.footRatio > 0 ? saved.footRatio : 0;
     state.heldFoot = saved.heldFoot > 0 ? saved.heldFoot : 0;
@@ -770,6 +773,7 @@ async function runMain() {
       mode: Object.assign(trainingMode(state.skill | 0, state.gen, state.shiftMeters || 0), {
         climbMax: state.climbMax || 0,
         getupMax: state.getupMax || 0,
+        getupAssist: state.getupAssist || 0,
         getupFalls,
       }),
       runJobs: (jobs) => pool.run(jobs),
@@ -837,9 +841,10 @@ async function runMain() {
     }
     meanWalk /= scores.length;
     // GET-UP curriculum: start further down the recorded falls when get-ups succeed often enough.
-    if ((state.skill | 0) === 9 && getupFalls) {
+    if ((state.skill | 0) === 9 && (getupFalls || config.getup.useAssist)) {
       const g = config.getup;
       if (!(state.getupMax > 0)) state.getupMax = g.startCap;
+      if (state.getupAssist == null) state.getupAssist = g.useAssist ? g.assistStart : 0;
       let tried = 0;
       let made = 0;
       for (const row of scores) {
@@ -853,7 +858,13 @@ async function runMain() {
       const sumMade = state.getupLog.reduce((a, r) => a + r[0], 0);
       const sumTried = state.getupLog.reduce((a, r) => a + r[1], 0);
       state.getupRate = sumTried ? sumMade / sumTried : 0;
-      if (state.getupLog.length >= g.capWindow && state.getupRate >= g.capPassRate && state.getupMax < g.maxCap) {
+      if (g.useAssist) {
+        if (state.getupLog.length >= g.capWindow && state.getupRate >= g.capPassRate && state.getupAssist > 0) {
+          state.getupAssist = Math.max(0, state.getupAssist - g.assistStep);
+          state.getupLog.length = 0;
+          log('getup assist -> ' + state.getupAssist.toFixed(2) + ' x body weight (recent get-ups ' + Math.round(state.getupRate * 100) + '%)');
+        }
+      } else if (state.getupLog.length >= g.capWindow && state.getupRate >= g.capPassRate && state.getupMax < g.maxCap) {
         state.getupMax = Math.min(g.maxCap, state.getupMax + g.capStep);
         state.getupLog.length = 0;
         log('getup cap -> ' + state.getupMax.toFixed(2) + ' of the way down (recent get-ups ' + Math.round(state.getupRate * 100) + '%)');
@@ -1177,6 +1188,7 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
       }
     }
     if (opts.getupCap > 0) state.getupMax = opts.getupCap;
+    if (opts.getupAssist != null) state.getupAssist = opts.getupAssist;
     if (opts.climbCap > 0) state.climbMax = opts.climbCap;
     if (opts.skillSet) state.skill = opts.skill;
     else if (!(state.skill > 0)) state.skill = opts.skill || 1;
@@ -1252,7 +1264,7 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
           const leaned = last && last.leaned != null ? ' leaned ' + last.leaned.toFixed(3) + ' swing ' + (last.bestSwing || 0).toFixed(3) + ' land ' + (last.bestClosed || 0).toFixed(3) + '/' + (last.stoodLeanN || 0) : '';
           const steps = last && last.steps != null ? ' steps ' + last.steps.toFixed(2) : '';
           const walked = last && last.walk ? ' walked ' + last.walk.toFixed(3) + ' best ' + last.bestWalk.toFixed(2) : '';
-          const gotUp = (state.skill | 0) === 9 ? ' getup cap ' + (state.getupMax || 0).toFixed(2) + ' rate ' + (state.getupRate || 0).toFixed(2) : '';
+          const gotUp = (state.skill | 0) === 9 ? (config.getup.useAssist ? ' assist ' + (state.getupAssist || 0).toFixed(2) : ' getup cap ' + (state.getupMax || 0).toFixed(2)) + ' rate ' + (state.getupRate || 0).toFixed(2) : '';
           const climbed = (state.skill | 0) === 8 || (state.skill | 0) === 11 ? ' climb cap ' + (state.climbMax || 0).toFixed(2) + ' rate ' + (state.climbRate || 0).toFixed(2) : '';
           log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + walked + climbed + gotUp + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
           saveTrainState(state);
