@@ -1,0 +1,88 @@
+<title>Ragdoll en vivo</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one live stage (you are the planner), the five marks dragged on it, the switches in a strip below. */
+:root {
+  --bg: #eef0ec; --stage: #f8f9f6; --ink: #1d2320; --muted: #5d6862; --rule: #c9cfc9;
+  --rock: #b7a17a; --rock-edge: #8a7552; --ok: #2f8a4f; --accent: #d9481c;
+  --mark-hips: #7b4fd1; --mark-hand: #d9481c; --mark-foot: #2a7fb8;
+  --shirt: #c94a3d; --shirt-back: #9c3a30; --jean: #3f6f9f; --jean-back: #2c4f72; --skin: #e9b35a;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --ok: #5cc27d; --accent: #ff7a4d;
+  --mark-hips: #a98bf0; --mark-hand: #ff7a4d; --mark-foot: #5fb1e8; --shirt: #e0604f; --shirt-back: #a8463a; --jean: #5b8fc4; --jean-back: #3d6690; --skin: #f0c070; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --ok: #5cc27d; --accent: #ff7a4d;
+  --mark-hips: #a98bf0; --mark-hand: #ff7a4d; --mark-foot: #5fb1e8; --shirt: #e0604f; --shirt-back: #a8463a; --jean: #5b8fc4; --jean-back: #3d6690; --skin: #f0c070; color-scheme: dark; }
+body { background: var(--bg); color: var(--ink); font-family: var(--display); }
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 18px 36px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 14px; }
+h1 { margin: 0; font-size: clamp(1.5rem, 5vw, 2.2rem); font-weight: 800; letter-spacing: -0.02em; text-wrap: balance; }
+.lede { margin: 0; color: var(--muted); max-width: 64ch; line-height: 1.5; font-size: 0.95rem; }
+.stagebox { position: relative; border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; background: var(--stage); }
+canvas { display: block; width: 100%; height: min(68vh, 560px); touch-action: none; cursor: grab; }
+canvas:active { cursor: grabbing; }
+#loading[hidden] { display: none; }
+#loading { position: absolute; inset: 0; display: grid; place-items: center; font: 500 0.9rem var(--mono); color: var(--muted); }
+#hud { position: absolute; left: 10px; bottom: 8px; font: 0.78rem var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bar .label { font: 700 0.72rem var(--display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+button { font: 600 0.88rem var(--display); padding: 8px 13px; border-radius: 999px; border: 1.5px solid var(--rule); background: transparent; color: var(--ink); cursor: pointer; }
+button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--bg); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lean { display: flex; align-items: center; gap: 8px; font: 0.85rem var(--mono); color: var(--muted); }
+input[type=range] { width: 160px; accent-color: var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font: 0.8rem var(--mono); color: var(--muted); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.how { display: grid; gap: 6px; font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 70ch; }
+.how b { color: var(--ink); }
+</style>
+<div class="wrap">
+  <header>
+    <h1>Ragdoll en vivo</h1>
+    <p class="lede">La física corre acá, en tu navegador. Vos sos el planificador: arrastrá las marcas de la cadera, las manos y los pies, y el cuerpo va hacia ellas solo con sus motores. Sin fuerzas mágicas.</p>
+  </header>
+  <div class="bar" role="group" aria-label="Escenario">
+    <span class="label">Escenario</span>
+    <button data-scene="floor" id="sc-floor">Piso</button>
+    <button data-scene="wall" id="sc-wall">Pared con peldaños</button>
+    <button data-scene="mountain" id="sc-mountain">Montaña</button>
+    <button id="newMountain">Otra montaña</button>
+  </div>
+  <div class="stagebox">
+    <canvas id="stage" aria-label="Escena con el ragdoll y las marcas para arrastrar"></canvas>
+    <div id="loading">Cargando la física…</div>
+    <div id="hud"></div>
+  </div>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--mark-hips)"></i>cadera</span>
+    <span><i class="dot" style="background:var(--mark-hand)"></i>manos</span>
+    <span><i class="dot" style="background:var(--mark-foot)"></i>pies</span>
+    <span><i class="dot" style="border:2px solid var(--ok)"></i>mano agarrada</span>
+  </div>
+  <div class="bar" role="group" aria-label="Manos">
+    <span class="label">Manos</span>
+    <button id="grip0">Mano izq: suelta</button>
+    <button id="grip1">Mano der: suelta</button>
+    <button id="dropHands">Bajar los brazos</button>
+  </div>
+  <div class="bar" role="group" aria-label="Cuerpo">
+    <span class="label">Cuerpo</span>
+    <button id="autohips">Cadera automática</button>
+    <button id="balance">Equilibrio</button>
+    <label class="lean" for="lean">Inclinación <input id="lean" type="range" min="-30" max="60" value="0"> <span id="leanVal">0°</span></label>
+  </div>
+  <div class="bar" role="group" aria-label="Simulación">
+    <span class="label">Simulación</span>
+    <button id="pause">Pausa</button>
+    <button id="reset">Reiniciar (R)</button>
+  </div>
+  <div class="how">
+    <div><b>Cómo funciona.</b> Cada marca es un objetivo: dónde querés la cadera, cada mano y cada pie. El ejecutor de poses calcula los ángulos de cadera, rodilla, tobillo, hombro y codo con geometría de dos segmentos (cinemática inversa) y los motores giran hacia esos ángulos con fuerza limitada.</div>
+    <div><b>Pies.</b> Un pie cuya marca está sobre el suelo cuenta como apoyado, y el equilibrio (cadera y tobillos) mantiene el peso sobre los pies apoyados. Para dar un paso, arrastrá un pie por el aire y soltalo más adelante.</div>
+    <div><b>Manos.</b> Con "agarra", la mano se cierra cuando llega a su marca y toca algo (piso, peldaño, pared o roca), y queda sujeta hasta que apagues el botón. Con las manos agarradas podés subir la cadera y colgarte. Las manos sin marca cuelgan.</div>
+    <div><b>Cadera automática</b> la pone entre los pies apoyados y la acerca a las manos que agarran. Si arrastrás la cadera, pasa a manual.</div>
+  </div>
+</div>
+<script type="module">/*BUNDLE*/</script>

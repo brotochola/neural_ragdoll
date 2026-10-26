@@ -38,3 +38,5 @@ trained/runner-*.json
 trained/runner-gap-06c-init.json
 trained/runner-box-init.json
 trained/runner-*-init.json
+play/_test.html
+play/bundle.js
