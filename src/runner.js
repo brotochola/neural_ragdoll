@@ -29,15 +29,17 @@ export const SPEC = [
   ['tMin', 0.12, 0.05], // shortest stance-to-touchdown time before a swap
   ['arm', 0.6, 0.3],
   ['elbow', 1.2, 0.4],
-  // jump stride
-  ['jumpHipPush', 0.6, 0.3],
-  ['jumpKnee', 0.0, 0.1],
-  ['jumpAnkle', 0.6, 0.25],
-  ['jumpLean', -0.2, 0.15],
-  ['jumpTuck', -2.2, 0.3], // both knees in the air
-  ['jumpHip', 1.4, 0.3], // leading thigh in the air
-  ['jumpPlace', 0.5, 0.2], // landing thigh as it comes down
-  ['jumpArm', 2.0, 0.6], // arms thrown up and forward at take-off
+  // jump stride: CHANGES to the running values for one push and flight (all 0 = an ordinary stride, so
+  // a search starts from running over the gap; the first version had absolute jump values and leapt
+  // straight up with the arms over the head, then fell on landing)
+  ['jumpHipPush', 0, 0.25],
+  ['jumpKnee', 0, 0.1],
+  ['jumpAnkle', 0, 0.2],
+  ['jumpLean', 0, 0.12],
+  ['jumpTuck', 0, 0.3], // knees in the air (added to tuck / trailKnee / reachKnee while rising)
+  ['jumpHip', 0, 0.3], // swing thigh while pushing
+  ['jumpPlace', 0, 0.2], // landing thigh
+  ['jumpArm', 0, 0.4], // arm swing amplitude
 ];
 
 export function decode(v) {
@@ -85,37 +87,34 @@ export function makeController(world) {
     const torso = angleOf(0);
     const d = (m.centerX || 0) - world.px[stance.foot];
     const v = (m.centerVelocityX || 0) - (m.walkSpeed || 0);
-    const lean = J2 ? p.jumpLean : p.lean;
+    const lean = p.lean + (J2 ? p.jumpLean : 0);
     if (!st.flight) {
       const push = d > p.pushD;
       const stanceHip = angleOf(stance.thigh) - torso;
-      action[stance.hip] = command(stance.hip, stanceHip + (torso - lean) - (push ? (J2 ? p.jumpHipPush : p.hipPush) : 0));
-      action[stance.knee] = command(stance.knee, push ? (J2 ? p.jumpKnee : p.pushKnee) : p.kneeLoad);
-      action[stance.ankle] = command(stance.ankle, (push ? (J2 ? p.jumpAnkle : p.pushAnkle) : 0) - angleOf(stance.shin));
-      action[swing.hip] = command(swing.hip, (J2 ? p.jumpHip : p.swingHip) - torso);
-      action[swing.knee] = command(swing.knee, J2 ? p.jumpTuck : p.tuck);
+      action[stance.hip] = command(stance.hip, stanceHip + (torso - lean) - (push ? p.hipPush + (J2 ? p.jumpHipPush : 0) : 0));
+      action[stance.knee] = command(stance.knee, push ? p.pushKnee + (J2 ? p.jumpKnee : 0) : p.kneeLoad);
+      action[stance.ankle] = command(stance.ankle, (push ? p.pushAnkle + (J2 ? p.jumpAnkle : 0) : 0) - angleOf(stance.shin));
+      action[swing.hip] = command(swing.hip, p.swingHip + (J2 ? p.jumpHip : 0) - torso);
+      action[swing.knee] = command(swing.knee, p.tuck + (J2 ? p.jumpTuck : 0));
       action[swing.ankle] = command(swing.ankle, 0.1 - angleOf(swing.shin));
     } else {
       // flight: the leg that pushed trails, the other reaches for the landing
-      const placeW = (J2 ? p.jumpPlace : p.place) + p.cd * d + p.cv * v;
+      const placeW = p.place + (J2 ? p.jumpPlace : 0) + p.cd * d + p.cv * v;
       action[swing.hip] = command(swing.hip, placeW - torso);
       // in a jump the landing knee stays tucked while rising, extends as the body comes down
       const falling = (m.centerVelocityY || 0) < 0;
-      action[swing.knee] = command(swing.knee, J2 && !falling ? p.jumpTuck : p.reachKnee);
+      action[swing.knee] = command(swing.knee, p.reachKnee + (J2 && !falling ? p.jumpTuck : 0));
       action[swing.ankle] = command(swing.ankle, 0.0 - angleOf(swing.shin));
-      action[stance.hip] = command(stance.hip, (J2 ? p.jumpHip * 0.5 : p.trailHip) - torso);
-      action[stance.knee] = command(stance.knee, J2 ? p.jumpTuck : p.trailKnee);
+      action[stance.hip] = command(stance.hip, p.trailHip - torso);
+      action[stance.knee] = command(stance.knee, p.trailKnee + (J2 ? p.jumpTuck : 0));
       action[stance.ankle] = command(stance.ankle, 0.1 - angleOf(stance.shin));
     }
     action[0] = 0;
     action[1] = 0;
     // arms against the legs; thrown up at a jump
-    if (J2 && (st.flight || d > p.pushD)) {
-      for (const leg of LEG) action[leg.shoulder] = command(leg.shoulder, p.jumpArm - angleOf(1));
-    } else {
-      action[swing.shoulder] = command(swing.shoulder, -p.arm - torso);
-      action[stance.shoulder] = command(stance.shoulder, p.arm - torso);
-    }
+    const arm = p.arm + (J2 ? p.jumpArm : 0);
+    action[swing.shoulder] = command(swing.shoulder, -arm - torso);
+    action[stance.shoulder] = command(stance.shoulder, arm - torso);
     action[swing.elbow] = command(swing.elbow, p.elbow);
     action[stance.elbow] = command(stance.elbow, p.elbow);
     action[4] = 0;
