@@ -306,6 +306,7 @@ export const config = {
     referenceFiles: { up: "trained/keyframes-up.json", down: "trained/keyframes-down.json" },
     statesFile: "trained/getup-states.json",
     rsiShare: 0.4,
+    wholeShare: 0.5, // Get-up fitness: this share is the whole-episode mean, the rest the end window.
     clockSeconds: 5, // The get-up clock input runs a half turn over this many seconds.
     useFalls: false, // Start training get-ups from poses along recorded falls. Off: it silently came back when the harness was turned off and fed near-standing starts to the strength curriculum.
     fallsFile: "getup-falls.json",
@@ -393,7 +394,7 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 26,
+    version: 27,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.

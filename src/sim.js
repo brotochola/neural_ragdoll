@@ -1060,6 +1060,8 @@ export function summariseEpisode(rows, offset, count, out) {
   let headHit = 0;
   let isGetup = 0;
   let isBoard = 0;
+  let trackErr = 0;
+  let trackN = 0;
   let headHeight = 0;
   const last = offset + count;
   for (let i = offset; i < last; i++) {
@@ -1081,6 +1083,7 @@ export function summariseEpisode(rows, offset, count, out) {
     headHit += row.headHit || 0;
     isGetup += row.isGetup || 0;
     isBoard += row.isBoard || 0;
+    if (row.trackErr >= 0) { trackErr += row.trackErr; trackN++; }
     headHeight += row.headHeight || 0;
     if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
     if (!row.stoodUp) stoodUp = false;
@@ -1108,6 +1111,7 @@ export function summariseEpisode(rows, offset, count, out) {
   out.headHit = headHit / n;
   out.isGetup = isGetup / n;
   out.isBoard = isBoard / n;
+  out.trackErr = trackN ? trackErr / trackN : -1;
   out.headHeight = headHeight / n;
   return out;
 }
@@ -1769,6 +1773,8 @@ export function createSim(box) {
       this.grippable = [];
       this.gripCount = 0;
       this.harnessX = null;
+      this.trackSum = 0;
+      this.trackCount = 0;
       // STRENGTH: every motor torque is the built torque times options.strength (1 = the real
       // body). The get-up curriculum starts strong and weakens to 1 (Tao et al. 2022, "Learning to
       // Get Up": a strong character discovers the motion; at normal strength exploration gets stuck).
@@ -2254,6 +2260,8 @@ export function createSim(box) {
         err += Math.abs(target - b2RevoluteJoint_GetAngle(joints[j].id));
       }
       m.trackError = err / config.net.jointCount;
+      this.trackSum = (this.trackSum || 0) + m.trackError;
+      this.trackCount = (this.trackCount || 0) + 1;
     }
     // The plank's pivot motor chases a slow sine; its torque is capped, so the doll can push back.
     driveBoard() {
@@ -2976,7 +2984,15 @@ export function createSim(box) {
       // That charged a net that IMPROVES, and the saturated fall samples diluted the rest.
       // NOW: the drop from the opening window to the ending is charged, and improving is free.
       const drop = start > end ? start - end : 0;
-      const blend = hold ? end - hold * drop : end;
+      let blend = hold ? end - hold * drop : end;
+      // GET-UP: the motion happens in the first seconds and the end window is the last 3 s, so the
+      // imitation rows never reached the fitness (tracking error 0.69 -> 0.70 rad in 100 generations).
+      // Here the whole episode counts too, and the start-window drop is not charged: lying still at
+      // the start is the point.
+      if (this.options.getup && this.lifeCount) {
+        const share = config.getup.wholeShare == null ? 0.5 : config.getup.wholeShare;
+        blend = (1 - share) * end + share * (this.lifeSum / this.lifeCount);
+      }
       return config.reward.targetMean * blend;
     }
     get stats() {
@@ -3030,6 +3046,7 @@ export function createSim(box) {
         onBoard: this.board ? 1 : 0,
         isGetup: this.options.getup ? 1 : 0,
         isBoard: this.board ? 1 : 0,
+        trackErr: this.trackCount ? this.trackSum / this.trackCount : -1,
       };
     }
     get weights() {

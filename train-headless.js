@@ -132,6 +132,7 @@ function runEpisode(sim, job, isStanding) {
     onBoard: stats.onBoard || 0,
     isGetup: stats.isGetup || 0,
     isBoard: stats.isBoard || 0,
+    trackErr: stats.trackErr == null ? -1 : stats.trackErr,
     trace: options.trace ? workerEpisode.trace : undefined,
   };
 }
@@ -778,6 +779,7 @@ async function runMain() {
 
   async function oneGeneration(state) {
     const before = state.bestEverScore;
+    state.lastScores = null;
     // residualSearch freezes the main net and only tunes the small leg net. That net reads
     // twelve hand-built numbers and never sees a target column, so it can never be the one
     // learning to aim a hand. config.skill.residualSearch turns the old behaviour back on.
@@ -824,6 +826,7 @@ async function runMain() {
         state.gen++;
       },
     });
+    state.lastScores = scores;
     if (state.anchorNote) {
       log(state.anchorNote);
       state.anchorNote = "";
@@ -1322,9 +1325,13 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
           const steps = last && last.steps != null ? ' steps ' + last.steps.toFixed(2) : '';
           const walked = last && last.walk ? ' walked ' + last.walk.toFixed(3) + ' best ' + last.bestWalk.toFixed(2) : '';
           const boarded = (state.skill | 0) === 10 ? ' board amp ' + (state.boardMax || 0).toFixed(2) + ' rate ' + (state.boardRate || 0).toFixed(2) : '';
+          let trackSum = 0;
+          let trackN = 0;
+          for (const row of state.lastScores || []) if (row.trackErr >= 0) { trackSum += row.trackErr; trackN++; }
+          const tracked = trackN ? ' track ' + (trackSum / trackN).toFixed(3) + ' rad' : '';
           const gotUp = (state.skill | 0) === 9 ? (config.getup.useStrength ? ' strength x' + (state.getupStrength || 1).toFixed(2) : config.getup.useAssist ? ' assist ' + (state.getupAssist || 0).toFixed(2) : ' getup cap ' + (state.getupMax || 0).toFixed(2)) + ' rate ' + (state.getupRate || 0).toFixed(2) : '';
           const climbed = (state.skill | 0) === 8 || (state.skill | 0) === 11 ? ' climb cap ' + (state.climbMax || 0).toFixed(2) + ' rate ' + (state.climbRate || 0).toFixed(2) : '';
-          log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + walked + climbed + gotUp + boarded + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
+          log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + walked + climbed + gotUp + boarded + tracked + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
           saveTrainState(state);
         }
         if (opts.quickEvery > 0 && state.gen % opts.quickEvery === 0) {
