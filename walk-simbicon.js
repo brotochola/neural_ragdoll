@@ -65,7 +65,8 @@ function episode(p, seed) {
   if (speedMax > 0) start.walk.speed = speedMin + r() * (speedMax - speedMin);
   if (stairsN > 0) {
     start.stairs = { n: stairsN, rise: stairRise, run: stairTread, near: 0.6 + r() * 0.3, landing: 2 };
-    start.frames = Math.round((4 + stairsN * 1.2) * config.physics.hz);
+    start.frames = Math.round((6 + stairsN * 1.6) * config.physics.hz);
+    start.walk.speed = Math.max(start.walk.speed, 0.35);
   }
   world.rebuild();
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: seed % 6 }, start));
@@ -95,7 +96,8 @@ function episode(p, seed) {
     frames++;
     if (!ep.measure.touch[feet[0]] && !ep.measure.touch[feet[1]]) flight++;
     if (ep.measure.headHeight > 1.35 && ep.measure.torsoCos > 0.8) upright++;
-    if (ep.stairs && ep.measure.torsoCos > 0.7) for (let k = stepsUp; k < ep.stairs.length; k++) if (feetOnBox(ep.measure, ep.stairs[k]) === 2) stepsUp = k + 1;
+    // A step counts when a foot stands on it (on stairs the feet are on different steps).
+    if (ep.stairs && ep.measure.torsoCos > 0.7) for (let k = stepsUp; k < ep.stairs.length; k++) if (feetOnBox(ep.measure, ep.stairs[k]) >= 1) stepsUp = k + 1;
     for (let k = 0; k < 2; k++) {
       const down = !!ep.measure.touch[feet[k]];
       const x = world.px[feet[k]];
@@ -127,7 +129,7 @@ function episode(p, seed) {
   if (stairsN > 0) {
     const topNow = ep.stairs ? ep.stairs[ep.stairs.length - 1].top : 0;
     const up = (ep.measure.headHeight - topNow) > 1.35 && ep.measure.torsoCos > 0.8;
-    const passS = stepsUp === stairsN && up;
+    const passS = stepsUp === stairsN && up && feetOnBox(ep.measure, ep.stairs[ep.stairs.length - 1]) === 2;
     const scoreS = 3 * stepsUp / stairsN + (up ? 1 : 0) + 2 * alive + (passS ? 3 : 0) + alt;
     return { score: scoreS, pass: passS ? 1 : 0, alt, why: 'steps ' + stepsUp + '/' + stairsN + ' up ' + (up ? 1 : 0) + ' head ' + ep.measure.headHeight.toFixed(2) };
   }
