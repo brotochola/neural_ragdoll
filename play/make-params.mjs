@@ -20,7 +20,12 @@ const mtSpec = specOf('mountain.js');
 let mtBest = [];
 try { mtBest = rd(process.env.MOUNTAIN || 'trained/mountain-a.json').best; } catch (e) {}
 const mountain = decodeWith(mtSpec, mtBest);
+const cragSpec = specOf('crag.js');
+let cragBest = [];
+try { cragBest = rd(process.env.CRAG || 'trained/crag-c.json').best; } catch (e) {}
+const crag = decodeWith(cragSpec, cragBest);
+for (const k of ['tHand', 'tFoot', 'tRise']) crag[k] = Math.max(0.2, crag[k]);
 const states = rd('trained/run-states.json');
 const runStates = states.filter((_, i) => i % 6 === 0).slice(0, 36);
-fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, runStates }));
-console.log('params: walk', Object.keys(walk).length, 'runner', Object.keys(runner).length, 'wall', Object.keys(wall).length, 'mountain', Object.keys(mountain).length, 'run states', runStates.length);
+fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates }));
+console.log('params: walk', Object.keys(walk).length, 'runner', Object.keys(runner).length, 'wall', Object.keys(wall).length, 'mountain', Object.keys(mountain).length, 'crag', Object.keys(crag).length, 'run states', runStates.length);
