@@ -73,11 +73,17 @@ const SPEC = [
   ['footBelow', 0.75, 0.12], // while a foot goes up, the hips hang at most this far above its knob
   ['retryPelX', -0.04, 0.04], // each retry of a foot move: hips this much closer (+) or farther (-)
   ['retryPelY', 0.06, 0.04], // and this much lower
+  // belly mantle
+  ['mantleH', 0.6, 0.12], // starts with both hands on top and a foot within this of it
+  ['tPress', 1.2, 0.3], ['pressOff', 0.25, 0.08], ['pressUp', 0.05, 0.08], ['pressLean', -0.9, 0.2],
+  ['tOver', 1.2, 0.3], ['overX', 0.0, 0.08],
+  ['crawlReach', 0.5, 0.08], ['crawlLean', -1.1, 0.15], ['tPull', 0.8, 0.2], ['pullStep', 0.25, 0.06], ['doneX', 0.45, 0.08],
 ];
 const decode = (v) => {
   const p = {};
   SPEC.forEach(([k, b], i) => (p[k] = b + (v[i] || 0)));
-  for (const k of ['tHand', 'tFoot', 'tRise']) p[k] = Math.max(0.2, p[k]);
+  for (const k of ['tHand', 'tFoot', 'tRise', 'tPress', 'tOver', 'tPull']) p[k] = Math.max(0.2, p[k]);
+  p.belly = 1;
   for (const k of Object.keys(process.env)) if (k.startsWith('P_')) p[k.slice(2)] = +process.env[k];
   return p;
 };
@@ -116,8 +122,13 @@ function episode(p, seed, record) {
     }
     // fell: head below the hips, or a body length below its highest point with no grip
     const gripped = ep.grips[0].joint || ep.grips[1].joint;
-    best = Math.max(best, footLow);
-    if (m.headHeight < world.py[0] || (!gripped && footLow < best - 0.5 && best > 0.3)) { fell = true; break; }
+    // height reached: the knob the lower foot stands on (raw foot heights paid for swinging the legs up
+    // while hanging from the top edge)
+    const ryOf = (i) => (i <= 0 ? 0 : i > rungs.length ? wallH : rungs[i - 1].y);
+    best = Math.max(best, Math.min(ryOf(lim.foot[0].rung), ryOf(lim.foot[1].rung)));
+    const onTopLying = PL.phase && ['over', 'hand', 'pull', 'lie'].includes(PL.phase);
+    if ((!onTopLying && m.headHeight < world.py[0]) || (!gripped && !onTopLying && footLow < best - 0.6 && best > 0.3) || (onTopLying && world.py[0] < wallH - 0.6)) { fell = true; break; }
+    if (PL.mantled) { upTop += 1 / HZ; if (upTop > 1.0) { topped = true; break; } continue; }
     maxFoot = Math.max(maxFoot, Math.min(lim.foot[0].rung, lim.foot[1].rung));
     // on top: both feet up there and standing for a second
     const onTopNow = feetTop() === 2 && footLow > wallH - 0.05 && m.headHeight > wallH + 1.3 && m.torsoCos > 0.8;
@@ -127,9 +138,10 @@ function episode(p, seed, record) {
   const top = rungs.length;
   const reached = Math.min(lim.foot[0].rung, lim.foot[1].rung);
   const T = frames / HZ;
-  const score = 3 * Math.min(best, wallH) / wallH * 3 + (fell ? -1 : 1) + (handsTop() ? 1 : 0) + feetTop() * 1.5 + (topped ? 5 + 2 * (1 - T / seconds) : 0);
-  const why = (topped ? 'TOPPED ' + T.toFixed(1) + 's ' : '') + 'feet rung ' + reached + '/' + top + ' best foot height ' + best.toFixed(2) + ' fell ' + (fell ? T.toFixed(1) + 's' : '-') + ' hands ' + lim.hand[0].rung + '/' + lim.hand[1].rung + ' feet on top ' + feetTop();
-  const status = topped ? 'climbed onto the top (' + wallH.toFixed(1) + ' m) in ' + T.toFixed(0) + ' s' : (fell ? 'fell' : 'held on') + ' · feet up to ' + best.toFixed(2) + ' m';
+  const over = PL.phase && ['hand', 'pull', 'lie'].includes(PL.phase) ? Math.max(0, Math.min(1, (world.px[0] - wallX + 0.2) / 0.65)) : 0;
+  const score = 3 * Math.min(best, wallH) / wallH * 3 + (fell ? -1 : 1) + (handsTop() ? 1 : 0) + 3 * over + (topped ? 5 + 2 * (1 - T / seconds) : 0);
+  const why = (topped ? 'TOPPED ' + T.toFixed(1) + 's ' : '') + 'phase ' + PL.phase + ' ' + 'feet rung ' + reached + '/' + top + ' best foot height ' + best.toFixed(2) + ' fell ' + (fell ? T.toFixed(1) + 's' : '-') + ' hands ' + lim.hand[0].rung + '/' + lim.hand[1].rung + ' feet on top ' + feetTop();
+  const status = topped ? 'climbed onto the summit (' + wallH.toFixed(1) + ' m) in ' + T.toFixed(0) + ' s' : (fell ? 'fell' : 'held on') + ' · feet up to ' + best.toFixed(2) + ' m';
   return { score, pass: topped ? 1 : 0, why, status, frames: recFrames, surface: ep.terrain.surface.map(([x, y]) => [+x.toFixed(3), +y.toFixed(3)]), rungs: rungs.map((h) => ({ x0: +h.lip.toFixed(3), x1: +h.back.toFixed(3), y: +(h.y - 0.02).toFixed(3) })) };
 }
 
