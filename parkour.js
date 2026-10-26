@@ -35,7 +35,14 @@ const floorH = +arg('--floor', 0.6);
 const boxH = +arg('--box-h', 0.4);
 const boxW = +arg('--box-w', 0.4);
 const boxN = +arg('--boxes', 2);
-const boxMax = +arg('--box-max', boxH); // box heights random in --box-h..--box-max
+const boxMax = +arg('--box-max', boxH);
+// --run-states file: start from recorded running states (mid-run touchdowns, --dump-run-states) instead
+// of the standing pose thrown forward (a third of the failures were in the first 2 s, before any
+// obstacle). --dump-run-states out: record them from the --init runner on flat ground.
+const runStatesFile = arg('--run-states', null);
+const runStates = runStatesFile ? JSON.parse(fs.readFileSync(runStatesFile, 'utf8')) : null;
+const dumpRunStates = arg('--dump-run-states', null);
+const dumped = []; // box heights random in --box-h..--box-max
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -106,17 +113,27 @@ function episode(p, seed, record) {
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   const speed = speedMin + r() * (speedMax - speedMin);
   const course = makeCourse(r);
-  const pose = basePose.slice();
-  for (let k = 0; k < world.parts.length; k++) pose[k * 3 + 1] += course.lift;
-  const vel = [];
+  let pose = basePose.slice();
+  let vel = [];
   const v0 = 0.8 * speed;
   for (let k = 0; k < world.parts.length; k++) vel.push(v0, 0, 0);
+  let rs = null;
+  if (runStates) {
+    rs = runStates[Math.floor(r() * runStates.length)];
+    pose = rs.pose.slice();
+    vel = rs.vel.map((v, i) => (i % 3 === 0 ? v * speed / rs.speed : v));
+  }
+  for (let k = 0; k < world.parts.length; k++) pose[k * 3 + 1] += course.lift;
   Object.assign(start, { startPose: pose, startVel: vel, tilt: 0, drop: 0, settle: 0, frames: Math.round(seconds * HZ) });
   start.walk = null;
   start.terrain = course.statics.length ? { statics: course.statics } : null;
   world.rebuild();
   const ep = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, start));
   const x0 = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
+  // t starts at -0.1 s: the body is placed 1 cm up and the stance foot's contact registers a few frames
+  // later; read as a lift-off, the stance leg tucked and the body folded
+  if (rs) ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
+  if (process.env.DEBUG_RS) console.log('after start: torso', world.px[0].toFixed(3), world.py[0].toFixed(3), Math.atan2(world.s[0], world.c[0]).toFixed(3), 'state', rs && rs.pose.slice(0, 3));
   // absolute obstacle positions
   const holes = course.holes.map((h) => ({ x0: x0 + h.x0, x1: x0 + h.x1 }));
   const boxes = course.boxes.map((b) => ({ x0: x0 + b.x0, x1: x0 + b.x1, top: b.top }));
@@ -171,6 +188,16 @@ function episode(p, seed, record) {
     // fell: head low, or (gap) a foot down in a hole
     const inHole = mode === 'gap' && Math.min(world.py[P.footLeft], world.py[P.footRight]) < top - 0.25;
     if (head < 0.8 || inHole) { fell = true; fellAt = frames; break; }
+    // dumping running states: every touchdown between 2 and 5 s
+    if (dumpRunStates && ep.runner && ep.runner.t === 0 && frames > 2 * HZ && frames < 5 * HZ && ep.runner.strides > 2) {
+      const fx = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
+      const ps = [], vs = [];
+      for (let k = 0; k < world.parts.length; k++) {
+        ps.push(+(world.px[k] - fx).toFixed(4), +(world.py[k] - top).toFixed(4), +Math.atan2(world.s[k], world.c[k]).toFixed(4));
+        vs.push(+world.vx[k].toFixed(3), +world.vy[k].toFixed(3), +world.spin[k].toFixed(3));
+      }
+      dumped.push({ pose: ps, vel: vs, stance: ep.runner.stance, speed });
+    }
   }
   const T = frames / HZ;
   const dist = world.px[0] - (x0 + basePose[0]);
@@ -205,6 +232,14 @@ SPEC.push(['jumpWin', 0.9, 0.3]);
 SPEC.push(['takeoff', 0.3, 0.15], ['kStride', 1.0, 0.5]);
 SPEC.push(['jumpMargin', 0.2, 0.15]);
 SPEC.push(['jumpTrail', 0, 0.4]);
+
+if (dumpRunStates) {
+  const v = JSON.parse(fs.readFileSync(init, 'utf8')).best;
+  for (let i = 0; i < +arg('--n', 20); i++) episode(decode(v), 300 + i);
+  fs.writeFileSync(dumpRunStates, JSON.stringify(dumped));
+  console.log('running states', dumped.length, '->', dumpRunStates);
+  process.exit(0);
+}
 
 if (args.includes('--show')) {
   const v = JSON.parse(fs.readFileSync(init, 'utf8')).best;
