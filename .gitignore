@@ -22,3 +22,6 @@ trained/run-*.json
 trained/plan-climb-*.json
 trained/walk-stairs*.json
 trained/walk-bumps*.json
+trained/stop-controller.json
+trained/climb-arrivals.json
+trained/stepup-arrival-*.json

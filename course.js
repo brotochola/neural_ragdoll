@@ -113,7 +113,7 @@ function run(seed, record) {
   const setMode = (m) => {
     if (m !== mode) {
       const fl = world.px[config.partIndex.footLeft], fr = world.px[config.partIndex.footRight];
-      log.push(((ep.frame / HZ).toFixed(1)) + 's ' + m + (m === 'climb' ? ' [L ' + fl.toFixed(2) + ' R ' + fr.toFixed(2) + (ep.climbBox || nextRiseLog() ? ' edge ' + nextRiseLog() : '') + ']' : ''));
+      log.push(((ep.frame / HZ).toFixed(1)) + 's ' + m + (m === 'climb' ? ' [L ' + fl.toFixed(2) + ' R ' + fr.toFixed(2) + (ep.climbBox || nextRiseLog() ? ' edge ' + nextRiseLog() : '') + ']' : '') + (m === 'getup' ? ' @' + (world.px[0] - startX).toFixed(1) + 'm from ' + mode : ''));
       if (verbose) console.log('  ', (ep.frame / HZ).toFixed(1), 's ->', m, 'x', ((world.px[0] - startX)).toFixed(2));
     }
     if (m === 'climb' && dumpFile) {
