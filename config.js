@@ -285,6 +285,7 @@ export const config = {
     harnessDamping: 1, // Critically damped: no pendulum.
     harnessDrop: 0.08, // The pelvis target sits this far under standing height: hung at exactly 1.14 m the feet dangled.
     harnessUpright: 1,
+    harnessHeadMeters: 1.35, // A harnessed get-up counts for the curriculum when the head ends above this.
     harnessTilt: 1, // Torsional spring keeping the pelvis upright.
     harnessInertia: 10, // kg m^2: roughly the whole body about the pelvis.
     harnessTorqueCap: 300, // Spring keeping the chest over the pelvis.

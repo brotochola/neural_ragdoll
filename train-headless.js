@@ -850,7 +850,11 @@ async function runMain() {
       for (const row of scores) {
         if (!row.isGetup) continue;
         tried++;
-        if (row.stoodUp) made++;
+        // Harness: a get-up counts when the head ends high, so the help can fade while the net
+        // keeps getting up with less of it. Hung in the harness the doll never met the strict
+        // standing test (both feet down, under 15 degrees), and the help never faded. The eval,
+        // with no help, still asks for real standing.
+        if (g.useAssist ? (row.headHeight || 0) >= g.harnessHeadMeters : row.stoodUp) made++;
       }
       state.getupLog = state.getupLog || [];
       state.getupLog.push([made, tried]);

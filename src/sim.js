@@ -1031,6 +1031,7 @@ export function summariseEpisode(rows, offset, count, out) {
   let climbHeight = 0;
   let headHit = 0;
   let isGetup = 0;
+  let headHeight = 0;
   const last = offset + count;
   for (let i = offset; i < last; i++) {
     const row = rows[i];
@@ -1050,6 +1051,7 @@ export function summariseEpisode(rows, offset, count, out) {
     climbHeight += row.climbHeight || 0;
     headHit += row.headHit || 0;
     isGetup += row.isGetup || 0;
+    headHeight += row.headHeight || 0;
     if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
     if (!row.stoodUp) stoodUp = false;
   }
@@ -1075,6 +1077,7 @@ export function summariseEpisode(rows, offset, count, out) {
   out.climbHeight = climbHeight / n;
   out.headHit = headHit / n;
   out.isGetup = isGetup / n;
+  out.headHeight = headHeight / n;
   return out;
 }
 
