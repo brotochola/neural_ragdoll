@@ -158,6 +158,7 @@ function run(seed, record) {
         dumped.push({ pose, vel, rise: +a.rise.toFixed(3) });
       }
     }
+    if (m !== 'getup' && ep.options.getup) { ep.options.getup = false; ep.options.startTime = 0; }
     mode = m;
     modeT = 0;
     if (m === 'climb') ep.stepup = null;
@@ -259,6 +260,31 @@ function run(seed, record) {
       // stand net), no get-up yet; the run ends once the state is captured.
       for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
       if (this.fallCaptured) this.stopNow = true;
+    } else if (mode === 'getup' && !process.env.GETUP_OLD) {
+      // Get up as the expert was trained: from lying at rest (the stand net relaxes the body until every
+      // part is still, or 3 s), with the handover time for the side it lies on (face up: torso turned
+      // back), a fresh network each attempt; not up 5 s after the handover: rest and try again.
+      if (!this.gu || modeT < 1 / HZ + 1e-9) this.gu = { phase: 'rest', t0: this.frame, tries: 0 };
+      const g = this.gu;
+      const t = (this.frame - g.t0) / HZ;
+      if (g.phase === 'rest') {
+        for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
+        if ((t > 0.6 && settled()) || t > 3) {
+          g.phase = 'go'; g.t0 = this.frame; g.tries++;
+          g.side = Math.atan2(world.s[0], world.c[0]) > 0 ? 'up' : 'down';
+          getup = new ElmanNetwork(Float32Array.from(getupW));
+          // The expert reads a get-up clock (time since the start of the get-up) that only runs with
+          // options.getup; without it the clock inputs were zero and it flailed (1 of 31 course falls).
+          this.options.getup = true;
+          this.options.startTime = -this.frame / HZ;
+        }
+      } else {
+        const hand = getupSaved.handover[g.side] || 3;
+        const src = t < hand ? getup.action : stand.action;
+        for (let j = 0; j < OUT; j++) this.action[j] = src[j];
+        if (t > hand + 2 && isStanding(m)) { this.gu = null; setMode('steady'); }
+        else if (t > hand + 5) { g.phase = 'rest'; g.t0 = this.frame; }
+      }
     } else if (mode === 'getup') {
       const t = (this.frame - this.getupStart) / HZ;
       const side = 'up';
