@@ -14,7 +14,7 @@ const sets = specs.map((spec) => {
   const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
   shapes = rec.shapes;
   fps = rec.fps;
-  return { label, lede, episodes: rec.episodes };
+  return { label, lede, fps: rec.fps, episodes: rec.episodes };
 });
 const json = JSON.stringify({ fps, shapes, sets }).replace(/</g, '\\u003c');
 const html = fs.readFileSync(path.join(here, 'template.html'), 'utf8').replace('/*DATA*/', () => json);
