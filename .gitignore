@@ -21,3 +21,4 @@ trained/walk-fast*.json
 trained/run-*.json
 trained/plan-climb-*.json
 trained/walk-stairs*.json
+trained/walk-bumps*.json
