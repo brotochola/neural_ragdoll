@@ -59,7 +59,7 @@ if (arg('--period', null)) config.walk.periodSeconds = +arg('--period', 0.9);
 if (speedMax > 0) config.walk.maxStandSpeed = Math.max(config.walk.maxStandSpeed, speedMax * 1.6);
 const decode = (v) => Object.assign(decodeBase(v), { track, clock });
 
-function episode(p, seed) {
+function episode(p, seed, record) {
   const r = makeSeededRandom(3000 + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   if (speedMax > 0) start.walk.speed = speedMin + r() * (speedMax - speedMin);
@@ -91,7 +91,13 @@ function episode(p, seed) {
   let upright = 0;
   let stride = 0;
   let stepsUp = 0;
+  const recFrames = record ? [] : null;
   while (!ep.advanceOneFrame()) {
+    if (record && ep.frame % 2 === 0) {
+      const pz = [];
+      for (let k = 0; k < world.parts.length; k++) pz.push(+world.px[k].toFixed(3), +world.py[k].toFixed(3), +Math.atan2(world.s[k], world.c[k]).toFixed(3));
+      recFrames.push({ p: pz, up: 0 });
+    }
     if (ep.frame < delay) continue;
     frames++;
     if (!ep.measure.touch[feet[0]] && !ep.measure.touch[feet[1]]) flight++;
@@ -131,7 +137,7 @@ function episode(p, seed) {
     const up = (ep.measure.headHeight - topNow) > 1.35 && ep.measure.torsoCos > 0.8;
     const passS = stepsUp === stairsN && up && feetOnBox(ep.measure, ep.stairs[ep.stairs.length - 1]) === 2;
     const scoreS = 3 * stepsUp / stairsN + (up ? 1 : 0) + 2 * alive + (passS ? 3 : 0) + alt;
-    return { score: scoreS, pass: passS ? 1 : 0, alt, why: 'steps ' + stepsUp + '/' + stairsN + ' up ' + (up ? 1 : 0) + ' head ' + ep.measure.headHeight.toFixed(2) };
+    return { frames: recFrames, boxes: ep.stairs, score: scoreS, pass: passS ? 1 : 0, alt, why: 'steps ' + stepsUp + '/' + stairsN + ' up ' + (up ? 1 : 0) + ' head ' + ep.measure.headHeight.toFixed(2) };
   }
   const why = 'stood ' + share.toFixed(2) + ' walked ' + (s.walkDist || 0).toFixed(2) + '/' + (s.walkCmd || 0).toFixed(2) + ' steps ' + steps.join('/') + ' flight ' + flightShare.toFixed(2) + ' step ' + (stride / Math.max(1, steps[0] + steps[1])).toFixed(2) + 'm speed ' + (start.walk.speed).toFixed(2) + ' head ' + (ep.measure.headHeight || 0).toFixed(2);
   return { score, pass: pass ? 1 : 0, alt, why };
@@ -156,8 +162,14 @@ function evaluate(v, seedBase = 0, n = seeds) {
 if (args.includes('--show')) {
   const p = decode(JSON.parse(fs.readFileSync(init, 'utf8')).best);
   for (let i = 0; i < seeds; i++) {
-    const r = episode(p, 100 + i);
+    const r = episode(p, 100 + i, false);
     console.log('seed', i, 'pass', r.pass, 'alt', r.alt.toFixed(2), r.why);
+  }
+  const rec = arg('--record', null);
+  if (rec) {
+    const r = episode(p, 100, true);
+    const shapes = world.parts.map((q) => ({ hx: +q.hx.toFixed(4), hy: +q.hy.toFixed(4), r: q.r ? +q.r.toFixed(4) : 0, ax: q.ax || 0, ay: q.ay || 0, capsule: !!q.capsule, circle: !!q.circle }));
+    fs.writeFileSync(rec, JSON.stringify({ skill: 6, fps: 30, shapes, episodes: [{ seed: 0, boxes: r.boxes, box: null, frames: r.frames, walk: null, board: null }] }));
   }
   process.exit(0);
 }

@@ -61,6 +61,8 @@ for ax, fi in zip(axes, picks):
             ax.plot([x1, x2], [y1, y2], color=col, linewidth=sh["r"] * 2 * 72 / 2.2 * 1.6, solid_capstyle="round")
         else:
             ax.add_patch(Polygon(rect(x, y, a, sh["hx"], sh["hy"]), color=col))
+    for b in ep.get("boxes") or []:
+        ax.add_patch(Polygon([(b["x0"], 0), (b["x1"], 0), (b["x1"], b["top"]), (b["x0"], b["top"])], color="#b7a17a", ec="#8a7552"))
     if ep.get("box"):
         b = ep["box"]
         ax.add_patch(Polygon([(b["x0"], 0), (b["x1"], 0), (b["x1"], b["top"]), (b["x0"], b["top"])], color="#b7a17a"))
@@ -83,7 +85,8 @@ for ax, fi in zip(axes, picks):
         ax.add_patch(Circle((f["mx"], f["my"]), 0.12, fill=False, ls="--", color="#2a7fb8"))
     ax.axhline(0, color="#888", lw=1)
     ax.set_xlim(cx - 0.6, cx + 0.6)
-    ax.set_ylim(-0.05, 2.7 if ep.get("swing") else 2.0)
+    lift = max([b["top"] for b in (ep.get("boxes") or [])] + [0])
+    ax.set_ylim(-0.05, (2.7 if ep.get("swing") else 2.0) + lift)
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_title(f"{fi / rec['fps']:.1f}s {'UP' if f['up'] else ''}", fontsize=8)
