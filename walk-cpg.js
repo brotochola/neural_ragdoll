@@ -81,11 +81,13 @@ function episode(p, seed) {
   const leftAt = [0, 0];
   const steps = [0, 0];
   const air = [0, 0];
+  let flight = 0; // frames with neither foot down
   let frames = 0;
   const delay = (start.walk.delay || 0) * config.physics.hz;
   while (!ep.advanceOneFrame()) {
     if (ep.frame < delay) continue;
     frames++;
+    if (!ep.measure.touch[feet[0]] && !ep.measure.touch[feet[1]]) flight++;
     for (let k = 0; k < 2; k++) {
       const down = !!ep.measure.touch[feet[k]];
       const x = world.px[feet[k]];
@@ -113,9 +115,13 @@ function episode(p, seed) {
   const both = Math.min(1, lo / Math.max(1, 0.6 * cycles));
   const even = hi > 0 ? lo / hi : 0;
   const airEven = Math.max(airL, airR) > 0 ? Math.min(airL, airR) / Math.max(airL, airR) : 0;
-  const alt = both * (0.6 * even + 0.4 * airEven);
-  const score = 2 * share + 2 * walked + 4 * alt + (pass ? 2 : 0) + (pass && alt > 0.6 ? 2 : 0);
-  const why = 'stood ' + share.toFixed(2) + ' walked ' + (s.walkDist || 0).toFixed(2) + '/' + (s.walkCmd || 0).toFixed(2) + (s.headHit ? ' headHit' : '');
+  // The first search found a bounding gait: each foot in the air 80-90% of the time, standing 0%.
+  // Walking keeps a foot down: flight (no foot down) and a foot up more than 55% cost.
+  const flightShare = flight / Math.max(1, frames);
+  const overAir = Math.max(0, Math.max(airL, airR) - 0.55) / 0.45;
+  const alt = both * (0.6 * even + 0.4 * airEven) * Math.max(0, 1 - 2 * flightShare) * (1 - Math.min(1, overAir));
+  const score = 3 * share + 2 * walked * share + 4 * alt * (0.3 + 0.7 * share) + (pass ? 2 : 0) + (pass && alt > 0.6 ? 2 : 0);
+  const why = 'flight ' + flightShare.toFixed(2) + ' stood ' + share.toFixed(2) + ' walked ' + (s.walkDist || 0).toFixed(2) + '/' + (s.walkCmd || 0).toFixed(2) + (s.headHit ? ' headHit' : '');
   return { score, pass: pass ? 1 : 0, alt, steps, airL, airR, why };
 }
 
