@@ -32,6 +32,8 @@ const { evalMode } = await import('./src/training.js');
 const { isStanding } = await import('./src/reward.js');
 const simb = await import('./src/simbicon.js');
 const step = await import('./src/stepup.js');
+const pose = await import('./src/pose.js');
+const { makePlanRunner } = await import('./src/planner.js');
 
 setSkill(6);
 config.walk.maxStandSpeed = Math.max(config.walk.maxStandSpeed, 2.2);
@@ -103,7 +105,8 @@ function run(seed, record) {
   const log = [];
   const setMode = (m) => {
     if (m !== mode) {
-      log.push(((ep.frame / HZ).toFixed(1)) + 's ' + m);
+      const fl = world.px[config.partIndex.footLeft], fr = world.px[config.partIndex.footRight];
+      log.push(((ep.frame / HZ).toFixed(1)) + 's ' + m + (m === 'climb' ? ' [L ' + fl.toFixed(2) + ' R ' + fr.toFixed(2) + (ep.climbBox || nextRiseLog() ? ' edge ' + nextRiseLog() : '') + ']' : ''));
       if (verbose) console.log('  ', (ep.frame / HZ).toFixed(1), 's ->', m, 'x', ((world.px[0] - startX)).toFixed(2));
     }
     mode = m;
@@ -127,6 +130,7 @@ function run(seed, record) {
     }
     return best ? { box: best, dist: best.x0 - fx, rise: best.top - here, here } : null;
   };
+  const nextRiseLog = () => { const a = nextRise(); return a ? a.box.x0.toFixed(2) : '-'; };
   const tmp = new Float64Array(OUT);
   const walkSpec = ep.options.walk;
   const origDecide = ep.decide.bind(ep);
@@ -186,8 +190,10 @@ function run(seed, record) {
     } else if (mode === 'steady') {
       for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
       if (modeT > 1.0) {
-        if (ahead && ahead.dist < 0.6 && ahead.dist > 0.15 && ahead.rise <= 0.45 && ahead.rise > 0.15) setMode('climb');
-        else if (ahead && ahead.dist <= 0.15 && ahead.rise > 0.15) setMode('backoff');
+        const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
+        const gap = ahead ? ahead.box.x0 - front : 9;
+        if (ahead && gap < 0.55 && gap > 0.08 && ahead.rise <= 0.45 && ahead.rise > 0.15) setMode(process.env.SQUARE ? 'square' : 'climb');
+        else if (ahead && gap <= 0.08 && ahead.rise > 0.15) setMode('backoff');
         else setMode('walk');
       }
     } else if (mode === 'walk') {
@@ -207,9 +213,31 @@ function run(seed, record) {
         walkCtl(onStairs ? stairsP : near ? slowP : walkP, this, tmp);
         for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
       }
+    } else if (mode === 'square') {
+      // Set the feet as the climb was tuned: weight onto the front (right) foot, bring the back foot in
+      // to 0.25 m behind it, settle. Done by the pose executor (src/pose.js) with a short plan.
+      if (modeT < 0.02 || !this.squareRunner) {
+        const g = groundUnder(world.px[0]);
+        const R = pose.soleOf(world, config.partIndex.footRight);
+        const back = { x: R.x - 0.25, y: g };
+        this.squareRunner = makePlanRunner([
+          { dur: 0.7, pelvis: { x: { front: -0.02 }, y: g + 0.9 }, torso: 0, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false, support: 'front' },
+          { dur: 0.4, pelvis: { x: { front: 0 }, y: g + 0.9 }, torso: 0, feet: [{ x: R.x - 0.4, y: g + 0.08 }, 'hold'], hands: [null, null], planted: [false, true], grip: false, support: 'front' },
+          { dur: 0.4, pelvis: { x: { front: -0.05 }, y: g + 0.9 }, torso: 0, feet: [back, 'hold'], hands: [null, null], planted: [false, true], grip: false, support: 'front' },
+          { dur: 0.8, pelvis: { x: { front: -0.12 }, y: g + 0.92 }, torso: 0, feet: ['hold', 'hold'], hands: [null, null], planted: [true, true], grip: false },
+        ], world, HZ);
+      }
+      const goal = this.squareRunner.step();
+      if (!goal) { this.squareRunner = null; setMode('climb'); }
+      else {
+        pose.commandsFor(world, pose.balancedTargets(goal, m, { planted: goal.planted, support: goal.support != null ? goal.support : undefined }), this.action);
+      }
     } else if (mode === 'netwalk') {
       for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
-      if (!ahead || ahead.dist < +(process.env.STOP_AT || 0.45)) setMode('steady');
+      // Stop by the FRONT foot: the climb was tuned with it 0.15-0.35 m from the edge; stopping by the
+      // middle of a wide stance left it 14 cm away and the knee hit the edge.
+      const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
+      if (!ahead || ahead.box.x0 - front < +(process.env.STOP_FRONT || 0.3)) setMode('steady');
     } else if (mode === 'brake') {
       // The walking controller asked for zero speed steps in place and comes to a stop; the stand net
       // took over from a 0.3 m/s walk badly (it fell forward onto the platform).
@@ -224,7 +252,10 @@ function run(seed, record) {
       for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
       if (modeT > 0.5) setMode('climb');
     } else if (mode === 'climb') {
-      this.climbBox = ahead && ahead.dist < 0.6 ? ahead.box : this.climbBox;
+      if (modeT < 0.05) {
+        const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
+        this.climbBox = ahead && ahead.box.x0 - front < 0.7 ? ahead.box : null;
+      }
       if (this.climbBox) {
         const going = stepCtl(stepP, this, tmp);
         for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];

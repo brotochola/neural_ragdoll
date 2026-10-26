@@ -49,7 +49,10 @@ const stairsN = +arg('--stairs', 0); // a flight of N steps instead of one box
 const rise = +arg('--rise', 0.18);
 const run = +arg('--run', 0.3);
 const stairPause = +arg('--pause', 1.0); // seconds of the stand net between steps
-const hands = args.includes('--hands'); // reach, grab the top edge, pull and mantle (tall boxes)
+const hands = args.includes('--hands');
+// --robust: varied starting stance (feet 0.12-0.8 m apart) and distance to the edge (0.2-0.55 m),
+// as after walking up to a box on the course.
+const robust = args.includes('--robust'); // reach, grab the top edge, pull and mantle (tall boxes)
 const decode = (v) => Object.assign(decodeBase(v), { hands });
 const controller = makeController(world);
 const dims = SPEC.length;
@@ -62,6 +65,10 @@ function makeStart(seed) {
   const start = sim.fillTrainingStart({}, r, evalMode(11));
   start.climb.side = side;
   start.climb.height = height;
+  if (robust) {
+    start.stance = 0.06 + r() * 0.34;
+    start.climb.near = 0.2 + r() * 0.35;
+  }
   if (stairsN > 0) {
     start.climb = null;
     start.stairs = { n: stairsN, rise, run, near: 0.25 + r() * 0.2, landing: 1 };
