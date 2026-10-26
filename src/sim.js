@@ -564,6 +564,18 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.settle = Math.max(out.settle || 0, 10);
     out.frames = Math.round(b.seconds * config.physics.hz);
   }
+  // SWING: start standing in the middle of the hanging plank, which gets a push.
+  out.swing = null;
+  if (commands === "swing") {
+    const w = config.swing;
+    const cap = mode && mode.swingMax > 0 ? Math.min(w.pushMax, mode.swingMax) : w.pushMax;
+    out.swing = {
+      push: (mode && mode.eval ? w.evalPush : w.pushMin + randomSource() * Math.max(0, cap - w.pushMin)) * (randomSource() < 0.5 ? -1 : 1),
+    };
+    out.drop = w.top + 0.02;
+    out.settle = Math.max(out.settle || 0, 10);
+    out.frames = Math.round(w.seconds * config.physics.hz);
+  }
   out.getup = false;
   out.startPose = null;
   if (commands === "getup") {
@@ -1592,6 +1604,46 @@ export function createSim(box) {
     return { pivot, plank, joint };
   }
 
+  // SWING: a static bar, two rope rods hinged to it and to the plank (a parallelogram, so the plank
+  // stays level). The rods do not collide with the doll (same negative group). All go in objects.
+  function spawnSwing(world, x, objects) {
+    const w = config.swing;
+    const plankY = w.top - w.halfThick;
+    const barY = w.top + w.ropeLength;
+    const bar = CreateBoxPolygon({
+      worldId: world.worldId, type: staticBody,
+      position: vector(x, barY + 0.03), size: vector(w.halfLength + 0.2, 0.03), friction: 1,
+    }).bodyId;
+    const plank = CreateBoxPolygon({
+      worldId: world.worldId, type: dynamicBody,
+      position: vector(x, plankY), size: vector(w.halfLength, w.halfThick),
+      density: w.density, friction: 2,
+    }).bodyId;
+    world.thrownIds.push(plank);
+    world.thrownShapes.push(world.shapeOf(plank));
+    objects.push(bar, plank);
+    const ropes = [];
+    for (const side of [-1, 1]) {
+      const rx = x + side * (w.halfLength - w.ropeInset);
+      const rope = CreateBoxPolygon({
+        worldId: world.worldId, type: dynamicBody,
+        position: vector(rx, (barY + plankY) / 2), size: vector(0.01, w.ropeLength / 2),
+        density: 2, friction: 0, groupIndex: -1,
+      }).bodyId;
+      objects.push(rope);
+      world.CreateRevoluteJoint({
+        worldId: world.worldId, bodyIdA: bar, bodyIdB: rope,
+        anchorA: vector(side * (w.halfLength - w.ropeInset), -0.03), anchorB: vector(0, w.ropeLength / 2),
+      });
+      world.CreateRevoluteJoint({
+        worldId: world.worldId, bodyIdA: plank, bodyIdB: rope,
+        anchorA: vector(side * (w.halfLength - w.ropeInset), 0), anchorB: vector(0, -w.ropeLength / 2 + (w.top - plankY)),
+      });
+      ropes.push(rope);
+    }
+    return { bar, plank, ropes, x };
+  }
+
   // A still box in the path of the step. dx is relative to the left foot at the start.
   function placeSkillBoxes(episode) {
     const boxes = episode.options.boxes;
@@ -1784,6 +1836,11 @@ export function createSim(box) {
           b2RevoluteJoint_SetMaxMotorTorque(world.joints[i].id, world.joints[i].torque * strength);
       }
       this.strength = strength;
+      this.swing = null;
+      if (this.options.swing) {
+        readBodyState(world, this.measure);
+        this.swing = spawnSwing(world, this.measure.partX[config.partIndex.torso] || 0, this.objects);
+      }
       this.board = null;
       if (this.options.board) {
         readBodyState(world, this.measure);
@@ -1804,6 +1861,8 @@ export function createSim(box) {
           world.joints[i].id,
         );
       readBodyState(world, this.measure);
+      // SWING: the push, after the doll has settled on the plank.
+      if (this.swing && this.options.swing.push) b2Body_SetLinearVelocity(this.swing.plank, vector(this.options.swing.push, 0));
       if (this.options.failOnHead) {
         stampTrainTargets(this.measure, this.options);
         placeSkillBoxes(this);
@@ -1847,8 +1906,8 @@ export function createSim(box) {
       // BOARD: the foot marks sit on the plank, not on the floor. Planted at floor height they were
       // 13 cm under the feet, and a net trained to put its feet on their marks stepped off a still
       // plank within 2 s.
-      if (this.board && this.options.targets) {
-        const top = config.board.pivotHeight + 2 * config.board.halfThick;
+      if ((this.board || this.swing) && this.options.targets) {
+        const top = this.swing ? config.swing.top : config.board.pivotHeight + 2 * config.board.halfThick;
         for (let i = 0; i < config.targets.length; i++) {
           if (config.targets[i].ride) continue;
           const target = this.options.targets[i];
@@ -3049,6 +3108,9 @@ export function createSim(box) {
         onBoard: this.board ? 1 : 0,
         isGetup: this.options.getup ? 1 : 0,
         isBoard: this.board ? 1 : 0,
+        // SWING: both feet still on the plank at the end (not stepped off onto the floor).
+        onSwing: this.swing ? (Math.min(this.world.py[config.partIndex.footLeft], this.world.py[config.partIndex.footRight]) > config.swing.top - 0.05 ? 1 : 0) : 0,
+        isSwing: this.swing ? 1 : 0,
         trackErr: this.trackCount ? this.trackSum / this.trackCount : -1,
       };
     }

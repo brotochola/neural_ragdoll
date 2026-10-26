@@ -128,6 +128,7 @@ function runEpisode(sim, job, isStanding) {
     walkDist: stats.walkDist || 0,
     walkCmd: stats.walkCmd || 0,
     climbOnTop: stats.climbOnTop || 0,
+    onSwing: stats.onSwing || 0,
     climbHeight: stats.climbHeight || 0,
     onBoard: stats.onBoard || 0,
     isGetup: stats.isGetup || 0,
@@ -334,6 +335,12 @@ function skillPass(skill, row) {
     if ((row.headHeight || 0) - (row.climbHeight || 0) < config.body.standingHeadMeters) return false;
     return row.windowStood / frames >= config.highbox.standShare;
   }
+  if (group === 'swing') {
+    // On the hanging plank: up at the end, standing for most of the last window, feet on the plank.
+    const frames = row.windowFrames || 0;
+    if (!(frames > 0) || !row.stoodUp || row.headHit || !row.onSwing) return false;
+    return row.windowStood / frames >= config.swing.standShare;
+  }
   if (group === 'board') {
     // On the plank: up at the end, standing for most of the last window, head never down.
     const frames = row.windowFrames || 0;
@@ -383,7 +390,7 @@ function skillPass(skill, row) {
 }
 
 function skillKey(skill) {
-  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix', 'climb', 'getup', 'board', 'highbox', 'sequence'][skill] || 'stand';
+  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix', 'climb', 'getup', 'board', 'highbox', 'swing'][skill] || 'stand';
 }
 
 function targetGainText() {

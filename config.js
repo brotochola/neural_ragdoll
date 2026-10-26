@@ -231,7 +231,7 @@ export const config = {
   // 9 getup: starts lying face up or down and has to end standing. Trained mixed with stands and walks.
   // 10 board: standing on a plank that tilts on a pivot, driven by a slow wave.
   // 11 highbox: a tall box ahead or behind, marks for head, hands and feet standing on top. Grip helps.
-  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb", "getup", "board", "highbox"],
+  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb", "getup", "board", "highbox", "swing"],
   highbox: {
     halfWidth: 0.5, // A 1 m wide box: room to stand on top.
     nearMin: 0.25, // Gap from the feet midpoint to the facing edge.
@@ -248,6 +248,22 @@ export const config = {
     standShare: 0.5,
     mixHighbox: 0.6, // Training: share of tall-box episodes. The rest split between stands and walks.
     mixWalk: 0.2,
+  },
+  // SWING (skill 12): a plank hung from a bar by two ropes, like a playground swing. The ropes are
+  // rigid rods hinged at both ends, so the plank stays level while it swings. The doll starts
+  // standing in the middle and the swing gets a push; it has to stay standing on the plank.
+  swing: {
+    halfLength: 0.6, // a 1.2 m plank
+    halfThick: 0.03,
+    top: 0.35, // plank top above the floor, at rest
+    ropeLength: 2.2,
+    ropeInset: 0.05, // ropes this far in from the plank ends
+    density: 30,
+    pushMin: 0.2, // m/s given to the plank at the start (training draws in [pushMin, cap])
+    pushMax: 1.2,
+    evalPush: 0.6,
+    seconds: 10,
+    standShare: 0.8,
   },
   grip: {
     on: 0.5, // A grip output above this, with the hand touching a grippable object, grabs it.
@@ -628,6 +644,7 @@ export const config = {
       walk: 0.6,
       climb: 0.5, // Skill 8: ends with a foot on top of the box, upright, the head never touched anything.
       highbox: 0.5, // Skill 11: both feet on top of the tall box at the end, upright over it, head never down.
+      swing: 0.7, // Skill 12: on the hanging swing, standing 80% of the last window, feet on the plank.
       board: 0.7, // Skill 10: on the tilting plank, standing 80% of the last 3 s, up at the end, head never down.
       getup: 0.7, // Skill 9: from lying, ends standing on both feet for most of the last 3 s.
       mix: 1, // Skill 7: both the stand bar and the walk bar (its rate is the worse of the two, as a share of its bar).
