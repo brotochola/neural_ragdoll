@@ -1606,7 +1606,7 @@ export function createSim(box) {
   }
 
   // SWING: a static bar, two rope rods hinged to it and to the plank (a parallelogram, so the plank
-  // stays level). The rods do not collide with the doll (same negative group). All go in objects.
+  // stays level). The rods collide with nothing (own category, empty mask). All go in objects.
   function spawnSwing(world, x, objects) {
     const w = config.swing;
     const plankY = w.top - w.halfThick;
@@ -1624,21 +1624,26 @@ export function createSim(box) {
     world.thrownShapes.push(world.shapeOf(plank));
     objects.push(bar, plank);
     const ropes = [];
+    // Each rope spans exactly from its bar anchor (y = barY) to its plank anchor (the plank centre
+    // line): the first version was 4.5 cm short and pulled the plank 7 cm below its design height.
+    const ropeHalf = (barY - plankY) / 2;
     for (const side of [-1, 1]) {
       const rx = x + side * (w.halfLength - w.ropeInset);
       const rope = CreateBoxPolygon({
         worldId: world.worldId, type: dynamicBody,
-        position: vector(rx, (barY + plankY) / 2), size: vector(0.01, w.ropeLength / 2),
-        density: 2, friction: 0, groupIndex: -1,
+        position: vector(rx, (barY + plankY) / 2), size: vector(0.01, ropeHalf),
+        // Own category, colliding with nothing: the doll's chest and thighs collide with the default
+        // (floor) category, so a group index alone let the body lean on the ropes. Joints still hold them.
+        density: 2, friction: 0, categoryBits: 0x10, maskBits: 0,
       }).bodyId;
       objects.push(rope);
       world.CreateRevoluteJoint({
         worldId: world.worldId, bodyIdA: bar, bodyIdB: rope,
-        anchorA: vector(side * (w.halfLength - w.ropeInset), -0.03), anchorB: vector(0, w.ropeLength / 2),
+        anchorA: vector(side * (w.halfLength - w.ropeInset), -0.03), anchorB: vector(0, ropeHalf),
       });
       world.CreateRevoluteJoint({
         worldId: world.worldId, bodyIdA: plank, bodyIdB: rope,
-        anchorA: vector(side * (w.halfLength - w.ropeInset), 0), anchorB: vector(0, -w.ropeLength / 2 + (w.top - plankY)),
+        anchorA: vector(side * (w.halfLength - w.ropeInset), 0), anchorB: vector(0, -ropeHalf),
       });
       ropes.push(rope);
     }
@@ -3155,7 +3160,7 @@ export function createSim(box) {
         isGetup: this.options.getup ? 1 : 0,
         isBoard: this.board ? 1 : 0,
         // SWING: both feet still on the plank at the end (not stepped off onto the floor).
-        onSwing: this.swing ? (Math.min(this.world.py[config.partIndex.footLeft], this.world.py[config.partIndex.footRight]) > config.swing.top - 0.05 ? 1 : 0) : 0,
+        onSwing: this.swing ? (Math.min(this.world.py[config.partIndex.footLeft], this.world.py[config.partIndex.footRight]) > Box2D_GetPosition(this.swing.plank).y + config.swing.halfThick - 0.05 ? 1 : 0) : 0,
         isSwing: this.swing ? 1 : 0,
         trackErr: this.trackCount ? this.trackSum / this.trackCount : -1,
       };
