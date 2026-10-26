@@ -303,7 +303,12 @@ function uprightRow(measure) {
     k = k < 0 ? 0 : k;
     hips += weight.getupOver * k;
   }
-  return weight.upright * mix + feet + walk + climb + gait + hips;
+  // GET-UP imitation: +getupTrack when the joints match the reference, falling off with the mean
+  // joint-angle error (radians) over getupTrackScale. Only while a reference is being tracked.
+  let track = 0;
+  if (measure && measure.trackError >= 0 && weight.getupTrack)
+    track = weight.getupTrack * Math.exp(-measure.trackError / (weight.getupTrackScale || 0.3));
+  return weight.upright * mix + feet + walk + climb + gait + hips + track;
 }
 export function markError(measure, targetIndex) {
   const spec = config.targets[targetIndex];

@@ -590,6 +590,24 @@ export function fillTrainingStart(out, randomSource, mode) {
       out.tilt = 0;
     }
     out.frames = Math.round(config.getup.seconds * config.physics.hz);
+    // Imitation: the reference for this side (face up = positive tilt), and sometimes a start on it.
+    out.reference = null;
+    out.startTime = 0;
+    out.startVel = null;
+    const refs = mode && mode.getupReference;
+    if (refs && !(mode && mode.eval)) {
+      const side = out.tilt > 0 ? "up" : "down";
+      out.reference = refs[side] || null;
+      const states = mode.getupStates && mode.getupStates[side];
+      if (states && states.length && randomSource() < (config.getup.rsiShare || 0)) {
+        const st = states[(randomSource() * states.length) | 0];
+        out.startPose = st.pose;
+        out.startVel = st.vel;
+        out.startTime = st.t;
+        out.settle = 0;
+        out.tilt = side === "up" ? 1e-3 : -1e-3; // keeps the side for the reference and the clock
+      }
+    }
   }
   for (let i = 0; i < list.length; i++) {
     const target = list[i];
@@ -1734,11 +1752,13 @@ export function createSim(box) {
       const pose = this.options.startPose;
       if (pose && pose.length === world.parts.length * 3) {
         const shift = this.options.shiftX || 0;
+        // A reference-state start may carry velocities (x, y, spin per part).
+        const vel = this.options.startVel && this.options.startVel.length === pose.length ? this.options.startVel : null;
         for (let i = 0; i < world.parts.length; i++) {
           const part = world.parts[i];
           b2Body_SetTransform(part.id, vector(pose[i * 3] + shift, pose[i * 3 + 1] + 0.01), b2MakeRot(pose[i * 3 + 2]));
-          b2Body_SetLinearVelocity(part.id, vector(0, 0));
-          b2Body_SetAngularVelocity(part.id, 0);
+          b2Body_SetLinearVelocity(part.id, vector(vel ? vel[i * 3] : 0, vel ? vel[i * 3 + 1] : 0));
+          b2Body_SetAngularVelocity(part.id, vel ? vel[i * 3 + 2] : 0);
           b2Body_SetAwake(part.id, true);
         }
       }
@@ -1989,7 +2009,15 @@ export function createSim(box) {
       // Walk inputs: a gait clock and the commanded speed. Zero when this is not a walk.
       const walk = this.options.walk;
       if (config.net.walkInputCount) {
-        if (walk) {
+        if (this.options.getup) {
+          // GET-UP clock: time since the start of the get-up, as a half turn over getup.clockSeconds,
+          // so the net knows where it is in the motion it imitates. Same slots as the gait clock.
+          const t = this.getupTime();
+          const phase = Math.PI * Math.min(1, t / (config.getup.clockSeconds || 5));
+          input[cursor++] = Math.sin(phase);
+          input[cursor++] = Math.cos(phase);
+          input[cursor++] = 0;
+        } else if (walk) {
           const phase = (2 * Math.PI * this.frame) / (config.physics.hz * (config.walk.periodSeconds || 1));
           input[cursor++] = Math.sin(phase);
           input[cursor++] = Math.cos(phase);
@@ -2100,6 +2128,7 @@ export function createSim(box) {
       // the world, all five. Replanting every frame made the body marks chase the feet,
       // which is what made a dragged mark jump in the sandbox.
       this.trackStandingStreak();
+      this.trackReference();
       armPlace(this);
       armWalk(this);
       maybeAdvance(this);
@@ -2187,6 +2216,44 @@ export function createSim(box) {
         }).jointId;
         this.gripCount = (this.gripCount || 0) + 1;
       }
+    }
+    // Seconds into the get-up: frames so far plus the start time of a reference-state start (RSI).
+    getupTime() {
+      return this.frame / config.physics.hz + (this.options.startTime || 0);
+    }
+    // GET-UP imitation (DeepMimic-style): the reference is a list of key poses (joint commands) with
+    // durations, the same blending as getup-keyframes.js. measure.trackError is the mean joint-angle
+    // error to the reference's target angles, in radians; the reward turns it into a row. After the
+    // reference ends there is nothing to track and standing takes over.
+    trackReference() {
+      const ref = this.options.reference;
+      const m = this.measure;
+      m.trackError = -1;
+      if (!ref || !ref.length) return;
+      const t = this.getupTime();
+      let start = 0;
+      let prev = null;
+      let found = null;
+      let blend = 1;
+      for (let k = 0; k < ref.length; k++) {
+        const f = ref[k];
+        if (t < start + f.dur) {
+          found = f;
+          blend = prev ? Math.min(1, (t - start) / (0.4 * f.dur)) : 1;
+          break;
+        }
+        start += f.dur;
+        prev = f.pose;
+      }
+      if (!found) return;
+      const joints = this.world.joints;
+      let err = 0;
+      for (let j = 0; j < config.net.jointCount; j++) {
+        const cmd = prev ? prev[j] + (found.pose[j] - prev[j]) * blend : found.pose[j];
+        const target = cmd * (cmd >= 0 ? joints[j].hi : -joints[j].lo);
+        err += Math.abs(target - b2RevoluteJoint_GetAngle(joints[j].id));
+      }
+      m.trackError = err / config.net.jointCount;
     }
     // The plank's pivot motor chases a slow sine; its torque is capped, so the doll can push back.
     driveBoard() {

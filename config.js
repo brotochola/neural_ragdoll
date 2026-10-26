@@ -286,7 +286,7 @@ export const config = {
     // Strong-to-weak (Tao et al. 2022): every motor torque times strength, starting at strengthStart
     // and multiplied by strengthDecay each time capPassRate of the last capWindow generations'
     // get-ups end truly standing, down to 1 (the real body). No external force. Replaces the harness.
-    useStrength: true,
+    useStrength: false, // Strength x6 from lying never discovered a get-up in 100 generations.
     strengthStart: 6,
     strengthDecay: 0.9,
     useAssist: false, // The harness: an external force. Off: it hoisted the doll but it never learned to stand without it.
@@ -300,6 +300,13 @@ export const config = {
     harnessTilt: 1, // Torsional spring keeping the pelvis upright.
     harnessInertia: 10, // kg m^2: roughly the whole body about the pelvis.
     harnessTorqueCap: 300, // Spring keeping the chest over the pelvis.
+    // Imitation (DeepMimic-style): track the searched keyframe get-ups (trained/keyframes-up.json,
+    // keyframes-down.json) and start rsiShare of the training get-ups from a state along them.
+    imitate: true,
+    referenceFiles: { up: "trained/keyframes-up.json", down: "trained/keyframes-down.json" },
+    statesFile: "trained/getup-states.json",
+    rsiShare: 0.4,
+    clockSeconds: 5, // The get-up clock input runs a half turn over this many seconds.
     useFalls: false, // Start training get-ups from poses along recorded falls. Off: it silently came back when the harness was turned off and fed near-standing starts to the strength curriculum.
     fallsFile: "getup-falls.json",
     startCap: 0.25,
@@ -386,7 +393,7 @@ export const config = {
   reward: {
     // Raise this whenever the fitness formula changes. A saved train-state from another
     // version has a bestEverScore on another scale, and the parent never beats it.
-    version: 25,
+    version: 26,
     targetPosition: 1, // Fallback weight for a target that does not carry its own. Feet and body both set one now.
     targetRotation: 1, // Cosine of the angle error. +this when aligned, -this when flipped. Only while that target is on and its gain is above zero.
     footPosition: 2, // Fallback for a foot with no weight of its own. config.targets is where the real numbers live.
@@ -399,6 +406,8 @@ export const config = {
     gaitLift: 1, // Walk and climb: one foot down, the other paid for its height, full at gaitLiftMeters.
     gaitLiftMeters: 0.08,
     climbLift: 1.5, // Climb level only: a foot in the approach zone before the edge earns this times its height over the box top (capped at 1).
+    getupTrack: 6, // Get-up imitation: +this with the joints on the reference, exp(-error / getupTrackScale).
+    getupTrackScale: 0.3,
     getupOver: 2, // Get-up only: +this with the centre of mass right over the feet midpoint, 0 at getupOverMeters away.
     getupOverMeters: 0.3,
     getupHips: 2, // Get-up only: +this x pelvis height over the standing torso height. In the upright row.

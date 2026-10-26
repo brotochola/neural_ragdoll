@@ -510,6 +510,17 @@ async function runMain() {
   // The recorded falls for the get-up reverse curriculum, if the file is there.
   const fallsPath = path.join(root, config.getup.fallsFile || 'getup-falls.json');
   const getupFalls = fs.existsSync(fallsPath) ? JSON.parse(fs.readFileSync(fallsPath, 'utf8')).falls : null;
+  // Get-up imitation: the keyframe references and the reference states for RSI, when present.
+  let getupReference = null;
+  let getupStates = null;
+  if (config.getup.imitate) {
+    const files = config.getup.referenceFiles || {};
+    const read = (f) => (f && fs.existsSync(path.join(root, f)) ? JSON.parse(fs.readFileSync(path.join(root, f), 'utf8')) : null);
+    const up = read(files.up);
+    const down = read(files.down);
+    if (up && down) getupReference = { up: up.frames, down: down.frames };
+    getupStates = read(config.getup.statesFile);
+  }
   const randomNormal = () => randomNormalSample(random);
   const weightCount = ElmanNetwork.weightCount;
   const dropMeters = (config.start.fallDropMinMeters + config.start.fallDropMaxMeters) / 2;
@@ -783,6 +794,8 @@ async function runMain() {
         getupStrength: state.getupStrength || 1,
         boardMax: state.boardMax || 0,
         getupFalls,
+        getupReference,
+        getupStates,
       }),
       runJobs: (jobs) => pool.run(jobs),
       decorate(job, child, asked) {
