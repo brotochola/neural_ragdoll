@@ -30,7 +30,7 @@ const sigmaFloor = +arg('--sigma-floor', 0.15);
 const settle = +arg('--settle', 3); // seconds of the stand net after the last key
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
-const { createSim } = await import('./src/sim.js');
+const { createSim, feetOnBox } = await import('./src/sim.js');
 const { ElmanNetwork, outputCountOf } = await import('./src/net.js');
 const { makeSeededRandom, randomNormalSample } = await import('./src/utils.js');
 const { isStanding } = await import('./src/reward.js');
@@ -112,6 +112,7 @@ function episode(frames, seed, record) {
   let score = 0;
   let n = 0;
   let bestFoot = 0; // highest the LOWER foot got, as a share of the box height (both feet up)
+  let bestFeetOn = 0; // most feet on the box at once, with the head up
   let bestHip = 0;
   const poses = record ? [] : null;
   let f = 0;
@@ -128,7 +129,10 @@ function episode(frames, seed, record) {
     // Progress only counts with the head up: the first search lay on the floor with both feet
     // propped on the box (head 0.13 m), which paid the feet-on-top terms.
     const headUpNow = Math.max(0, Math.min(1, (m.headHeight - top) / standHead));
-    if (m.headHeight > 0.9) bestFoot = Math.max(bestFoot, Math.min(1, low / top) * 0.7 + Math.min(1, high / top) * 0.3);
+    if (m.headHeight > 0.9) {
+      bestFoot = Math.max(bestFoot, Math.min(1, low / top) * 0.7 + Math.min(1, high / top) * 0.3);
+      if (b) bestFeetOn = Math.max(bestFeetOn, feetOnBox(m, b));
+    }
     bestHip = Math.max(bestHip, Math.min(1, (world.py[P.torso] - top) / config.body.torsoHeightMeters) * (0.5 + 0.5 * headUpNow));
     if (record && f % 2 === 0) {
       const p = [];
@@ -138,14 +142,17 @@ function episode(frames, seed, record) {
     if (f < last) continue;
     const onTop = ep.footOnTop ? (ep.footOnTop() ? 1 : 0) : 0;
     const head = Math.max(0, Math.min(1, (m.headHeight - top) / standHead));
-    score += 2 * head + onTop * (0.5 + 2 * head) + Math.max(0, m.torsoCos) * head + (onTop && isStanding(m) ? 3 : 0);
+    // Only being on the box pays at the end: the second search stood still in front of it, which
+    // the head-height term paid almost in full.
+    const on = b ? feetOnBox(m, b) : 0;
+    score += on * (0.5 + head) + onTop * (2 * head + Math.max(0, m.torsoCos)) + (onTop && isStanding(m) ? 3 : 0);
     n++;
   }
   const s = ep.stats;
   const frames2 = s.windowFrames || 0;
   const pass = !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
   const why = 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
-  return { why, score: score / Math.max(1, n) + 1.5 * bestFoot + 0.5 * Math.max(0, bestHip), pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
+  return { why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip), pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
 }
 
 function evaluate(v) {
