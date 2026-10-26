@@ -279,8 +279,12 @@ export const config = {
     // capPassRate of the last capWindow generations' get-ups end standing. Starts lying, like the
     // eval. When useAssist is on, the fall library is not used.
     useAssist: true,
-    assistStart: 1.6, // Below ~1.5 the force never lifts the whole body off the floor; at 1.6 the stand net ends up standing 4/6.
+    assistStart: 1, // Harness strength at the start of the curriculum (1: it holds the body up).
     assistStep: 0.05,
+    harnessHertz: 1, // Spring of the pelvis toward standing height over its start point.
+    harnessDamping: 1, // Critically damped: no pendulum.
+    harnessDrop: 0.08, // The pelvis target sits this far under standing height: hung at exactly 1.14 m the feet dangled.
+    harnessUpright: 1, // Spring keeping the chest over the pelvis.
     fallsFile: "getup-falls.json",
     startCap: 0.25,
     maxCap: 1,

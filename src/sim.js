@@ -1730,6 +1730,7 @@ export function createSim(box) {
       this.grips[1].joint = null;
       this.grippable = [];
       this.gripCount = 0;
+      this.harnessX = null;
       this.board = null;
       if (this.options.board) {
         readBodyState(world, this.measure);
@@ -2802,18 +2803,42 @@ export function createSim(box) {
       this.airPart = -1;
     }
     stepPhysics() {
-      // Get-up helping hand: lift on pelvis and chest, fading out as the pelvis rises.
+      // Get-up harness: a damped spring takes the pelvis to standing height over the point where it
+      // started, with gravity compensated, and another keeps the chest over the pelvis (torso
+      // upright). Everything scales with options.assist (0 = off, 1 = it holds the body up).
+      // The first helping hand was a plain upward force: it pivoted the body on feet left out in
+      // front and swung like a pendulum, and it only worked at hand-picked strengths.
       const assist = this.options.assist || 0;
       if (assist > 0) {
         const world = this.world;
+        const P = config.partIndex;
+        const m = this.measure;
         if (!world.totalMass) world.totalMass = world.parts.reduce((sum, part) => sum + (part.m || 0), 0);
-        let low = 1 - (this.measure.partY[config.partIndex.torso] || 0) / config.body.torsoHeightMeters;
-        low = low < 0 ? 0 : low > 1 ? 1 : low;
-        const force = (assist * world.totalMass * 9.8 * low) / 2;
-        if (force > 0) {
-          b2Body_ApplyForceToCenter(world.parts[config.partIndex.torso].id, vector(0, force), true);
-          b2Body_ApplyForceToCenter(world.parts[config.partIndex.chest].id, vector(0, force), true);
-        }
+        if (this.harnessX == null) this.harnessX = m.partX[P.torso] || 0;
+        const g = config.getup;
+        const mass = world.totalMass;
+        const w = 2 * Math.PI * (g.harnessHertz || 1);
+        const kp = w * w;
+        const kd = 2 * (g.harnessDamping || 1) * w;
+        const tx = this.harnessX;
+        // A little under standing height, so straight legs put the feet on the floor and load them.
+        const ty = config.body.torsoHeightMeters - (config.getup.harnessDrop || 0);
+        const px = m.partX[P.torso] || 0, py = m.partY[P.torso] || 0;
+        const vx = m.partVelocityX[P.torso] || 0, vy = m.partVelocityY[P.torso] || 0;
+        let fx = assist * mass * (kp * (tx - px) - kd * vx);
+        let fy = assist * mass * (9.8 + kp * (ty - py) - kd * vy);
+        const cap = assist * mass * 9.8 * 2;
+        fx = fx < -cap ? -cap : fx > cap ? cap : fx;
+        fy = fy < -cap ? -cap : fy > cap ? cap : fy;
+        b2Body_ApplyForceToCenter(world.parts[P.torso].id, vector(fx, fy), true);
+        // Upright: the chest is pulled over the pelvis, the pelvis pushed the other way (no net force).
+        const cx = m.partX[P.chest] || 0;
+        const cvx = m.partVelocityX[P.chest] || 0;
+        const chestMass = world.parts[P.chest].m + world.parts[P.head].m;
+        let ux = assist * chestMass * (kp * (px - cx) - kd * (cvx - vx)) * (g.harnessUpright || 1);
+        ux = ux < -cap ? -cap : ux > cap ? cap : ux;
+        b2Body_ApplyForceToCenter(world.parts[P.chest].id, vector(ux, 0), true);
+        b2Body_ApplyForceToCenter(world.parts[P.torso].id, vector(-ux, 0), true);
       }
       b2World_Step(
         this.world.worldId,
