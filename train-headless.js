@@ -572,6 +572,7 @@ async function runMain() {
       boardMax: state.boardMax || 0,
       getupMax: state.getupMax || 0,
       getupAssist: state.getupAssist == null ? null : state.getupAssist,
+      getupStrength: state.getupStrength || 1,
       placeScale: state.placeScale || 0,
       footRatio: state.footRatio > 0 ? state.footRatio : 0,
       heldFoot: state.heldFoot > 0 ? state.heldFoot : 0,
@@ -657,6 +658,7 @@ async function runMain() {
     state.boardMax = saved.boardMax || 0;
     state.getupMax = saved.getupMax || 0;
     state.getupAssist = saved.getupAssist == null ? null : saved.getupAssist;
+    state.getupStrength = saved.getupStrength || 1;
     state.placeScale = saved.placeScale || 0;
     state.footRatio = saved.footRatio > 0 ? saved.footRatio : 0;
     state.heldFoot = saved.heldFoot > 0 ? saved.heldFoot : 0;
@@ -778,6 +780,7 @@ async function runMain() {
         climbMax: state.climbMax || 0,
         getupMax: state.getupMax || 0,
         getupAssist: state.getupAssist || 0,
+        getupStrength: state.getupStrength || 1,
         boardMax: state.boardMax || 0,
         getupFalls,
       }),
@@ -873,6 +876,7 @@ async function runMain() {
       const g = config.getup;
       if (!(state.getupMax > 0)) state.getupMax = g.startCap;
       if (state.getupAssist == null) state.getupAssist = g.useAssist ? g.assistStart : 0;
+      if (!(state.getupStrength > 0)) state.getupStrength = g.useStrength ? g.strengthStart : 1;
       let tried = 0;
       let made = 0;
       for (const row of scores) {
@@ -882,7 +886,7 @@ async function runMain() {
         // keeps getting up with less of it. Hung in the harness the doll never met the strict
         // standing test (both feet down, under 15 degrees), and the help never faded. The eval,
         // with no help, still asks for real standing.
-        if (g.useAssist ? (row.headHeight || 0) >= g.harnessHeadMeters : row.stoodUp) made++;
+        if (!g.useStrength && g.useAssist ? (row.headHeight || 0) >= g.harnessHeadMeters : row.stoodUp) made++;
       }
       state.getupLog = state.getupLog || [];
       state.getupLog.push([made, tried]);
@@ -890,7 +894,14 @@ async function runMain() {
       const sumMade = state.getupLog.reduce((a, r) => a + r[0], 0);
       const sumTried = state.getupLog.reduce((a, r) => a + r[1], 0);
       state.getupRate = sumTried ? sumMade / sumTried : 0;
-      if (g.useAssist) {
+      if (g.useStrength) {
+        if (state.getupLog.length >= g.capWindow && state.getupRate >= g.capPassRate && state.getupStrength > 1) {
+          state.getupStrength = Math.max(1, state.getupStrength * g.strengthDecay);
+          if (state.getupStrength < 1.02) state.getupStrength = 1;
+          state.getupLog.length = 0;
+          log('getup strength -> x' + state.getupStrength.toFixed(2) + ' (recent get-ups ' + Math.round(state.getupRate * 100) + '% truly standing)');
+        }
+      } else if (g.useAssist) {
         if (state.getupLog.length >= g.capWindow && state.getupRate >= g.capPassRate && state.getupAssist > 0) {
           state.getupAssist = Math.max(0, state.getupAssist - g.assistStep);
           state.getupLog.length = 0;
@@ -1298,7 +1309,7 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
           const steps = last && last.steps != null ? ' steps ' + last.steps.toFixed(2) : '';
           const walked = last && last.walk ? ' walked ' + last.walk.toFixed(3) + ' best ' + last.bestWalk.toFixed(2) : '';
           const boarded = (state.skill | 0) === 10 ? ' board amp ' + (state.boardMax || 0).toFixed(2) + ' rate ' + (state.boardRate || 0).toFixed(2) : '';
-          const gotUp = (state.skill | 0) === 9 ? (config.getup.useAssist ? ' assist ' + (state.getupAssist || 0).toFixed(2) : ' getup cap ' + (state.getupMax || 0).toFixed(2)) + ' rate ' + (state.getupRate || 0).toFixed(2) : '';
+          const gotUp = (state.skill | 0) === 9 ? (config.getup.useStrength ? ' strength x' + (state.getupStrength || 1).toFixed(2) : config.getup.useAssist ? ' assist ' + (state.getupAssist || 0).toFixed(2) : ' getup cap ' + (state.getupMax || 0).toFixed(2)) + ' rate ' + (state.getupRate || 0).toFixed(2) : '';
           const climbed = (state.skill | 0) === 8 || (state.skill | 0) === 11 ? ' climb cap ' + (state.climbMax || 0).toFixed(2) + ' rate ' + (state.climbRate || 0).toFixed(2) : '';
           log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + walked + climbed + gotUp + boarded + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
           saveTrainState(state);

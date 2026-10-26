@@ -283,7 +283,13 @@ export const config = {
     // the pelvis reaches standing torso height. Starts at assistStart and drops assistStep whenever
     // capPassRate of the last capWindow generations' get-ups end standing. Starts lying, like the
     // eval. When useAssist is on, the fall library is not used.
-    useAssist: true,
+    // Strong-to-weak (Tao et al. 2022): every motor torque times strength, starting at strengthStart
+    // and multiplied by strengthDecay each time capPassRate of the last capWindow generations'
+    // get-ups end truly standing, down to 1 (the real body). No external force. Replaces the harness.
+    useStrength: true,
+    strengthStart: 4,
+    strengthDecay: 0.9,
+    useAssist: false, // The harness: an external force. Off: it hoisted the doll but it never learned to stand without it.
     assistStart: 1, // Harness strength at the start of the curriculum (1: it holds the body up).
     assistStep: 0.05,
     harnessHertz: 1, // Spring of the pelvis toward standing height over its start point.

@@ -279,7 +279,7 @@ export class RagDoll2D {
         enableSpring: springHertz > 0, hertz: springHertz, dampingRatio: cfg.joint.dampingRatio,
       });
       joints.push({
-        id: created.jointId, lo: lower, hi: upper, n: Math.max(-lower, upper),
+        id: created.jointId, lo: lower, hi: upper, n: Math.max(-lower, upper), torque,
         a: partA, ax: worldX - a.cx, ay: worldY - a.cy,
         b: partB, bx: worldX - b.cx, by: worldY - b.cy, mark: "",
       });

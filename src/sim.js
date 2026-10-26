@@ -574,7 +574,9 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.settle = config.start.downSettleFrames;
     // Training with the fall library: start somewhere along a recorded fall (reverse curriculum).
     out.assist = 0;
+    out.strength = 1;
     if (config.getup.useAssist && mode && mode.getupAssist > 0) out.assist = mode.getupAssist;
+    if (config.getup.useStrength && mode && mode.getupStrength > 1) out.strength = mode.getupStrength;
     const falls = mode && mode.getupFalls;
     if (!config.getup.useAssist && falls && falls.length && mode.getupMax > 0) {
       const g = config.getup;
@@ -1107,6 +1109,7 @@ export function createSim(box) {
     b2Body_ApplyForceToCenter,
     b2Body_ApplyTorque,
     b2RevoluteJoint_GetAngle,
+    b2RevoluteJoint_SetMaxMotorTorque,
     b2RevoluteJoint_SetMotorSpeed,
     b2RevoluteJoint_EnableMotor,
     b2RevoluteJoint_EnableSpring,
@@ -1746,6 +1749,15 @@ export function createSim(box) {
       this.grippable = [];
       this.gripCount = 0;
       this.harnessX = null;
+      // STRENGTH: every motor torque is the built torque times options.strength (1 = the real
+      // body). The get-up curriculum starts strong and weakens to 1 (Tao et al. 2022, "Learning to
+      // Get Up": a strong character discovers the motion; at normal strength exploration gets stuck).
+      const strength = this.options.strength > 0 ? this.options.strength : 1;
+      if (b2RevoluteJoint_SetMaxMotorTorque && world.joints[0] && world.joints[0].torque) {
+        for (let i = 0; i < world.joints.length; i++)
+          b2RevoluteJoint_SetMaxMotorTorque(world.joints[i].id, world.joints[i].torque * strength);
+      }
+      this.strength = strength;
       this.board = null;
       if (this.options.board) {
         readBodyState(world, this.measure);
@@ -2737,7 +2749,8 @@ export function createSim(box) {
         return;
       }
       this.applyScriptedGait();
-      const limit = config.episode.motorSpeedLimit || 1;
+      // A stronger body is also allowed to move its joints faster (up to 2x).
+      const limit = (config.episode.motorSpeedLimit || 1) * Math.min(2, Math.sqrt(this.strength || 1));
       let speedSum = 0;
       for (let i = 0; i < config.net.jointCount; i++) {
         const joint = this.world.joints[i];
