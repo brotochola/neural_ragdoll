@@ -12,3 +12,4 @@ trained/getup-expert-es2.json
 backups-*/
 keyframes-climb-*.json
 trained/walk-cpg.json
+trained/walk-simbicon.json
