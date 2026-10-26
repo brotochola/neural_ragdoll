@@ -99,7 +99,7 @@ function layout(r) {
   for (let i = 0; i < nSteps; i++) statics.push({ dx: stairsX + i * tread, w: end - (stairsX + i * tread), h: platformTop + (i + 1) * rise });
   // loose light boxes on the platform, 11.5-14 m
   const dynamics = [];
-  for (let i = 0; i < 3; i++) dynamics.push({ dx: 11.5 + i * 0.8 + r() * 0.3, w: 0.15, h: 0.12, density: 8, y: platformTop });
+  for (let i = 0; i < 3; i++) dynamics.push({ dx: 11.5 + i * 0.8 + r() * 0.3, w: +(process.env.BOX_W || 0.1), h: +(process.env.BOX_H || 0.06), density: +(process.env.BOX_D || 3), y: platformTop });
   return { statics, dynamics, platformX, platformTop, stairsX, finish: stairsX + (nSteps - 1) * tread + 1.5, end };
 }
 
