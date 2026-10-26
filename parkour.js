@@ -183,7 +183,7 @@ function episode(p, seed, record) {
   const upShare = up / Math.max(1, frames);
   const speedErr = Math.abs(Math.min(2, vAvg / speed) - 1);
   const flightShare = flight / Math.max(1, frames);
-  const passRun = !fell && upShare > 0.9 && speedErr < 0.15;
+  const passRun = !fell && upShare > 0.9 && speedErr < (obstacles.length ? 0.3 : 0.15); // over obstacles a jump costs some speed
   const pass = passRun && (obstacles.length === 0 || cleared === obstacles.length);
   let score = 4 * alive + 2 * upShare * alive + 2 * Math.min(1, Math.max(0, dist) / (speed * seconds)) - 2 * speedErr * alive + 1.5 * Math.min(1, flightShare / 0.25) * alive + (pass ? 3 : 0);
   if (obstacles.length) score += 3 * cleared / obstacles.length + (cleared === obstacles.length && !fell ? 2 : 0);
