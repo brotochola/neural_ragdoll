@@ -205,7 +205,8 @@ function draw() {
     ctx.setLineDash([8, 6]); ctx.strokeStyle = css('--mark'); ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(sx(f.mx), sy(f.my), 0.12 * k, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
   }
-  const order = [...LEFT, 15, 0, 1, 2, ...RIGHT];
+  // Far side (left) behind the body, near side (right) in front; each arm over its own leg.
+  const order = [6, 7, 8, 3, 4, 5, 15, 0, 1, 2, 12, 13, 14, 9, 10, 11];
   for (const i of order) drawPart(i, sx(f.p[i * 3]), sy(f.p[i * 3 + 1]), f.p[i * 3 + 2], 1, k);
   // standing light
   ctx.fillStyle = f.up ? css('--ok') : css('--bad');

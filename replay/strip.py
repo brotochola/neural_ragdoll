@@ -19,7 +19,7 @@ shapes = rec["shapes"]
 frames = ep["frames"]
 picks = [round(i * (len(frames) - 1) / (count - 1)) for i in range(count)]
 LEFT = {3, 4, 5, 6, 7, 8}
-order = [3, 4, 5, 6, 7, 8, 15, 0, 1, 2, 9, 10, 11, 12, 13, 14]
+order = [6, 7, 8, 3, 4, 5, 15, 0, 1, 2, 12, 13, 14, 9, 10, 11]  # far leg, far arm, body, near leg, near arm on top
 
 
 def color(i):
