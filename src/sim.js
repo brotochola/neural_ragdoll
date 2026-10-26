@@ -1729,6 +1729,7 @@ export function createSim(box) {
         : 0.5;
       this.measure.plantedWeight = config.reward.planted || 0; // While walking: one foot down is enough (reward.js).
       this.measure.walking = !!this.options.walk;
+      this.measure.getup = !!this.options.getup;
       this.measure.walkSpeed = 0;
       this.measure.walkDir = 0;
       if (this.options.walk && this.options.targets) {

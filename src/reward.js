@@ -284,7 +284,16 @@ function uprightRow(measure) {
       }
     }
   }
-  return weight.upright * mix + feet + walk + climb + gait;
+  // GETUP: pay pelvis height, up to the standing torso height. The first get-up runs settled into
+  // a plank on the arms with the legs flat: torso off the floor, head a little higher, and nothing
+  // paid for getting the knees under the body and the hips up, which is the step to standing.
+  let hips = 0;
+  if (measure && measure.getup && weight.getupHips && measure.partY) {
+    let h = (measure.partY[part.torso] || 0) / config.body.torsoHeightMeters;
+    h = h < 0 ? 0 : h > 1 ? 1 : h;
+    hips = weight.getupHips * h;
+  }
+  return weight.upright * mix + feet + walk + climb + gait + hips;
 }
 export function markError(measure, targetIndex) {
   const spec = config.targets[targetIndex];
