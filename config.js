@@ -597,7 +597,7 @@ export const config = {
     startShiftMeters: 0.4, // Extra horizontal shift of a situation.
     startDropJitterMeters: 0.06, // Extra drop height added on top of a situation.
     motorGain: 12, // How hard a joint motor chases the action target.
-    motorSpeedLimit: 10, // Max joint motor speed, radians per second.
+    motorSpeedLimit: +(globalThis.process?.env?.MOTOR_SPEED || 10), // Max joint motor speed, radians per second (env MOTOR_SPEED to test a faster body).
     goalNearMeters: 1.2, // Closest random marker distance.
     goalFarExtraMeters: 1, // Extra meters added at random past the closest marker.
   },
