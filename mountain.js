@@ -35,7 +35,23 @@ const { evalMode } = await import('./src/training.js');
 const pose = await import('./src/pose.js');
 const { installMountainPlanner } = await import('./src/mountain-planner.js');
 const { makeMountain: makeMountainBase } = await import('./src/terrain.js');
-const makeMountain = (r) => makeMountainBase(r, height, difficulty);
+const makeMountain = (r) => {
+  // TEST=slope:20 a plain slope of 20 degrees; TEST=step:0.2 stairs of 0.2 m (to try one thing at a time)
+  const t = process.env.TEST;
+  if (!t) return makeMountainBase(r, height, difficulty);
+  const [kind, v] = t.split(':');
+  const pts = [[-4, 0], [1.2, 0]];
+  let x = 1.2, y = 0;
+  while (y < height) {
+    if (kind === 'slope') { x += 0.3; y += 0.3 * Math.tan(+v * Math.PI / 180); }
+    else { x += 0.02; y += +v; pts.push([+x.toFixed(3), +y.toFixed(3)]); x += 0.4; }
+    pts.push([+x.toFixed(3), +y.toFixed(3)]);
+  }
+  pts.push([x + 5, y]);
+  const polys = [];
+  for (let i = 1; i < pts.length - 1; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[i + 1]; if (y1 <= 0.001 && y2 <= 0.001) continue; polys.push([[x1, -0.2], [x2, -0.2], [x2, y2], [x1, y1]]); }
+  return { surface: pts, polys, summitX: x, H: y };
+};
 
 setSkill(6);
 const sim = createSim(Box2D);
@@ -72,6 +88,7 @@ const decode = (v) => {
   SPEC.forEach(([k, b], i) => (p[k] = b + (v[i] || 0)));
   for (const k of ['tFoot', 'tHand']) p[k] = Math.max(0.3, p[k]);
   p.shift = Math.max(0.1, Math.min(0.6, p.shift));
+  for (const k of Object.keys(process.env)) if (k.startsWith('P_')) p[k.slice(2)] = +process.env[k]; // overrides for trying things
   return p;
 };
 const smooth = (s) => s * s * (3 - 2 * s);

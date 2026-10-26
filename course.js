@@ -86,6 +86,7 @@ const stepCtl = step.makeController(world);
 
 // The course, relative to the feet at the start (x forward). Heights in metres.
 function layout(r) {
+  if (process.env.TERRACES) return terraces(r, +process.env.TERRACES);
   const statics = [];
   // uneven ground 2-6 m
   let x = 2;
@@ -111,6 +112,23 @@ function layout(r) {
   const dynamics = [];
   for (let i = 0; i < (process.env.NO_DYN ? 0 : 3); i++) dynamics.push({ dx: 11.5 + i * 0.8 + r() * 0.3, w: +(process.env.BOX_W || 0.1), h: +(process.env.BOX_H || 0.06), density: +(process.env.BOX_D || 3), y: platformTop });
   return { statics, dynamics, platformX, platformTop, stairsX, finish: stairsX + (nSteps - 1) * tread + 1.5, end };
+}
+
+// TERRACES=H: a mountain of irregular ledges up to H m (rises 0.18-0.34 m, flat tops 1.2-2.2 m wide)
+// after 3 m of flat ground, the finish on the summit.
+function terraces(r, H) {
+  const statics = [];
+  let x = 3, h = 0;
+  const xs = [];
+  while (h < H - 0.01) {
+    const rise = Math.min(H - h, +(process.env.RISE_MIN || 0.18) + r() * (+(process.env.RISE_MAX || 0.34) - +(process.env.RISE_MIN || 0.18)));
+    h += rise;
+    xs.push([x, h]);
+    x += +(process.env.TREAD_MIN || 1.2) + r() * 1.0;
+  }
+  const end = x + 3;
+  for (const [x0, top] of xs) statics.push({ dx: x0, w: end - x0, h: +top.toFixed(3) });
+  return { statics, dynamics: [], platformX: xs[0][0], platformTop: xs[0][1], stairsX: x, finish: xs[xs.length - 1][0] + 1.2, end };
 }
 
 function run(seed, record) {

@@ -17,7 +17,9 @@ ep = rec["episodes"][int(sys.argv[3]) if len(sys.argv) > 3 else 0]
 count = int(sys.argv[4]) if len(sys.argv) > 4 else 12
 shapes = rec["shapes"]
 frames = ep["frames"]
-picks = [round(i * (len(frames) - 1) / (count - 1)) for i in range(count)]
+import os
+_a = int(float(os.environ.get("T0", 0)) * rec["fps"]); _b = min(len(frames) - 1, int(float(os.environ.get("T1", 1e9)) * rec["fps"]))
+picks = [_a + round(i * (_b - _a) / (count - 1)) for i in range(count)]
 LEFT = {3, 4, 5, 6, 7, 8}
 order = [6, 7, 8, 3, 4, 5, 15, 0, 1, 2, 12, 13, 14, 9, 10, 11]  # far leg, far arm, body, near leg, near arm on top
 
@@ -91,7 +93,10 @@ for ax, fi in zip(axes, picks):
     ax.axhline(0, color="#888", lw=1)
     ax.set_xlim(cx - 0.8, cx + 0.8)
     lift = max([b["top"] for b in (ep.get("boxes") or [])] + [q[1] for q in (ep.get("surface") or [])] + [0])
-    ax.set_ylim(-0.05, (2.7 if ep.get("swing") else 2.0) + lift)
+    if os.environ.get("FOLLOW"):
+        ax.set_ylim(p[1] - 1.1, p[1] + 1.1)
+    else:
+        ax.set_ylim(-0.05, (2.7 if ep.get("swing") else 2.0) + lift)
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_title(f"{fi / rec['fps']:.1f}s {'UP' if f['up'] else ''}", fontsize=8)
