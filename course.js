@@ -58,7 +58,12 @@ const slowSaved = load(arg('--slow-walk', 'trained/walk-controller.json'));
 const slowP = Object.assign(simb.decode(slowSaved.best), { track: !!slowSaved.track });
 // STOP: the walking controller with no forward swing target and strong balance feedback places each
 // swing foot under where the body is heading (the capture point), so it halts in a step or two.
-const stopP = Object.assign({}, slowP, { swing0: +(process.env.STOP_SWING || 0.05), swing1: 0, cd: +(process.env.STOP_CD || 1.2), cv: +(process.env.STOP_CV || 0.5), track: true });
+const stopFile = arg('--stop', 'trained/stop-controller.json');
+const stopTuned = fs.existsSync(path.resolve(root, stopFile)) ? load(stopFile).params : null;
+const stopP = stopTuned
+  ? Object.assign({}, slowP, stopTuned, { track: true })
+  : Object.assign({}, slowP, { swing0: +(process.env.STOP_SWING || 0.05), swing1: 0, cd: +(process.env.STOP_CD || 1.2), cv: +(process.env.STOP_CV || 0.5), track: true });
+const holdK = stopTuned ? { kHip: stopTuned.holdKHip, kAnkle: stopTuned.holdKAnkle } : { kHip: 1.5, kAnkle: 3 };
 const stairsSaved = stairsFile ? load(stairsFile) : null;
 const stairsP = stairsSaved ? Object.assign(simb.decode(stairsSaved.best), { track: !!stairsSaved.track }) : walkP;
 const stepP = step.decode(load(stepFile).best);
@@ -75,10 +80,11 @@ function layout(r) {
     statics.push({ dx: x, w, h: 0.01 + r() * 0.03 });
     x += w + 0.15 + r() * 0.4;
   }
-  // platform 0.3 m from 8 m to the end
-  const platformX = 8;
+  // platform 0.3 m from 10 m to the end (4 m of flat ground after the bumps: the slow approach walker
+  // starts 3 m before it and was never tuned on bumps)
+  const platformX = 10;
   const platformTop = 0.3;
-  const stairsX = 13;
+  const stairsX = 15;
   const rise = 0.1;
   const tread = 0.35;
   const nSteps = 3;
@@ -87,7 +93,7 @@ function layout(r) {
   for (let i = 0; i < nSteps; i++) statics.push({ dx: stairsX + i * tread, w: end - (stairsX + i * tread), h: platformTop + (i + 1) * rise });
   // loose light boxes on the platform, 9.5-12 m
   const dynamics = [];
-  for (let i = 0; i < 3; i++) dynamics.push({ dx: 9.5 + i * 0.8 + r() * 0.3, w: 0.15, h: 0.12, density: 8, y: platformTop });
+  for (let i = 0; i < 3; i++) dynamics.push({ dx: 11.5 + i * 0.8 + r() * 0.3, w: 0.15, h: 0.12, density: 8, y: platformTop });
   return { statics, dynamics, platformX, platformTop, stairsX, finish: stairsX + nSteps * tread + 1.5, end };
 }
 
@@ -262,20 +268,19 @@ function run(seed, record) {
       m.walkDir = 1;
       walkCtl(stopP, this, tmp);
       for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
-      if (modeT > 0.6 && Math.abs(m.centerVelocityX || 0) < 0.1 && this.measure.touch[config.partIndex.footLeft] && this.measure.touch[config.partIndex.footRight]) setMode('hold');
-      else if (modeT > 3) setMode('hold');
+      if (modeT > 2) setMode('hold'); // as tuned in stop-search.js
     } else if (mode === 'hold') {
       // Stand still on both feet with the pose executor, then decide.
       if (!this.holdFeet) this.holdFeet = [config.partIndex.footLeft, config.partIndex.footRight].map((f) => pose.soleOf(world, f));
       const g = groundUnder(world.px[0]);
       const mid = (this.holdFeet[0].x + this.holdFeet[1].x) / 2;
       const goal = { pelvis: { x: mid, y: g + 0.92 }, torso: 0, feet: this.holdFeet.map((q) => ({ x: q.x, y: q.y, angle: 0 })), planted: [true, true] };
-      pose.commandsFor(world, pose.balancedTargets(goal, m, { planted: [true, true], kHip: 1.5, kAnkle: 3, kAnkleVel: 0.15, kHipVel: 0.1 }), this.action);
-      if (modeT > 1.0) {
+      pose.commandsFor(world, pose.balancedTargets(goal, m, { planted: [true, true], kHip: holdK.kHip, kAnkle: holdK.kAnkle, kAnkleVel: 0.15, kHipVel: 0.1 }), this.action);
+      if (modeT > 2.0) {
         this.holdFeet = null;
         const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
         const gap = ahead ? ahead.box.x0 - front : 9;
-        if (ahead && ahead.rise > 0.15 && gap < 0.6) setMode('climb');
+        if (ahead && ahead.rise > 0.15 && gap < +(process.env.CLIMB_GAP || 0.6)) setMode('climb');
         else setMode('walk');
       }
     } else if (mode === 'brake') {
@@ -293,11 +298,17 @@ function run(seed, record) {
       if (modeT > 0.5) setMode('climb');
     } else if (mode === 'climb') {
       if (modeT < 0.05) {
-        const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
+        const fl = world.px[config.partIndex.footLeft];
+        const fr = world.px[config.partIndex.footRight];
+        const front = Math.max(fl, fr);
         this.climbBox = ahead && ahead.box.x0 - front < 0.7 ? ahead.box : null;
+        // Lead with whichever foot is in front (the climb was tuned with the right one in front and
+        // the legs are identical in 2D); with the left in front it tried to lift the back leg forever.
+        this.climbP = Object.assign({}, stepP, { lead: fr >= fl ? 1 : -1 });
       }
       if (this.climbBox) {
-        const going = stepCtl(stepP, this, tmp);
+        const going = stepCtl(this.climbP || stepP, this, tmp);
+        if (process.env.DEBUG_CLIMB && Math.round(modeT * 60) % 20 === 1) console.log('    climb t', modeT.toFixed(2), 'state', this.stepup && this.stepup.state, 'going', going, 'lead', this.climbP && this.climbP.lead, 'hipL', tmp[5].toFixed(2), 'hipR', tmp[11].toFixed(2), 'box', this.climbBox.x0.toFixed(2), this.climbBox.top, 'thighL', Math.atan2(world.s[6], world.c[6]).toFixed(2), 'thighR', Math.atan2(world.s[12], world.c[12]).toFixed(2), 'act5', this.action[5].toFixed(2), 'locked', !!this.legLocked, 'passive', !!this.passive);
         for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
         if (!going || modeT > 6) setMode('steady');
       } else setMode('steady');

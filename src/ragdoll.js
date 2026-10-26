@@ -187,6 +187,9 @@ export class RagDoll2D {
     this.partSprites = null;
 
     const { worldId } = CreateWorld({});
+    // No sleeping: a body held perfectly still for a couple of seconds fell asleep, and joint motor
+    // commands did not wake it (the course's climb after a still stance did nothing for 3 s).
+    if (box.b2World_EnableSleeping) box.b2World_EnableSleeping(worldId, false);
     this.worldId = worldId;
     this.worldId0 = worldId;
     this.destroyWorld = box.b2DestroyWorld;
