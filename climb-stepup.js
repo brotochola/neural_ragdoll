@@ -128,18 +128,20 @@ function episode(p, seed, record) {
   return { boxInfo, why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise, pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
 }
 
-function evaluate(v) {
-  const frames = decode(v);
+// seedBase: each generation draws new practice starts. With 3 fixed ones the 0.3 m search passed
+// all 3 and only 4 of 10 new starts.
+function evaluate(v, seedBase = 0, n = seeds) {
+  const p = decode(v);
   let s = 0;
   let pass = 0;
   let top = 0;
-  for (let i = 0; i < seeds; i++) {
-    const r = episode(frames, i);
+  for (let i = 0; i < n; i++) {
+    const r = episode(p, seedBase + i);
     s += r.score;
     pass += r.pass;
     top += r.onTop;
   }
-  return { score: s / seeds + pass, pass, top };
+  return { score: s / n + pass / n * 3, pass, top, n };
 }
 
 // --show: replay the --init motion on --seeds starts, print why each passes or not, save a recording.
@@ -164,10 +166,16 @@ for (let it = 0; it < iters; it++) {
   for (let c = 0; c < pop; c++) {
     const v = new Float64Array(dims);
     for (let d = 0; d < dims; d++) v[d] = mean[d] + sigma[d] * normal();
-    cands.push({ v, ...evaluate(v) });
+    cands.push({ v, ...evaluate(v, 1000 + it * seeds) });
   }
   cands.sort((a, b) => b.score - a.score);
-  if (!best || cands[0].score > best.score) best = cands[0];
+  // Keep the version that does best on 10 held-out starts (500+), checked every 5 generations.
+  if (it % 5 === 4 || it === 0) {
+    for (const c of [cands[0], { v: Float64Array.from(mean) }]) {
+      const val = evaluate(c.v, 500, 10);
+      if (!best || val.score > best.score) best = { v: Float64Array.from(c.v), ...val };
+    }
+  }
   const top = cands.slice(0, elite);
   for (let d = 0; d < dims; d++) {
     let m = 0;
@@ -180,7 +188,7 @@ for (let it = 0; it < iters; it++) {
     sigma[d] = Math.max(sigmaFloor * SPEC[d][2], 0.7 * s + 0.3 * sigma[d]);
   }
   if (it % 5 === 0 || it === iters - 1) {
-    console.log('iter', it, 'height', height, 'best', best.score.toFixed(3), 'pass', best.pass + '/' + seeds, 'on top', best.top + '/' + seeds, 'gen best', cands[0].score.toFixed(3), 'sigma', (sigma.reduce((a, b) => a + b, 0) / dims).toFixed(3));
+    console.log('iter', it, 'height', height, 'best', best.score.toFixed(3), 'held-out pass', best.pass + '/10', 'on top', best.top + '/10', 'gen best', cands[0].score.toFixed(3), 'sigma', (sigma.reduce((a, b) => a + b, 0) / dims).toFixed(3));
     fs.writeFileSync(out, JSON.stringify({ side, height, controller: 'stepup', best: Array.from(best.v), score: best.score, pass: best.pass, frames: decode(best.v) }));
   }
 }
