@@ -12,6 +12,11 @@ import { evalMode } from '../src/training.js';
 import * as pose from '../src/pose.js';
 import { makeMountain, makeWall } from '../src/terrain.js';
 import standNet from '../trained/stand-and-walk.json';
+import params from './params.json';
+import { makeController as makeWalker } from '../src/simbicon.js';
+import { installRunner } from '../src/run-selector.js';
+import { installWallPlanner } from '../src/wall-planner.js';
+import { installMountainPlanner } from '../src/mountain-planner.js';
 
 setSkill(6);
 const sim = createSim(Box2D);
@@ -28,6 +33,8 @@ const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n
 
 const state = {
   scene: 'floor',
+  mode: 'manual', // who drives: manual (the marks), stand (the network), walk, run, climb (a planner)
+  speed: { walk: 0.9, run: 2.7 },
   grip: [false, false],
   autoHips: true,
   balance: true,
@@ -39,10 +46,11 @@ let ep = null;
 let terrain = null; // { kind, surface?: [[x,y]], wall?: {x0, top}, rungs?: [{x0,x1,y}] }
 const targets = { hips: null, hands: [null, null], feet: [null, null] };
 let tmp = new Float64Array(J + 2);
-let camX = 0, camY = 0;
+let camX = 0, camY = 0, startX = 0;
 
 function groundAt(x) {
   let h = 0;
+  if (terrain && terrain.blocks) for (const b of terrain.blocks) if (x >= b.x0 && x <= b.x1) h = Math.max(h, b.top);
   if (terrain && terrain.wall && x >= terrain.wall.x0) h = Math.max(h, terrain.wall.top);
   if (terrain && terrain.surface) {
     const S = terrain.surface;
@@ -62,11 +70,42 @@ function reset() {
   start.frames = 1e9;
   start.shiftX = 0;
   terrain = { kind: state.scene };
+  let mtnH = 0, lift = 0, holesRel = [];
   if (state.scene === 'wall') start.terrain = makeWall();
-  else if (state.scene === 'mountain') { const m = makeMountain(r, 3, 0.5); start.terrain = { statics: [], polys: m.polys, surface: m.surface }; }
-  else start.terrain = null;
+  else if (state.scene === 'mountain') { const m = makeMountain(r, 3, 0.5); mtnH = m.H; start.terrain = { statics: [], polys: m.polys, surface: m.surface }; }
+  else if (state.scene === 'holes') {
+    // a floor 0.6 m up with holes 0.5-0.9 m wide every 3-5 m, as in parkour.js
+    lift = 0.6;
+    const statics = [];
+    let x = -3, next = 4 + r() * 1.5;
+    for (let i = 0; i < 10; i++) { statics.push({ dx: x, w: next - x, h: lift }); const w = 0.5 + r() * 0.4; holesRel.push({ x0: next, x1: next + w }); x = next + w; next = x + 3 + r() * 2; }
+    statics.push({ dx: x, w: 40, h: lift });
+    start.terrain = { statics };
+  } else start.terrain = null;
+  // running starts mid-stride (a recorded running state), lifted onto the floor of the scene
+  let rs = null;
+  if (state.mode === 'run') {
+    rs = params.runStates[Math.floor(r() * params.runStates.length)];
+    const pz = rs.pose.slice();
+    for (let k = 0; k < world.parts.length; k++) pz[k * 3 + 1] += lift;
+    start.startPose = pz;
+    start.startVel = rs.vel.map((v, i) => (i % 3 === 0 ? v * state.speed.run / rs.speed : v));
+    start.settle = 0; start.drop = 0;
+  } else if (lift) {
+    // standing on the raised floor: the standing pose lifted
+    const pz = [];
+    world.rebuild();
+    const tmpEp = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, sim.fillTrainingStart({}, makeSeededRandom(1), evalMode(6)), { tilt: 0, shiftX: 0 }));
+    for (let k = 0; k < world.parts.length; k++) pz.push(world.px[k], world.py[k] + lift, Math.atan2(world.s[k], world.c[k]));
+    start.startPose = pz; start.settle = 0; start.drop = 0;
+  }
   world.rebuild();
   ep = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, start));
+  if (state.scene === 'holes') {
+    terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
+    const mid = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
+    terrain.holes = holesRel.map((h) => ({ x0: mid + h.x0, x1: mid + h.x1 }));
+  }
   if (ep.terrain && ep.terrain.statics && ep.terrain.statics.length && state.scene === 'wall') {
     const w = ep.terrain.statics[0];
     terrain.wall = { x0: w.x0, top: w.top };
@@ -80,9 +119,37 @@ function reset() {
   state.grip = [false, false];
   state.autoHips = true;
   syncButtons();
-  camX = pv.x; camY = 0;
-  ep.updateGrip = ((orig) => function () { drive(this); orig(); })(ep.updateGrip.bind(ep));
+  camX = pv.x; camY = lift;
+  startX = world.px[0];
+  const pctx = { config, pose, Box2D };
+  if (state.mode === 'manual') ep.updateGrip = ((orig) => function () { drive(this); orig(); })(ep.updateGrip.bind(ep));
+  else if (state.mode === 'walk') {
+    const walker = makeWalker(world);
+    const wtmp = new Float64Array(J + 2);
+    ep.updateGrip = ((orig) => function () {
+      const m = this.measure; m.walkSpeed = state.speed.walk; m.walkDir = 1;
+      walker(params.walk, this, wtmp);
+      for (let j = 0; j < wtmp.length; j++) this.action[j] = j < J ? wtmp[j] : -1;
+      orig();
+    })(ep.updateGrip.bind(ep));
+  } else if (state.mode === 'run') {
+    installRunner(ep, world, params.runner, { config, speed: () => state.speed.run, obstacles: terrain.holes || [] });
+    ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
+  } else if (state.mode === 'climb') {
+    if (state.scene === 'wall') installWallPlanner(ep, world, params.wall, Object.assign({ wallH: 3.3 }, pctx));
+    else if (state.scene === 'mountain') installMountainPlanner(ep, world, params.mountain, Object.assign({ H: mtnH }, pctx));
+    else ep.updateGrip = ((orig) => function () { drive(this); orig(); })(ep.updateGrip.bind(ep));
+  }
+  // stand: the stand-and-walk network drives (nothing to install)
+  $('modeNote').textContent = MODE_NOTE[state.mode] + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
 }
+const MODE_NOTE = {
+  manual: 'Vos sos el planificador: arrastrá las marcas.',
+  stand: 'La red neuronal de pararse mantiene el equilibrio.',
+  walk: 'El controlador de caminata (estilo SIMBICON) camina hacia la derecha.',
+  run: 'El controlador de carrera corre y salta los agujeros solo. Arranca ya corriendo.',
+  climb: 'El planificador elige dónde va cada mano y cada pie.',
+};
 
 // One control step: goal from the marks, joint commands from the pose executor, grips from the toggles.
 function drive(e) {
@@ -177,6 +244,10 @@ function draw() {
   for (let m = Math.ceil(left); m <= right; m++) { const s = toScreen(m, 0); ctx.beginPath(); ctx.moveTo(s.x, g0); ctx.lineTo(s.x, g0 + 8); ctx.stroke(); ctx.fillText(m + ' m', s.x, g0 + 22); }
   // scene
   ctx.fillStyle = css('--rock'); ctx.strokeStyle = css('--rock-edge'); ctx.lineWidth = 2;
+  if (terrain.blocks) for (const b of terrain.blocks) {
+    const a = toScreen(b.x0, b.top), c = toScreen(b.x1, -1);
+    ctx.fillRect(a.x, a.y, c.x - a.x, c.y - a.y); ctx.strokeRect(a.x, a.y, c.x - a.x, c.y - a.y);
+  }
   if (terrain.wall) {
     const a = toScreen(terrain.wall.x0, terrain.wall.top), b = toScreen(terrain.wall.x0 + 3, 0);
     ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y); ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
@@ -191,8 +262,10 @@ function draw() {
     const sl = toScreen(S[S.length - 1][0], -1); ctx.lineTo(sl.x, sl.y); ctx.closePath();
     ctx.fill(); ctx.stroke();
   }
+  const showMarks = state.mode === 'manual' || (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene));
   // lines from each limb to its mark
   ctx.setLineDash([5, 5]); ctx.lineWidth = 1.5;
+  if (showMarks)
   for (const mk of MARKS) {
     const t = mk.get(); if (!t) continue;
     const b = BODY_OF[mk.id](); const s1 = toScreen(b.x, b.y), s2 = toScreen(t.x, t.y);
@@ -205,7 +278,7 @@ function draw() {
   for (const [k, part] of [[0, P.handLeft], [1, P.handRight]]) if (ep.grips[k] && ep.grips[k].joint) { const s = toScreen(world.px[part], world.py[part]); ctx.strokeStyle = css('--ok'); ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(s.x, s.y, 0.07 * scale, 0, Math.PI * 2); ctx.stroke(); }
   // the marks
   ctx.textAlign = 'left';
-  for (const mk of MARKS) {
+  if (showMarks) for (const mk of MARKS) {
     const p = markPos(mk); const s = toScreen(p.x, p.y); const on = !!mk.get();
     ctx.fillStyle = on ? css(mk.color) : 'transparent'; ctx.strokeStyle = css(mk.color); ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(s.x, s.y, mk.id === 'hips' ? 11 : 9, 0, Math.PI * 2); if (on) ctx.fill(); ctx.stroke();
@@ -226,7 +299,7 @@ function setMark(id, w) {
   else targets.feet[+id.slice(4)] = w;
 }
 function evPos(ev) { const r = cv.getBoundingClientRect(); return { x: (ev.clientX - r.left) * cv.width / r.width, y: (ev.clientY - r.top) * cv.height / r.height }; }
-cv.addEventListener('pointerdown', (ev) => { const p = evPos(ev); dragging = pick(p.x, p.y); if (dragging) { cv.setPointerCapture(ev.pointerId); ev.preventDefault(); } });
+cv.addEventListener('pointerdown', (ev) => { if (state.mode !== 'manual') return; const p = evPos(ev); dragging = pick(p.x, p.y); if (dragging) { cv.setPointerCapture(ev.pointerId); ev.preventDefault(); } });
 cv.addEventListener('pointermove', (ev) => { if (!dragging) return; const p = evPos(ev); setMark(dragging, toWorld(p.x, p.y)); });
 const endDrag = () => { dragging = null; };
 cv.addEventListener('pointerup', endDrag);
@@ -239,6 +312,8 @@ function syncButtons() {
   $('balance').setAttribute('aria-pressed', state.balance);
   $('pause').textContent = state.paused ? 'Seguir' : 'Pausa';
   for (const b of document.querySelectorAll('[data-scene]')) b.setAttribute('aria-pressed', b.dataset.scene === state.scene);
+  for (const b of document.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', b.dataset.mode === state.mode);
+  for (const el of document.querySelectorAll('.manual-only')) el.hidden = state.mode !== 'manual';
 }
 for (const k of [0, 1]) $('grip' + k).onclick = () => { state.grip[k] = !state.grip[k]; syncButtons(); };
 $('autohips').onclick = () => { state.autoHips = !state.autoHips; syncButtons(); };
@@ -249,6 +324,15 @@ $('dropHands').onclick = () => { targets.hands = [null, null]; state.grip = [fal
 $('newMountain').onclick = () => { state.seed++; state.scene = 'mountain'; reset(); };
 $('lean').oninput = (ev) => { state.lean = -(+ev.target.value) * Math.PI / 180; $('leanVal').textContent = (+ev.target.value) + '°'; };
 for (const b of document.querySelectorAll('[data-scene]')) b.onclick = () => { state.scene = b.dataset.scene; reset(); };
+for (const b of document.querySelectorAll('[data-mode]')) b.onclick = () => {
+  state.mode = b.dataset.mode;
+  falls = 0;
+  // the natural scene for each skill
+  if (state.mode === 'run' && !['floor', 'holes'].includes(state.scene)) state.scene = 'holes';
+  if (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene)) state.scene = 'mountain';
+  if (state.mode === 'walk' && state.scene !== 'floor') state.scene = 'floor';
+  reset();
+};
 window.addEventListener('keydown', (ev) => { if (ev.key === 'r' || ev.key === 'R') reset(); if (ev.key === ' ') { state.paused = !state.paused; syncButtons(); ev.preventDefault(); } });
 
 function resize() {
@@ -260,7 +344,7 @@ function resize() {
 window.addEventListener('resize', resize);
 
 // ---------- loop ----------
-let last = performance.now(), acc = 0;
+let last = performance.now(), acc = 0, downFor = 0, falls = 0;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (!state.paused) {
@@ -270,7 +354,11 @@ function loop(now) {
     if (n === 6) acc = 0;
   }
   draw();
-  $('hud').textContent = `cabeza ${ep.measure.headHeight.toFixed(2)} m · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · t ${(ep.frame / HZ).toFixed(1)} s`;
+  // in the automatic modes a fall (head near the ground for 2 s) restarts the run
+  const headUp = ep.measure.headHeight - groundAt(world.px[2]);
+  downFor = headUp < 0.45 ? downFor + dt : 0;
+  if (state.mode !== 'manual' && downFor > 2) { downFor = 0; falls++; reset(); }
+  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '');
   requestAnimationFrame(loop);
 }
 resize();

@@ -35,6 +35,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 input[type=range] { width: 160px; accent-color: var(--accent); }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; font: 0.8rem var(--mono); color: var(--muted); }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.note { margin: -4px 0 0; font: 0.85rem var(--mono); color: var(--muted); }
+.manual-only[hidden] { display: none; }
 .how { display: grid; gap: 6px; font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 70ch; }
 .how b { color: var(--ink); }
 </style>
@@ -43,9 +45,19 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
     <h1>Ragdoll en vivo</h1>
     <p class="lede">La física corre acá, en tu navegador. Vos sos el planificador: arrastrá las marcas de la cadera, las manos y los pies, y el cuerpo va hacia ellas solo con sus motores. Sin fuerzas mágicas.</p>
   </header>
+  <div class="bar" role="group" aria-label="Quién lo mueve">
+    <span class="label">Quién lo mueve</span>
+    <button data-mode="manual" id="md-manual">Vos (marcas)</button>
+    <button data-mode="stand" id="md-stand">Pararse</button>
+    <button data-mode="walk" id="md-walk">Caminar</button>
+    <button data-mode="run" id="md-run">Correr y saltar</button>
+    <button data-mode="climb" id="md-climb">Trepar</button>
+  </div>
+  <p class="note" id="modeNote"></p>
   <div class="bar" role="group" aria-label="Escenario">
     <span class="label">Escenario</span>
     <button data-scene="floor" id="sc-floor">Piso</button>
+    <button data-scene="holes" id="sc-holes">Agujeros</button>
     <button data-scene="wall" id="sc-wall">Pared con peldaños</button>
     <button data-scene="mountain" id="sc-mountain">Montaña</button>
     <button id="newMountain">Otra montaña</button>
@@ -61,13 +73,13 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
     <span><i class="dot" style="background:var(--mark-foot)"></i>pies</span>
     <span><i class="dot" style="border:2px solid var(--ok)"></i>mano agarrada</span>
   </div>
-  <div class="bar" role="group" aria-label="Manos">
+  <div class="bar manual-only" role="group" aria-label="Manos">
     <span class="label">Manos</span>
     <button id="grip0">Mano izq: suelta</button>
     <button id="grip1">Mano der: suelta</button>
     <button id="dropHands">Bajar los brazos</button>
   </div>
-  <div class="bar" role="group" aria-label="Cuerpo">
+  <div class="bar manual-only" role="group" aria-label="Cuerpo">
     <span class="label">Cuerpo</span>
     <button id="autohips">Cadera automática</button>
     <button id="balance">Equilibrio</button>
@@ -79,7 +91,8 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
     <button id="reset">Reiniciar (R)</button>
   </div>
   <div class="how">
-    <div><b>Cómo funciona.</b> Cada marca es un objetivo: dónde querés la cadera, cada mano y cada pie. El ejecutor de poses calcula los ángulos de cadera, rodilla, tobillo, hombro y codo con geometría de dos segmentos (cinemática inversa) y los motores giran hacia esos ángulos con fuerza limitada.</div>
+    <div><b>Quién lo mueve.</b> "Vos" usa el ejecutor de poses con tus marcas. "Pararse" es una red neuronal. "Caminar" y "Correr y saltar" son controladores en código con números ajustados por búsqueda automática (la carrera usa las articulaciones a 20 rad/s). "Trepar" es un planificador que elige manos y pies en la pared o la montaña; la montaña todavía se cae seguido, está en entrenamiento.</div>
+    <div><b>Cómo funcionan las marcas.</b> Cada marca es un objetivo: dónde querés la cadera, cada mano y cada pie. El ejecutor de poses calcula los ángulos de cadera, rodilla, tobillo, hombro y codo con geometría de dos segmentos (cinemática inversa) y los motores giran hacia esos ángulos con fuerza limitada.</div>
     <div><b>Pies.</b> Un pie cuya marca está sobre el suelo cuenta como apoyado, y el equilibrio (cadera y tobillos) mantiene el peso sobre los pies apoyados. Para dar un paso, arrastrá un pie por el aire y soltalo más adelante.</div>
     <div><b>Manos.</b> Con "agarra", la mano se cierra cuando llega a su marca y toca algo (piso, peldaño, pared o roca), y queda sujeta hasta que apagues el botón. Con las manos agarradas podés subir la cadera y colgarte. Las manos sin marca cuelgan.</div>
     <div><b>Cadera automática</b> la pone entre los pies apoyados y la acerca a las manos que agarran. Si arrastrás la cadera, pasa a manual.</div>
