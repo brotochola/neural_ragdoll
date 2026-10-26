@@ -548,7 +548,7 @@ export function fillTrainingStart(out, randomSource, mode) {
   if (commands === "board") {
     const b = config.board;
     out.board = {
-      amp: mode && mode.eval ? b.evalAmp : randomSource() * b.ampMax,
+      amp: mode && mode.eval ? b.evalAmp : randomSource() * Math.min(b.ampMax, mode && mode.boardMax > 0 ? mode.boardMax : b.ampMax),
       period: b.periodMin + randomSource() * (b.periodMax - b.periodMin),
       phase: randomSource() * 2 * Math.PI,
     };
@@ -1031,6 +1031,7 @@ export function summariseEpisode(rows, offset, count, out) {
   let climbHeight = 0;
   let headHit = 0;
   let isGetup = 0;
+  let isBoard = 0;
   let headHeight = 0;
   const last = offset + count;
   for (let i = offset; i < last; i++) {
@@ -1051,6 +1052,7 @@ export function summariseEpisode(rows, offset, count, out) {
     climbHeight += row.climbHeight || 0;
     headHit += row.headHit || 0;
     isGetup += row.isGetup || 0;
+    isBoard += row.isBoard || 0;
     headHeight += row.headHeight || 0;
     if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
     if (!row.stoodUp) stoodUp = false;
@@ -1077,6 +1079,7 @@ export function summariseEpisode(rows, offset, count, out) {
   out.climbHeight = climbHeight / n;
   out.headHit = headHit / n;
   out.isGetup = isGetup / n;
+  out.isBoard = isBoard / n;
   out.headHeight = headHeight / n;
   return out;
 }
@@ -2938,6 +2941,7 @@ export function createSim(box) {
         climbHeight: this.climbBox ? this.climbBox.top : 0,
         onBoard: this.board ? 1 : 0,
         isGetup: this.options.getup ? 1 : 0,
+        isBoard: this.board ? 1 : 0,
       };
     }
     get weights() {

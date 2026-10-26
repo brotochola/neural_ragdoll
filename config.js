@@ -258,7 +258,11 @@ export const config = {
     halfThick: 0.025,
     pivotHeight: 0.12, // Pivot above the floor. The plank top sits at pivotHeight + 2 x halfThick.
     limitRadians: 0.35, // The plank cannot tilt past this.
-    ampMax: 0.2, // Training tilt amplitude is drawn up to this. Eval uses evalAmp.
+    ampMax: 0.2, // Training tilt amplitude is drawn up to the curriculum cap, never past this. Eval uses evalAmp.
+    startCap: 0.02, // Curriculum: the amplitude cap starts here...
+    capStep: 0.01, // ...and rises this much when capPassRate of the last capWindow generations' board episodes stand.
+    capPassRate: 0.3,
+    capWindow: 10,
     evalAmp: 0.15,
     periodMin: 2, // Seconds per tilt cycle.
     periodMax: 4,
