@@ -578,7 +578,7 @@ export function fillTrainingStart(out, randomSource, mode) {
     if (config.getup.useAssist && mode && mode.getupAssist > 0) out.assist = mode.getupAssist;
     if (config.getup.useStrength && mode && mode.getupStrength > 1) out.strength = mode.getupStrength;
     const falls = mode && mode.getupFalls;
-    if (!config.getup.useAssist && falls && falls.length && mode.getupMax > 0) {
+    if (config.getup.useFalls && falls && falls.length && mode.getupMax > 0) {
       const g = config.getup;
       const cap = Math.min(g.maxCap, mode.getupMax);
       const low = Math.max(0, cap - g.band);

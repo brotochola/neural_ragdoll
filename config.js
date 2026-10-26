@@ -287,7 +287,7 @@ export const config = {
     // and multiplied by strengthDecay each time capPassRate of the last capWindow generations'
     // get-ups end truly standing, down to 1 (the real body). No external force. Replaces the harness.
     useStrength: true,
-    strengthStart: 4,
+    strengthStart: 6,
     strengthDecay: 0.9,
     useAssist: false, // The harness: an external force. Off: it hoisted the doll but it never learned to stand without it.
     assistStart: 1, // Harness strength at the start of the curriculum (1: it holds the body up).
@@ -300,6 +300,7 @@ export const config = {
     harnessTilt: 1, // Torsional spring keeping the pelvis upright.
     harnessInertia: 10, // kg m^2: roughly the whole body about the pelvis.
     harnessTorqueCap: 300, // Spring keeping the chest over the pelvis.
+    useFalls: false, // Start training get-ups from poses along recorded falls. Off: it silently came back when the harness was turned off and fed near-standing starts to the strength curriculum.
     fallsFile: "getup-falls.json",
     startCap: 0.25,
     maxCap: 1,
