@@ -224,7 +224,25 @@ export const config = {
   // 7 mix: each training episode is a stand (1) or a walk (6), so one net keeps both. Eval runs both.
   // 8 climb: a box ahead, the marks slide forward and rise by its height. Trained mixed with walks and stands.
   // 9 getup: starts lying face up or down and has to end standing. Trained mixed with stands and walks.
-  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb", "getup"],
+  // 10 board: standing on a plank that tilts on a pivot, driven by a slow wave.
+  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb", "getup", "board"],
+  board: {
+    halfLength: 0.8, // A 1.6 m plank.
+    halfThick: 0.025,
+    pivotHeight: 0.12, // Pivot above the floor. The plank top sits at pivotHeight + 2 x halfThick.
+    limitRadians: 0.35, // The plank cannot tilt past this.
+    ampMax: 0.2, // Training tilt amplitude is drawn up to this. Eval uses evalAmp.
+    evalAmp: 0.15,
+    periodMin: 2, // Seconds per tilt cycle.
+    periodMax: 4,
+    motorGain: 6, // Joint motor speed = gain x (wave - angle).
+    motorTorque: 300, // So the doll's weight can still push the plank around the wave.
+    density: 30,
+    seconds: 8,
+    standShare: 0.8,
+    mixBoard: 0.6, // Skill 10 training: share of board episodes. The rest split between stands and walks.
+    mixWalk: 0.2,
+  },
   getup: {
     seconds: 10, // Getting up takes longer than the 6 s default.
     standShare: 0.8, // Pass: standing for this share of the last window, and up at the end.
@@ -530,6 +548,7 @@ export const config = {
       prone: 0.6,
       walk: 0.6,
       climb: 0.5, // Skill 8: ends with a foot on top of the box, upright, the head never touched anything.
+      board: 0.7, // Skill 10: on the tilting plank, standing 80% of the last 3 s, up at the end, head never down.
       getup: 0.7, // Skill 9: from lying, ends standing on both feet for most of the last 3 s.
       mix: 1, // Skill 7: both the stand bar and the walk bar (its rate is the worse of the two, as a share of its bar).
     }, // Fraction of held-out episodes that must pass each kind.

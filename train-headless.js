@@ -129,6 +129,7 @@ function runEpisode(sim, job, isStanding) {
     walkCmd: stats.walkCmd || 0,
     climbOnTop: stats.climbOnTop || 0,
     climbHeight: stats.climbHeight || 0,
+    onBoard: stats.onBoard || 0,
     trace: options.trace ? workerEpisode.trace : undefined,
   };
 }
@@ -319,6 +320,12 @@ function obeys(row, spec) {
 
 function skillPass(skill, row) {
   const group = commandGroup(skill);
+  if (group === 'board') {
+    // On the plank: up at the end, standing for most of the last window, head never down.
+    const frames = row.windowFrames || 0;
+    if (!(frames > 0) || !row.stoodUp || row.headHit) return false;
+    return row.windowStood / frames >= config.board.standShare;
+  }
   if (group === 'getup') {
     // From lying: up at the end and standing for most of the last window. No headHit check:
     // the head starts on the floor.

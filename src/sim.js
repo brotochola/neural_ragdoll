@@ -458,6 +458,11 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.commands = randomSource() < (config.walk.mixWalkShare ?? 0.5) ? "walk" : "none";
   // CLIMB training mixes in walks and stands, so the earlier skills are not forgotten.
   // The eval (mode.eval) is always a climb.
+  if (out.commands === "board" && !(mode && mode.eval)) {
+    const roll = randomSource();
+    const b = config.board;
+    out.commands = roll < b.mixBoard ? "board" : roll < b.mixBoard + b.mixWalk ? "walk" : "none";
+  }
   if (out.commands === "getup" && !(mode && mode.eval)) {
     const roll = randomSource();
     const g = config.getup;
@@ -512,6 +517,19 @@ export function fillTrainingStart(out, randomSource, mode) {
   const walking = commands === "walk" || commands === "climb";
   // GETUP: lying face up or face down, settled on the floor before the clock starts. The marks are
   // moved to the standing pose in reset (getupMarks), and the feet carry none.
+  // BOARD: start standing in the middle of a plank on a pivot. The plank follows a slow tilt wave.
+  out.board = null;
+  if (commands === "board") {
+    const b = config.board;
+    out.board = {
+      amp: mode && mode.eval ? b.evalAmp : randomSource() * b.ampMax,
+      period: b.periodMin + randomSource() * (b.periodMax - b.periodMin),
+      phase: randomSource() * 2 * Math.PI,
+    };
+    out.drop = b.pivotHeight + 2 * b.halfThick + 0.02;
+    out.settle = Math.max(out.settle || 0, 10);
+    out.frames = Math.round(b.seconds * config.physics.hz);
+  }
   out.getup = false;
   if (commands === "getup") {
     const sign = randomSource() < 0.5 ? -1 : 1;
@@ -1421,6 +1439,35 @@ export function createSim(box) {
     return id;
   }
 
+  // BOARD: a static pivot block and a dynamic plank hinged on it. Both go in objects, so cleanup
+  // destroys them (the joint goes with the plank). The plank is registered with the rays.
+  function spawnBoard(world, x, objects) {
+    const b = config.board;
+    const pivotHalf = b.pivotHeight / 2;
+    const pivot = CreateBoxPolygon({
+      worldId: world.worldId, type: staticBody,
+      position: vector(x, pivotHalf), size: vector(0.05, pivotHalf), friction: 2,
+    }).bodyId;
+    const plankY = b.pivotHeight + b.halfThick;
+    const plank = CreateBoxPolygon({
+      worldId: world.worldId, type: dynamicBody,
+      position: vector(x, plankY), size: vector(b.halfLength, b.halfThick),
+      density: b.density, friction: 2,
+    }).bodyId;
+    for (const id of [pivot, plank]) {
+      world.thrownIds.push(id);
+      world.thrownShapes.push(world.shapeOf(id));
+      objects.push(id);
+    }
+    const joint = world.CreateRevoluteJoint({
+      worldId: world.worldId, bodyIdA: pivot, bodyIdB: plank,
+      anchorA: vector(0, pivotHalf), anchorB: vector(0, -b.halfThick),
+      lowerAngle: -b.limitRadians, upperAngle: b.limitRadians, enableLimit: true,
+      enableMotor: true, motorSpeed: 0, maxMotorTorque: b.motorTorque,
+    }).jointId;
+    return { pivot, plank, joint };
+  }
+
   // A still box in the path of the step. dx is relative to the left foot at the start.
   function placeSkillBoxes(episode) {
     const boxes = episode.options.boxes;
@@ -1581,6 +1628,13 @@ export function createSim(box) {
       this.cleanup();
       const world = this.world;
       resetPose(world, tilt, drop, this.options);
+      this.board = null;
+      if (this.options.board) {
+        readBodyState(world, this.measure);
+        this.boardX = this.measure.partX[config.partIndex.torso] || 0;
+        this.board = spawnBoard(world, this.boardX, this.objects);
+        this.boardAngle = 0;
+      }
       const settleFrames =
         this.options.settle != null ? this.options.settle : 0;
       for (let i = 0; i < settleFrames; i++)
@@ -1930,6 +1984,7 @@ export function createSim(box) {
       )
         this.sampleReward();
       this.trackGoalProgress();
+      this.driveBoard();
       this.applyMotors();
       this.stepPhysics();
       this.frame++;
@@ -1948,6 +2003,17 @@ export function createSim(box) {
     // floor, and held it to the end.
     footOnTop() {
       return feetOnBox(this.measure, this.climbBox) === 2;
+    }
+    // The plank's pivot motor chases a slow sine; its torque is capped, so the doll can push back.
+    driveBoard() {
+      const board = this.board;
+      const spec = this.options.board;
+      if (!board || !spec) return;
+      const t = this.frame / config.physics.hz;
+      const wave = spec.amp * Math.sin((2 * Math.PI * t) / spec.period + spec.phase);
+      const angle = b2RevoluteJoint_GetAngle(board.joint);
+      b2RevoluteJoint_SetMotorSpeed(board.joint, config.board.motorGain * (wave - angle));
+      this.boardAngle = angle;
     }
     // WALK: the head and hand marks are still frozen in height, but their x slides at the
     // commanded speed once the delay is over. The same position rows that make the doll
@@ -2661,6 +2727,7 @@ export function createSim(box) {
         // Climb: is a foot on top of the box at the end, and the box height.
         climbOnTop: this.climbBox ? (this.footOnTop() ? 1 : 0) : 0,
         climbHeight: this.climbBox ? this.climbBox.top : 0,
+        onBoard: this.board ? 1 : 0,
       };
     }
     get weights() {

@@ -58,7 +58,7 @@ for (let e = 0; e < n; e++) {
         pose.push(+world.px[p].toFixed(3), +world.py[p].toFixed(3), +Math.atan2(world.s[p], world.c[p]).toFixed(3));
       }
       const head = ep.options.targets ? ep.options.targets[0] : null;
-      frames.push({ p: pose, up: isStanding(ep.measure) ? 1 : 0, mx: head && head.on ? +(+head.x).toFixed(3) : null, my: head && head.on ? +(+head.y).toFixed(3) : null });
+      frames.push({ p: pose, up: isStanding(ep.measure) ? 1 : 0, mx: head && head.on ? +(+head.x).toFixed(3) : null, my: head && head.on ? +(+head.y).toFixed(3) : null, ba: ep.board ? +(ep.boardAngle || 0).toFixed(3) : undefined });
     }
     done = ep.advanceOneFrame();
     f++;
@@ -69,6 +69,7 @@ for (let e = 0; e < n; e++) {
     walk: start.walk || null,
     box: ep.climbBox ? { x0: +ep.climbBox.x0.toFixed(3), x1: +ep.climbBox.x1.toFixed(3), top: +ep.climbBox.top.toFixed(3) } : null,
     onTop: s.climbOnTop ? true : false,
+    board: ep.board ? { x: +ep.boardX.toFixed(3), pivot: config.board.pivotHeight, half: config.board.halfLength, thick: config.board.halfThick, amp: start.board.amp, period: start.board.period } : null,
     fitness: +s.fitness.toFixed(3),
     stoodUp: !!s.stoodUp,
     standShare: s.windowFrames ? +(s.windowStood / s.windowFrames).toFixed(2) : 0,

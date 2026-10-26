@@ -64,6 +64,14 @@ for ax, fi in zip(axes, picks):
     if ep.get("box"):
         b = ep["box"]
         ax.add_patch(Polygon([(b["x0"], 0), (b["x1"], 0), (b["x1"], b["top"]), (b["x0"], b["top"])], color="#b7a17a"))
+    if ep.get("board"):
+        b = ep["board"]
+        ang = f.get("ba") or 0
+        c, sn = math.cos(ang), math.sin(ang)
+        cy = b["pivot"] + b["thick"]
+        ax.add_patch(Polygon([(b["x"] - 0.05, 0), (b["x"] + 0.05, 0), (b["x"], b["pivot"])], color="#8a7552"))
+        pts = [(-b["half"], -b["thick"]), (b["half"], -b["thick"]), (b["half"], b["thick"]), (-b["half"], b["thick"])]
+        ax.add_patch(Polygon([(b["x"] + c * x - sn * (y + b["thick"]) , b["pivot"] + sn * x + c * (y + b["thick"])) for x, y in pts], color="#b7a17a"))
     if f.get("mx") is not None:
         ax.add_patch(Circle((f["mx"], f["my"]), 0.12, fill=False, ls="--", color="#2a7fb8"))
     ax.axhline(0, color="#888", lw=1)
