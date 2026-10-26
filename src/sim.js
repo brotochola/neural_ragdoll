@@ -2014,10 +2014,14 @@ export function createSim(box) {
       input[cursor++] = measure.torsoCos;
       input[cursor++] = measure.headSin;
       input[cursor++] = measure.headCos;
-      input[cursor++] = measure.headHeight / config.body.headHeightMeters;
-      input[cursor++] = measure.torsoHeight / config.body.torsoHeightMeters;
+      // groundOffset: the height of the floor under the feet when a controller outside the episode
+      // knows it (standing on a climbed block); the net was trained on flat ground at y = 0 and leaned
+      // forward on a 0.3 m platform to bring its head back to the height it knows.
+      const g0 = this.groundOffset || 0;
+      input[cursor++] = (measure.headHeight - g0) / config.body.headHeightMeters;
+      input[cursor++] = (measure.torsoHeight - g0) / config.body.torsoHeightMeters;
       input[cursor++] = clamp((measure.centerX - footMid) / 0.3, -2, 2);
-      input[cursor++] = measure.centerY - 0.85;
+      input[cursor++] = measure.centerY - g0 - 0.85;
       input[cursor++] = measure.centerVelocityX / 2;
       input[cursor++] = measure.centerVelocityY / 2;
       // Speed of the five commanded parts. The net used to see the position error and not

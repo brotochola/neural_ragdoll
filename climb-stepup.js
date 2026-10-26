@@ -58,6 +58,15 @@ const robust = args.includes('--robust');
 const statesFile = arg('--states', null);
 const arrivals = statesFile ? JSON.parse(fs.readFileSync(statesFile, 'utf8')) : null; // reach, grab the top edge, pull and mantle (tall boxes)
 const decode = (v) => Object.assign(decodeBase(v), { hands });
+// --walk-after file: after the climb, 1 s of the stand net, then this walking controller (src/simbicon.js)
+// at 0.9 m/s for 3 s on a 6 m long block, as on the course; scored by walking away upright. On the
+// course the climb left the body leaning 25-40 degrees and the walk fell forward in a quarter of them.
+const walkAfterFile = arg('--walk-after', null);
+const simb = walkAfterFile ? await import('./src/simbicon.js') : null;
+const walkAfterSaved = walkAfterFile ? JSON.parse(fs.readFileSync(walkAfterFile, 'utf8')) : null;
+const walkAfterP = walkAfterFile ? Object.assign(simb.decode(walkAfterSaved.best), { track: !!walkAfterSaved.track }) : null;
+const walkCtl = walkAfterFile ? simb.makeController(world) : null;
+const walkTmp = new Float64Array(64);
 const controller = makeController(world);
 const dims = SPEC.length;
 const rand = makeSeededRandom(side > 0 ? 77 : 88);
@@ -93,10 +102,14 @@ function makeStart(seed) {
 
 function episode(p, seed, record) {
   const start = makeStart(seed);
-  start.frames = Math.round((maxSeconds + settle) * config.physics.hz);
+  if (walkAfterFile && start.climb) start.climb.half = 3;
+  start.frames = Math.round((maxSeconds + (walkAfterFile ? 5 : settle)) * config.physics.hz);
   world.rebuild();
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: 0 }, start));
   let done = false;
+  let doneAt = -1;
+  let walkFrom = null;
+  let walkStart = 0;
   let step = 0; // stairs: which step the controller is climbing
   let pause = 0; // stairs: frames of the stand net between steps, to settle on the tread
   const setCommand = (e) => {
@@ -121,6 +134,16 @@ function episode(p, seed, record) {
         return;
       }
     } else done = true;
+    if (done && walkAfterFile) {
+      if (doneAt < 0) doneAt = e.frame;
+      if (e.frame - doneAt > config.physics.hz) {
+        if (walkFrom == null) { walkFrom = world.px[P.torso]; walkStart = e.frame; e.simbicon = null; }
+        e.measure.walkSpeed = 0.9;
+        e.measure.walkDir = 1;
+        walkCtl(walkAfterP, e, walkTmp);
+        for (let j = 0; j < J; j++) e.action[j] = walkTmp[j];
+      }
+    }
     e.controllerState = done ? 5 : (e.stepup ? e.stepup.state : 0);
     if (done) for (let j = J; j < OUT; j++) e.action[j] = -1; // let go once the stand net drives
   };
@@ -172,7 +195,9 @@ function episode(p, seed, record) {
       for (let i = 0; i < world.parts.length; i++) p.push(+world.px[i].toFixed(3), +world.py[i].toFixed(3), +Math.atan2(world.s[i], world.c[i]).toFixed(3));
       poses.push({ p, up: isStanding(m) ? 1 : 0 });
     }
-    if (f < last) continue;
+    const hz = config.physics.hz;
+    if (walkAfterFile && walkFrom != null && ep.frame - walkStart > 3 * hz) break;
+    if (walkAfterFile ? !(walkFrom != null && ep.frame - walkStart > 2 * hz) : f < last) continue;
     const onTop = ep.footOnTop ? (ep.footOnTop() ? 1 : 0) : 0;
     const head = Math.max(0, Math.min(1, (m.headHeight - top) / standHead));
     // Only being on the box pays at the end: the second search stood still in front of it, which
@@ -184,10 +209,18 @@ function episode(p, seed, record) {
   }
   const s = ep.stats;
   const frames2 = s.windowFrames || 0;
-  const pass = (!ep.stairs || stepsUp === ep.stairs.length) && !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
-  const why = (ep.stairs ? 'steps ' + stepsUp + '/' + ep.stairs.length + ' ' : '') + 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
+  let walkScore = 0;
+  let walkedOk = true;
+  if (walkAfterFile) {
+    const walked = walkFrom == null ? 0 : world.px[P.torso] - walkFrom;
+    const upEnd = ep.measure.headHeight - (ep.climbBox ? ep.climbBox.top : height) > standHead && ep.measure.torsoCos > 0.85;
+    walkedOk = walked > 1.5 && upEnd;
+    walkScore = 3 * Math.max(0, Math.min(1, walked / 2.5)) * (upEnd ? 1 : 0.3) + (upEnd ? 2 : 0) + (walkedOk ? 3 : 0);
+  }
+  const pass = walkAfterFile ? walkedOk && !!s.climbOnTop : (!ep.stairs || stepsUp === ep.stairs.length) && !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
+  const why = (walkAfterFile ? 'walked ' + (walkFrom == null ? 'none' : (world.px[P.torso] - walkFrom).toFixed(2)) + ' x ' + world.px[P.torso].toFixed(2) + ' box ' + (ep.climbBox ? ep.climbBox.x0.toFixed(2) + '-' + ep.climbBox.x1.toFixed(2) : '') + ' ' : '') + (ep.stairs ? 'steps ' + stepsUp + '/' + ep.stairs.length + ' ' : '') + 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
   const boxInfo = ep.climbBox ? { x0: ep.climbBox.x0, x1: ep.climbBox.x1, top: ep.climbBox.top } : null;
-  return { boxInfo, why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise - 4 * tipped / Math.max(1, allFrames) + 2 * stepsUp - 6 * inverted, pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
+  return { boxInfo, why, score: walkScore + score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise - 4 * tipped / Math.max(1, allFrames) + 2 * stepsUp - 6 * inverted, pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
 }
 
 // seedBase: each generation draws new practice starts. With 3 fixed ones the 0.3 m search passed

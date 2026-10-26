@@ -184,6 +184,11 @@ function run(seed, record) {
   const walkSpec = ep.options.walk;
   const origDecide = ep.decide.bind(ep);
   ep.decide = function () {
+    // the stand net sees heights from the floor under its feet (see sim.js groundOffset)
+    if (process.env.GROUND_REL !== '0') {
+      const fx = (world.px[config.partIndex.footLeft] + world.px[config.partIndex.footRight]) / 2;
+      this.groundOffset = groundUnder(fx);
+    }
     origDecide();
     stand.forward(this.input);
     if (getup) getup.forward(this.input);
@@ -299,7 +304,9 @@ function run(seed, record) {
         }
         // START_SLOW s: the first seconds of each walk with the slow walker (starting at 0.9 m/s from
         // the stance a climb leaves fell within half a second).
-        const starting = modeT < +(process.env.START_SLOW || 0);
+        // SLOW_UP: on top of a climbed block walk with the slow walker all the way (it starts from the
+        // stance a climb leaves 8/8; the fast one fell in a third of them).
+        const starting = modeT < +(process.env.START_SLOW || 0) || (process.env.SLOW_UP && groundUnder(world.px[0]) > 0.1);
         if (near && !this.slowDumped && slowFile && groundUnder(world.px[0]) < 0.1) {
           this.slowDumped = true;
           const px0 = world.px[0];
@@ -363,6 +370,28 @@ function run(seed, record) {
         if (ahead && ahead.rise > 0.15 && gap < +(process.env.CLIMB_GAP || 0.6)) setMode('climb');
         else setMode('walk');
       }
+    } else if (mode === 'upright') {
+      // After a climb the body is left leaning 25-30 degrees forward and the stand net holds that lean
+      // (then the walk falls forward). The pose executor straightens it gradually: torso lean and pelvis
+      // ramp from where they are to upright over the feet, then decide as 'hold' does.
+      if (!this.up0) {
+        this.up0 = { feet: [config.partIndex.footLeft, config.partIndex.footRight].map((q) => pose.soleOf(world, q)), torso: Math.atan2(world.s[0], world.c[0]), px: world.px[0], py: world.py[0] };
+      }
+      const u = this.up0;
+      const T = +(process.env.UP_T || 1.5);
+      const a = Math.min(1, modeT / T);
+      const e = a * a * (3 - 2 * a);
+      const g = groundUnder(world.px[0]);
+      const mid = (u.feet[0].x + u.feet[1].x) / 2 + +(process.env.UP_DX || 0);
+      const goal = { pelvis: { x: u.px + (mid - u.px) * e, y: g + 0.92 }, torso: u.torso * (1 - e), feet: u.feet.map((q) => ({ x: q.x, y: q.y, angle: 0 })), planted: [true, true] };
+      pose.commandsFor(world, pose.balancedTargets(goal, m, { planted: [true, true], kHip: holdK.kHip, kAnkle: holdK.kAnkle, kAnkleVel: 0.15, kHipVel: 0.1 }), this.action);
+      if (modeT > T + 0.6) {
+        this.up0 = null;
+        const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
+        const gap = ahead ? ahead.box.x0 - front : 9;
+        if (ahead && ahead.rise > 0.15 && gap < +(process.env.CLIMB_GAP || 0.6)) setMode('climb');
+        else setMode('walk');
+      }
     } else if (mode === 'brake') {
       // The walking controller asked for zero speed steps in place and comes to a stop; the stand net
       // took over from a 0.3 m/s walk badly (it fell forward onto the platform).
@@ -390,8 +419,8 @@ function run(seed, record) {
         const going = stepCtl(this.climbP || stepP, this, tmp);
         if (process.env.DEBUG_CLIMB && Math.round(modeT * 60) % 20 === 1) console.log('    climb t', modeT.toFixed(2), 'state', this.stepup && this.stepup.state, 'going', going, 'lead', this.climbP && this.climbP.lead, 'hipL', tmp[5].toFixed(2), 'hipR', tmp[11].toFixed(2), 'box', this.climbBox.x0.toFixed(2), this.climbBox.top, 'thighL', Math.atan2(world.s[6], world.c[6]).toFixed(2), 'thighR', Math.atan2(world.s[12], world.c[12]).toFixed(2), 'act5', this.action[5].toFixed(2), 'locked', !!this.legLocked, 'passive', !!this.passive);
         for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
-        if (!going || modeT > 6) setMode('steady');
-      } else setMode('steady');
+        if (!going || modeT > 6) setMode(process.env.CLIMB_THEN || 'steady');
+      } else setMode(process.env.CLIMB_THEN || 'steady');
     }
     if (mode !== 'climb') for (let j = J; j < OUT; j++) this.action[j] = -1;
     origGrip();
