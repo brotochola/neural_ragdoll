@@ -164,7 +164,7 @@ function run(seed, record) {
     // The stand-and-walk net reads the walk command as an input: zero it unless walking, or it walks.
     // The gait clock is an input too: outside walking the stand net gets no walk command at all,
     // exactly as in its standing training.
-    if (mode === 'walk' || mode === 'brake') { if (!this.options.walk) this.options.walk = walkSpec; this.options.walk.speed = start.walk.speed; }
+    if (mode === 'walk' || mode === 'brake' || mode === 'netwalk') { if (!this.options.walk) this.options.walk = walkSpec; this.options.walk.speed = mode === 'netwalk' ? 0.3 : start.walk.speed; }
     else this.options.walk = null;
     if (mode === 'steady' || mode === 'getup' || mode === 'backoff') pinMarks(this);
     const m = this.measure;
@@ -194,7 +194,11 @@ function run(seed, record) {
       // A tall enough rise ahead: slow down from 1.5 m, stop 0.4 m before it, steady, then climb.
       // Low steps: the stairs walk.
       const tall = ahead && ahead.rise > 0.15;
-      if (tall && ahead.dist < 0.8) setMode('brake');
+      // Near a tall step: the stand-and-walk NETWORK walks the last metres slowly and stops on its own
+      // when its walk command goes to zero (it was trained to do both); the walking controllers do not
+      // stop when asked.
+      if (tall && ahead.dist < +(process.env.NETWALK_AT || 1.8) && process.env.NETWALK) { setMode('netwalk'); pinMarks(this); }
+      if (tall && ahead.dist < +(process.env.STOP_AT || 0.8)) setMode(process.env.NO_BRAKE ? 'steady' : 'brake');
       else {
         const onStairs = ahead && ahead.rise <= 0.15 && ahead.dist < 1.0 && ahead.box.top > L.platformTop + 0.01;
         const near = tall && ahead.dist < 3.0;
@@ -203,6 +207,9 @@ function run(seed, record) {
         walkCtl(onStairs ? stairsP : near ? slowP : walkP, this, tmp);
         for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
       }
+    } else if (mode === 'netwalk') {
+      for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
+      if (!ahead || ahead.dist < +(process.env.STOP_AT || 0.45)) setMode('steady');
     } else if (mode === 'brake') {
       // The walking controller asked for zero speed steps in place and comes to a stop; the stand net
       // took over from a 0.3 m/s walk badly (it fell forward onto the platform).

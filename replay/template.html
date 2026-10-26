@@ -210,6 +210,14 @@ function draw() {
     ctx.strokeRect(-w.half * k, -w.thick * k, 2 * w.half * k, 2 * w.thick * k);
     ctx.restore();
   }
+  // terrain blocks: uneven ground, platforms, stairs
+  if (e.boxes) {
+    ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 2;
+    for (const b of e.boxes) {
+      const bx = sx(b.x0), bw = (b.x1 - b.x0) * k, bt = sy(b.top), bh = groundY - bt;
+      ctx.fillRect(bx, bt, bw, bh); ctx.strokeRect(bx, bt, bw, bh);
+    }
+  }
   // the box to climb
   if (e.box) {
     ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 3;
