@@ -22,6 +22,8 @@ const firstSeed = +arg('--first', 0);
 const boxHeight = +arg('--height', 0); // Climb: force this box height instead of the eval draw.
 const boardAmp = arg('--amp', null); // Board: force this tilt amplitude (radians).
 const assist = +arg('--assist', 0); // Get-up: harness strength (0 = none, like the eval).
+// Two-network get-up: --weights is the get-up expert, and this net takes over at its handover time.
+const handoverNet = arg('--handover-to', null);
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -52,6 +54,16 @@ for (let e = 0; e < n; e++) {
   if (assist > 0 && start.getup) start.assist = assist;
   world.rebuild();
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: i % config.cadence.actionEveryNFrames }, start));
+  if (handoverNet && saved.handover) {
+    const stand = new ElmanNetwork(ElmanNetwork.copy(JSON.parse(fs.readFileSync(handoverNet, 'utf8')).theta));
+    const t0 = saved.handover[start.tilt > 0 ? 'up' : 'down'];
+    const decide = ep.decide.bind(ep);
+    ep.decide = function () {
+      decide();
+      stand.forward(this.input);
+      if (this.frame / config.physics.hz >= t0) for (let j = 0; j < this.network.action.length; j++) this.network.action[j] = stand.action[j];
+    };
+  }
   const frames = [];
   let f = 0;
   let done = false;
