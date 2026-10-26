@@ -548,7 +548,15 @@ export function fillTrainingStart(out, randomSource, mode) {
   if (commands === "board") {
     const b = config.board;
     out.board = {
-      amp: mode && mode.eval ? b.evalAmp : randomSource() * Math.min(b.ampMax, mode && mode.boardMax > 0 ? mode.boardMax : b.ampMax),
+      // Training draws in [bandLow x cap, cap]: at the frontier. Drawn from 0, the easy half kept the
+      // success rate up and the cap climbed to 0.19 rad while the 0.15 rad eval stayed 0/20.
+      amp: mode && mode.eval
+        ? b.evalAmp
+        : (() => {
+            const cap = Math.min(b.ampMax, mode && mode.boardMax > 0 ? mode.boardMax : b.ampMax);
+            const low = (b.bandLow || 0) * cap;
+            return low + randomSource() * (cap - low);
+          })(),
       period: b.periodMin + randomSource() * (b.periodMax - b.periodMin),
       phase: randomSource() * 2 * Math.PI,
     };

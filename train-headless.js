@@ -199,6 +199,7 @@ function readArgs() {
     else if (key === '--gate-targets') out.gateTargets = true;
     else if (key === '--target-mean') { out.targetMean = +val; i++; }
     else if (key === '--no-ramp') out.noRamp = true; // Full-length training episodes from the first generation.
+    else if (key === '--board-cap') { out.boardCap = +val; i++; } // Resume the board amplitude curriculum here.
     else if (key === '--getup-assist') { out.getupAssist = +val; i++; } // Resume the helping-hand curriculum at this level.
     else if (key === '--getup-cap') { out.getupCap = +val; i++; } // Resume the get-up curriculum at this depth.
     else if (key === '--climb-cap') { out.climbCap = +val; i++; } // Resume a box-height curriculum at this height.
@@ -568,6 +569,7 @@ async function runMain() {
       flatGens: state.flatGens || 0,
       skill: state.skill || 1,
       climbMax: state.climbMax || 0,
+      boardMax: state.boardMax || 0,
       getupMax: state.getupMax || 0,
       getupAssist: state.getupAssist == null ? null : state.getupAssist,
       placeScale: state.placeScale || 0,
@@ -652,6 +654,7 @@ async function runMain() {
     state.phase = saved.phase || config.curriculum.phases[0].id;
     state.skill = saved.skill || opts.skill || 1;
     state.climbMax = saved.climbMax || 0;
+    state.boardMax = saved.boardMax || 0;
     state.getupMax = saved.getupMax || 0;
     state.getupAssist = saved.getupAssist == null ? null : saved.getupAssist;
     state.placeScale = saved.placeScale || 0;
@@ -1216,6 +1219,7 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
         log('resumed gen ' + state.gen + ' skill ' + (state.skill || 1));
       }
     }
+    if (opts.boardCap > 0) state.boardMax = opts.boardCap;
     if (opts.getupCap > 0) state.getupMax = opts.getupCap;
     if (opts.getupAssist != null) state.getupAssist = opts.getupAssist;
     if (opts.climbCap > 0) state.climbMax = opts.climbCap;
