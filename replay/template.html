@@ -168,11 +168,11 @@ function drawPart(i, x, y, a, s, k) {
 }
 function draw() {
   const e = ep(), f = e.frames[Math.min(frame, e.frames.length - 1)];
-  const W = cv.width, H = cv.height, k = H / (e.swing ? 3.1 : 2.4);
+  const W = cv.width, H = cv.height, k = H / (e.swing ? 3.1 : e.holds ? 3.8 : 2.4);
   const torsoX = f.p[0];
   if (camX == null) camX = torsoX; else camX += (torsoX - camX) * 0.08;
   // follow the feet up onto platforms and steps
-  const footY = Math.max(0, Math.min(f.p[8 * 3 + 1], f.p[14 * 3 + 1]) - 0.17);
+  const footY = Math.max(0, Math.min(f.p[8 * 3 + 1], f.p[14 * 3 + 1]) - (e.holds ? 0.6 : 0.17));
   camY += (footY - camY) * 0.05;
   const groundY = H * 0.86 + camY * k;
   const sx = (x) => W / 2 + (x - camX) * k, sy = (y) => groundY - y * k;
@@ -223,6 +223,16 @@ function draw() {
       const bx = sx(b.x0), bw = (b.x1 - b.x0) * k, bt = sy(b.top), bh = groundY - bt;
       ctx.fillRect(bx, bt, bw, bh); ctx.strokeRect(bx, bt, bw, bh);
     }
+  }
+  // climbing holds (rungs on a wall face), drawn over the wall
+  if (e.holds) {
+    ctx.fillStyle = css('--box-edge');
+    for (const h of e.holds) ctx.fillRect(sx(h.x0), sy(h.y + 0.02), (h.x1 - h.x0) * k, 0.04 * k);
+  }
+  // grips: a ring on each hand that is holding on
+  if (f.gl || f.gr) {
+    ctx.strokeStyle = css('--ok'); ctx.lineWidth = 3;
+    for (const [on, i] of [[f.gl, 5], [f.gr, 11]]) if (on) { ctx.beginPath(); ctx.arc(sx(f.p[i * 3]), sy(f.p[i * 3 + 1]), 0.07 * k, 0, Math.PI * 2); ctx.stroke(); }
   }
   // loose boxes that can be pushed around (dynamic bodies)
   if (f.dyn && e.dynSize) {

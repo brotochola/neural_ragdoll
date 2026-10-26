@@ -63,6 +63,8 @@ for ax, fi in zip(axes, picks):
             ax.add_patch(Polygon(rect(x, y, a, sh["hx"], sh["hy"]), color=col))
     for b in ep.get("boxes") or []:
         ax.add_patch(Polygon([(b["x0"], 0), (b["x1"], 0), (b["x1"], b["top"]), (b["x0"], b["top"])], color="#b7a17a", ec="#8a7552"))
+    for h in ep.get("holds") or []:
+        ax.add_patch(Polygon([(h["x0"], h["y"] - 0.02), (h["x1"], h["y"] - 0.02), (h["x1"], h["y"] + 0.02), (h["x0"], h["y"] + 0.02)], color="#5b4a33"))
     if ep.get("box"):
         b = ep["box"]
         ax.add_patch(Polygon([(b["x0"], 0), (b["x1"], 0), (b["x1"], b["top"]), (b["x0"], b["top"])], color="#b7a17a"))
@@ -84,7 +86,7 @@ for ax, fi in zip(axes, picks):
     if f.get("mx") is not None:
         ax.add_patch(Circle((f["mx"], f["my"]), 0.12, fill=False, ls="--", color="#2a7fb8"))
     ax.axhline(0, color="#888", lw=1)
-    ax.set_xlim(cx - 0.6, cx + 0.6)
+    ax.set_xlim(cx - 0.8, cx + 0.8)
     lift = max([b["top"] for b in (ep.get("boxes") or [])] + [0])
     ax.set_ylim(-0.05, (2.7 if ep.get("swing") else 2.0) + lift)
     ax.set_aspect("equal")

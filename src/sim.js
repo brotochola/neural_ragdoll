@@ -1551,11 +1551,11 @@ export function createSim(box) {
     return predicted;
   }
 
-  function spawnStaticBox(world, x, halfW, halfH) {
+  function spawnStaticBox(world, x, halfW, halfH, cy) {
     const created = CreateBoxPolygon({
       worldId: world.worldId,
       type: staticBody,
-      position: vector(x, halfH),
+      position: vector(x, cy != null ? cy : halfH),
       size: vector(halfW, halfH),
       friction: 2,
     });
@@ -1934,6 +1934,16 @@ export function createSim(box) {
           this.objects.push(id);
           this.terrain.statics.push({ x0: mid + b.dx, x1: mid + b.dx + b.w, top: b.h, side: 1 });
           this.grippable.push({ id, cx: mid + b.dx + b.w / 2, cy: b.h / 2 });
+        }
+        // HOLDS: small grippable boxes in the air (climbing rungs on a wall face): [{dx, y, w, h}], y the
+        // hold's centre height. terrain.holds keeps their absolute positions.
+        this.terrain.holds = [];
+        for (const b of terrain.holds || []) {
+          const cx = mid + b.dx + b.w / 2;
+          const id = spawnStaticBox(world, cx, b.w / 2, b.h / 2, b.y);
+          this.objects.push(id);
+          this.terrain.holds.push({ x0: mid + b.dx, x1: mid + b.dx + b.w, y: b.y, top: b.y + b.h / 2, id });
+          this.grippable.push({ id, cx, cy: b.y });
         }
         for (const b of terrain.dynamics || []) {
           const id = CreateBoxPolygon({
