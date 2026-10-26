@@ -3,3 +3,5 @@ train.log
 backups/
 run*.log
 *.log
+keyframes-up.json
+keyframes-down.json
