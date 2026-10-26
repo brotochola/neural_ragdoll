@@ -205,7 +205,12 @@ function run(seed, record) {
     const m = this.measure;
     // Fallen? (head low for half a second)
     downT = m.headHeight - groundUnder(world.px[0]) < 0.8 ? downT + 1 / HZ : 0;
-    if (fallsFile && mode === 'getup' && Math.abs(this.frame - this.getupStart - 0.7 * HZ) < 0.5) {
+    // Capture once the body has come to rest (every part slower than 0.15 m/s) or after 3 s: captured
+    // 0.7 s after the fall, the bodies were still tumbling, legs in the air.
+    const settled = () => { for (let k = 0; k < world.parts.length; k++) if (Math.abs(world.vx[k]) > 0.15 || Math.abs(world.vy[k]) > 0.15) return false; return true; };
+    const sinceFall = (this.frame - (this.getupStart || 0)) / HZ;
+    if (fallsFile && mode === 'getup' && !this.fallCaptured && sinceFall > 0.8 && (settled() || sinceFall > 3)) {
+      this.fallCaptured = true;
       const px0 = world.px[0];
       const pose = [];
       const vel = [];
@@ -220,9 +225,15 @@ function run(seed, record) {
       setMode('getup');
       getup = new ElmanNetwork(Float32Array.from(getupW));
       this.getupStart = this.frame;
+      this.fallCaptured = false;
     }
     const ahead = nextRise();
-    if (mode === 'getup') {
+    if (mode === 'getup' && fallsFile) {
+      // Collecting falls: the body comes to rest with the arms and legs relaxed toward standing (the
+      // stand net), no get-up yet; the run ends once the state is captured.
+      for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
+      if (this.fallCaptured) this.stopNow = true;
+    } else if (mode === 'getup') {
       const t = (this.frame - this.getupStart) / HZ;
       const side = 'up';
       const hand = getupSaved.handover[side] || 3;
@@ -345,6 +356,7 @@ function run(seed, record) {
     }
     const x = world.px[0] - startX;
     if (x > L.finish && isStanding(ep.measure)) { finished = true; break; }
+    if (ep.stopNow) break;
     if (ep.advanceOneFrame()) break;
     f++;
   }
