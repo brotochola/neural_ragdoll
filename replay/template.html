@@ -119,10 +119,11 @@ function buildEps() {
   cur().episodes.forEach((e, i) => {
     const b = document.createElement('button');
     b.className = 'ep'; b.setAttribute('aria-pressed', i === epIndex);
+    const extra = e.board ? `<span>board ±${Math.round(e.board.amp * 57.3)}°</span>` : '';
     const walk = e.box
       ? `<span>box ${Math.round(e.box.top * 100)} cm · ${e.onTop ? 'on top' : 'not on top'}</span>`
       : e.walk ? `<span>${e.walkDist.toFixed(2)} / ${e.walkCmd.toFixed(2)} m ${e.walk.dir > 0 ? '→' : '←'}</span>` : '';
-    b.innerHTML = `<strong>Episode ${e.seed + 1}</strong><span>${e.stoodUp ? 'ends standing' : 'ends down'} · ${Math.round(e.standShare * 100)}% up</span>${walk}`;
+    b.innerHTML = `<strong>Episode ${e.seed + 1}</strong><span>${e.stoodUp ? 'ends standing' : 'ends down'} · ${Math.round(e.standShare * 100)}% up</span>${walk}${extra}`;
     b.onclick = () => { epIndex = i; reset(); };
     box.appendChild(b);
   });
@@ -181,6 +182,17 @@ function draw() {
     ctx.strokeStyle = css('--rule'); ctx.lineWidth = whole ? 2 : 1;
     ctx.beginPath(); ctx.moveTo(sx(m), groundY); ctx.lineTo(sx(m), groundY + (whole ? 18 : 9)); ctx.stroke();
     if (whole) ctx.fillText(Math.round(m) + ' m', sx(m), groundY + H * 0.08);
+  }
+  // the tilting board: pivot block and plank
+  if (e.board) {
+    const b = e.board, ang = f.ba || 0, c = Math.cos(ang), sn = Math.sin(ang);
+    ctx.fillStyle = css('--box-edge');
+    ctx.beginPath(); ctx.moveTo(sx(b.x - 0.06), groundY); ctx.lineTo(sx(b.x + 0.06), groundY); ctx.lineTo(sx(b.x), sy(b.pivot)); ctx.closePath(); ctx.fill();
+    ctx.save(); ctx.translate(sx(b.x), sy(b.pivot)); ctx.rotate(-ang);
+    ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 2;
+    ctx.fillRect(-b.half * k, -2 * b.thick * k, 2 * b.half * k, 2 * b.thick * k);
+    ctx.strokeRect(-b.half * k, -2 * b.thick * k, 2 * b.half * k, 2 * b.thick * k);
+    ctx.restore();
   }
   // the box to climb
   if (e.box) {
