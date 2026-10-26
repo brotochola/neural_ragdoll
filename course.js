@@ -30,6 +30,13 @@ const dumped = [];
 // --dump-falls file: 1.2 s after each fall, the lying body (x relative to the pelvis) and the blocks
 // within 2.5 m, to tune the get-up from real falls on the course.
 const fallsFile = arg('--dump-falls', null);
+// --dump-starts file: the body as each walk starts on top of a climbed block (steady -> walk), for
+// tuning the walk start from them (walk-simbicon.js --states).
+const startsFile = arg('--dump-starts', null);
+// --dump-slow file: the body as the fast walker hands over to the slow one before a tall rise.
+const slowFile = arg('--dump-slow', null);
+const slows = [];
+const starts = [];
 const falls = [];
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
@@ -127,6 +134,17 @@ function run(seed, record) {
       const fl = world.px[config.partIndex.footLeft], fr = world.px[config.partIndex.footRight];
       log.push(((ep.frame / HZ).toFixed(1)) + 's ' + m + (m === 'climb' ? ' [L ' + fl.toFixed(2) + ' R ' + fr.toFixed(2) + (ep.climbBox || nextRiseLog() ? ' edge ' + nextRiseLog() : '') + ']' : '') + (m === 'getup' ? ' @' + (world.px[0] - startX).toFixed(1) + 'm from ' + mode : ''));
       if (verbose) console.log('  ', (ep.frame / HZ).toFixed(1), 's ->', m, 'x', ((world.px[0] - startX)).toFixed(2));
+    }
+    if (m === 'walk' && mode === 'steady' && startsFile && groundUnder(world.px[0]) > 0.1) {
+      const px0 = world.px[0];
+      const pose = [];
+      const vel = [];
+      for (let k = 0; k < world.parts.length; k++) {
+        pose.push(+(world.px[k] - px0).toFixed(4), +world.py[k].toFixed(4), +Math.atan2(world.s[k], world.c[k]).toFixed(4));
+        vel.push(+world.vx[k].toFixed(3), +world.vy[k].toFixed(3), +world.spin[k].toFixed(3));
+      }
+      const near = blocks.filter((b) => b.x1 > px0 - 2.5 && b.x0 < px0 + 6).map((b) => ({ x0: +(b.x0 - px0).toFixed(3), x1: +(Math.min(b.x1, px0 + 6) - px0).toFixed(3), top: b.top }));
+      starts.push({ pose, vel, blocks: near });
     }
     if (m === 'climb' && dumpFile) {
       const a = nextRise();
@@ -242,7 +260,7 @@ function run(seed, record) {
       if (t > hand + 2 && isStanding(m)) setMode('steady');
     } else if (mode === 'steady') {
       for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
-      if (modeT > 1.0) {
+      if (modeT > +(process.env.STEADY_T || 1.0)) {
         const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
         const gap = ahead ? ahead.box.x0 - front : 9;
         if (ahead && gap < 0.55 && gap > 0.08 && ahead.rise <= 0.45 && ahead.rise > 0.15) setMode(process.env.SQUARE ? 'square' : 'climb');
@@ -269,10 +287,35 @@ function run(seed, record) {
       else if (tall && ahead.dist < +(process.env.STOP_AT || 0.8)) setMode(process.env.STOP_MODE || (process.env.NO_BRAKE ? 'steady' : 'brake'));
       else {
         const onStairs = ahead && ahead.rise <= 0.15 && ahead.dist < 1.0 && ahead.box.top > L.platformTop + 0.01;
-        const near = tall && ahead.dist < 3.0;
-        m.walkSpeed = near ? 0.3 : start.walk.speed;
+        // STRIKE: hand over to the slow walker only as a foot lands (switching mid-swing tripped it).
+        let near = tall && ahead.dist < 3.0;
+        if (process.env.STRIKE) {
+          const tl = !!m.touch[config.partIndex.footLeft], tr = !!m.touch[config.partIndex.footRight];
+          const strike = (tl && !this.prevTouchL) || (tr && !this.prevTouchR);
+          this.prevTouchL = tl; this.prevTouchR = tr;
+          if (!tall || modeT < 0.05) this.slowLatch = false;
+          if (near && strike) this.slowLatch = true;
+          near = near && this.slowLatch;
+        }
+        // START_SLOW s: the first seconds of each walk with the slow walker (starting at 0.9 m/s from
+        // the stance a climb leaves fell within half a second).
+        const starting = modeT < +(process.env.START_SLOW || 0);
+        if (near && !this.slowDumped && slowFile && groundUnder(world.px[0]) < 0.1) {
+          this.slowDumped = true;
+          const px0 = world.px[0];
+          const pose = [];
+          const vel = [];
+          for (let k = 0; k < world.parts.length; k++) {
+            pose.push(+(world.px[k] - px0).toFixed(4), +world.py[k].toFixed(4), +Math.atan2(world.s[k], world.c[k]).toFixed(4));
+            vel.push(+world.vx[k].toFixed(3), +world.vy[k].toFixed(3), +world.spin[k].toFixed(3));
+          }
+          const nearB = blocks.filter((b) => b.x1 > px0 - 2.5 && b.x0 < px0 + 6).map((b) => ({ x0: +(b.x0 - px0).toFixed(3), x1: +(b.x1 - px0).toFixed(3), top: b.top }));
+          slows.push({ pose, vel, blocks: nearB });
+          this.stopNow = true; // collected: end this run
+        }
+        m.walkSpeed = near || starting ? 0.3 : start.walk.speed;
         m.walkDir = 1;
-        walkCtl(onStairs ? stairsP : near ? slowP : walkP, this, tmp);
+        walkCtl(onStairs ? stairsP : near || starting ? slowP : walkP, this, tmp);
         for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
       }
     } else if (mode === 'square') {
@@ -385,5 +428,7 @@ for (let i = 0; i < n; i++) {
 console.log('course finished', ok + '/' + n);
 if (recordFile) fs.writeFileSync(recordFile, JSON.stringify({ skill: 6, fps: HZ / 3, shapes, episodes }));
 if (dumpFile) { fs.writeFileSync(dumpFile, JSON.stringify(dumped)); console.log('states', dumped.length, '->', dumpFile); }
+if (slowFile) { fs.writeFileSync(slowFile, JSON.stringify(slows)); console.log('slow handovers', slows.length, '->', slowFile); }
+if (startsFile) { fs.writeFileSync(startsFile, JSON.stringify(starts)); console.log('starts', starts.length, '->', startsFile); }
 if (fallsFile) { fs.writeFileSync(fallsFile, JSON.stringify(falls)); console.log('falls', falls.length, '->', fallsFile); }
 sim.destroyWorld(world);

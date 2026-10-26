@@ -57,6 +57,11 @@ const stairRise = +arg('--rise', 0.1);
 const stairTread = +arg('--tread', 0.3);
 // --bumps H: uneven ground from 1 m to 7 m ahead, blocks 0.2-0.6 m wide and up to H tall.
 const bumps = +arg('--bumps', 0);
+// --states train.json[,eval.json]: two thirds of the walks start from recorded bodies (course.js
+// --dump-starts: standing on a block just climbed, as the walk takes over), the rest as usual. Held-out
+// and fresh walks draw from the second file.
+const statesArg = arg('--states', null);
+const [statesTrain, statesEval] = statesArg ? statesArg.split(',').map((f) => JSON.parse(fs.readFileSync(f, 'utf8'))) : [null, null];
 if (arg('--period', null)) config.walk.periodSeconds = +arg('--period', 0.9);
 if (speedMax > 0) config.walk.maxStandSpeed = Math.max(config.walk.maxStandSpeed, speedMax * 1.6);
 const decode = (v) => Object.assign(decodeBase(v), { track, clock });
@@ -79,6 +84,20 @@ function episode(p, seed, record) {
     start.stairs = { n: stairsN, rise: stairRise, run: stairTread, near: 0.6 + r() * 0.3, landing: 2 };
     start.frames = Math.round((6 + stairsN * 1.6) * config.physics.hz);
     start.walk.speed = Math.max(start.walk.speed, 0.35);
+  }
+  if (statesTrain && seed % 3 !== 2) {
+    const pool = seed >= 1000 ? statesTrain : statesEval || statesTrain;
+    const st = pool[Math.floor(r() * pool.length)];
+    const mid = (st.pose[P.footLeft * 3] + st.pose[P.footRight * 3]) / 2;
+    const here = Math.max(...st.blocks.filter((b) => b.x0 < mid && b.x1 > mid).map((b) => b.top), 0);
+    start.startPose = st.pose;
+    start.startVel = st.vel;
+    start.tilt = 0;
+    start.drop = 0;
+    start.settle = 0;
+    start.walk.delay = 0;
+    // only the block underfoot and lower ones: the next tall step is the climb's business
+    start.terrain = { statics: st.blocks.filter((b) => b.top <= here + 0.01).map((b) => ({ dx: b.x0 - mid, w: Math.max(b.x1 - b.x0, 20), h: b.top })) };
   }
   world.rebuild();
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: seed % 6 }, start));
