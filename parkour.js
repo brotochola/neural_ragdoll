@@ -123,6 +123,7 @@ function episode(p, seed, record) {
   ep.applyMotors = ((orig) => function () {
     const m = this.measure;
     m.walkSpeed = speed;
+    this.speedCap = +(process.env.RUN_SPEED_CAP || config.body.maxJointSpeed);
     runner(p, this, tmp);
     const st = this.runner;
     // Jump on the stride that lands within jumpWin before the next obstacle's front edge.

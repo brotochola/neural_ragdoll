@@ -2975,7 +2975,11 @@ export function createSim(box) {
       }
       this.applyScriptedGait();
       // A stronger body is also allowed to move its joints faster (up to 2x).
-      const limit = (config.episode.motorSpeedLimit || 1) * Math.min(2, Math.sqrt(this.strength || 1));
+      // this.speedCap: a controller may move the joints faster than the default 10 rad/s, up to the body's
+      // config.body.maxJointSpeed (the running controller does; walking, climbing and the networks
+      // were all tuned at 10 and keep it).
+      const cap = this.speedCap ? Math.min(this.speedCap, config.body.maxJointSpeed || 20) : config.episode.motorSpeedLimit || 1;
+      const limit = cap * Math.min(2, Math.sqrt(this.strength || 1));
       let speedSum = 0;
       for (let i = 0; i < config.net.jointCount; i++) {
         const joint = this.world.joints[i];

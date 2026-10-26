@@ -100,6 +100,7 @@ export const config = {
     hipMeters: 0.96, // Hip joint height in the standing blueprint.
     armReachMeters: 0.57, // Shoulder to hand centre, arm straight: 0.28 + 0.26 + 0.03.
     legReachMeters: 0.945, // Hip to foot centre, leg straight: 0.44 + 0.42 + 0.085.
+    maxJointSpeed: 20, // The fastest a joint motor can turn, rad/s (a sprinter's knee reaches ~20). Controllers cap themselves lower (episode.motorSpeedLimit, 10) unless they set ep.speedCap.
     shoulderTorque: 250, // Was 70. Climbing a box with the hands holds the body on the arms.
     elbowTorque: 200, // Was 50.
     wristTorque: 60, // Was 25.
