@@ -1152,6 +1152,7 @@ export function createSim(box) {
     b2Body_GetContactCapacity,
     b2Body_GetContactData,
     b2Shape_GetBody,
+    b2Body_GetPosition: Box2D_GetPosition,
   } = box;
   const dynamicBody = b2BodyType.b2_dynamicBody;
   const staticBody = b2BodyType.b2_staticBody;
@@ -1837,6 +1838,7 @@ export function createSim(box) {
       }
       this.strength = strength;
       this.swing = null;
+      this.swingMarkBase = null;
       if (this.options.swing) {
         readBodyState(world, this.measure);
         this.swing = spawnSwing(world, this.measure.partX[config.partIndex.torso] || 0, this.objects);
@@ -2213,6 +2215,7 @@ export function createSim(box) {
       const acting = frame % config.cadence.actionEveryNFrames === 0;
       this.measure.targets = episodeTargets(this.options);
       this.moveWalkMarks();
+      this.moveSwingMarks();
       readBodyState(this.world, this.measure);
       // Marks are not replanted here: they are planted once in reset() and stay frozen in
       // the world, all five. Replanting every frame made the body marks chase the feet,
@@ -2366,6 +2369,24 @@ export function createSim(box) {
       if (!walk) return 0;
       const t = this.frame / config.physics.hz - (walk.delay || 0);
       return t > 0 ? walk.dir * walk.speed * t : 0;
+    }
+    // SWING: every mark rides with the plank. Left where they started, the foot marks paid the doll
+    // to step off the moving plank (standing fell from 29% to 15% in training).
+    moveSwingMarks() {
+      if (!this.swing || !this.options.targets) return;
+      const t = Box2D_GetPosition(this.swing.plank);
+      if (this.swingMarkBase == null) {
+        this.swingMarkBase = { x: t.x, y: t.y, marks: this.options.targets.map((m) => (m ? { x: m.x, y: m.y } : null)) };
+      }
+      const dx = t.x - this.swingMarkBase.x;
+      const dy = t.y - this.swingMarkBase.y;
+      for (let i = 0; i < this.options.targets.length; i++) {
+        const m = this.options.targets[i];
+        const b = this.swingMarkBase.marks[i];
+        if (!m || !b) continue;
+        m.x = b.x + dx;
+        m.y = b.y + dy;
+      }
     }
     moveWalkMarks() {
       if (!this.options.walk || !this.options.targets) return;
