@@ -370,7 +370,7 @@ function run(seed, record) {
     f++;
   }
   const progress = (world.px[0] - startX) / L.finish;
-  return { finished, progress, time: ep.frame / HZ, log, frames, blocks: blocks.map((b) => ({ x0: +b.x0.toFixed(3), x1: +b.x1.toFixed(3), top: +b.top.toFixed(3) })), dynSize: L.dynamics.map((d) => [d.w / 2, d.h / 2]) };
+  return { finished, progress, time: ep.frame / HZ, log, frames, finish: +(startX + L.finish).toFixed(3), finishY: blocks.length ? Math.max(...blocks.map((b) => b.top)) : 0, blocks: blocks.map((b) => ({ x0: +b.x0.toFixed(3), x1: +b.x1.toFixed(3), top: +b.top.toFixed(3) })), dynSize: L.dynamics.map((d) => [d.w / 2, d.h / 2]) };
 }
 
 const shapes = world.parts.map((q) => ({ hx: +q.hx.toFixed(4), hy: +q.hy.toFixed(4), r: q.r ? +q.r.toFixed(4) : 0, ax: q.ax || 0, ay: q.ay || 0, capsule: !!q.capsule, circle: !!q.circle }));
@@ -380,7 +380,7 @@ for (let i = 0; i < n; i++) {
   const res = run(firstSeed + i, !!recordFile);
   if (res.finished) ok++;
   console.log('run', firstSeed + i, 'finished', res.finished ? 1 : 0, 'progress', (100 * res.progress).toFixed(0) + '%', 'time', res.time.toFixed(1) + 's', '|', res.log.join(', '));
-  episodes.push({ seed: firstSeed + i, boxes: res.blocks, dynSize: res.dynSize, box: null, walk: null, board: null, frames: res.frames, finished: res.finished });
+  episodes.push({ seed: firstSeed + i, boxes: res.blocks, dynSize: res.dynSize, finish: res.finish, finishY: res.finishY, box: null, walk: null, board: null, frames: res.frames, finished: res.finished });
 }
 console.log('course finished', ok + '/' + n);
 if (recordFile) fs.writeFileSync(recordFile, JSON.stringify({ skill: 6, fps: HZ / 3, shapes, episodes }));

@@ -218,6 +218,24 @@ function draw() {
       ctx.fillRect(bx, bt, bw, bh); ctx.strokeRect(bx, bt, bw, bh);
     }
   }
+  // loose boxes that can be pushed around (dynamic bodies)
+  if (f.dyn && e.dynSize) {
+    ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 2;
+    f.dyn.forEach(([x, y, a], i) => {
+      const [hw, hh] = e.dynSize[i];
+      ctx.save(); ctx.translate(sx(x), sy(y)); ctx.rotate(-a);
+      ctx.fillRect(-hw * k, -hh * k, 2 * hw * k, 2 * hh * k); ctx.strokeRect(-hw * k, -hh * k, 2 * hw * k, 2 * hh * k);
+      ctx.restore();
+    });
+  }
+  // finish flag
+  if (e.finish != null) {
+    const top = e.finishY || 0;
+    ctx.strokeStyle = css('--ink'); ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(sx(e.finish), sy(top)); ctx.lineTo(sx(e.finish), sy(top + 1.2)); ctx.stroke();
+    ctx.fillStyle = css('--ok');
+    ctx.beginPath(); ctx.moveTo(sx(e.finish), sy(top + 1.2)); ctx.lineTo(sx(e.finish) + 0.35 * k, sy(top + 1.08)); ctx.lineTo(sx(e.finish), sy(top + 0.96)); ctx.closePath(); ctx.fill();
+  }
   // the box to climb
   if (e.box) {
     ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 3;
@@ -239,7 +257,8 @@ function draw() {
   document.getElementById('hud').innerHTML =
     `<span>t <b>${t.toFixed(2)} s</b></span><span>torso x <b>${torsoX.toFixed(2)} m</b></span>` +
     `<span>head <b>${f.p[7].toFixed(2)} m</b></span><span class="pill ${f.up ? 'up' : 'down'}">${f.up ? 'standing' : 'not standing'}</span>` +
-    `<span>episode fitness <b>${e.fitness.toFixed(2)}</b></span>`;
+    (f.mode ? `<span>controller <b>${f.mode}</b></span>` : '') +
+    (e.fitness != null ? `<span>episode fitness <b>${e.fitness.toFixed(2)}</b></span>` : '');
   document.getElementById('scrub').value = frame;
 }
 let last = performance.now();
