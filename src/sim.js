@@ -458,6 +458,11 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.commands = randomSource() < (config.walk.mixWalkShare ?? 0.5) ? "walk" : "none";
   // CLIMB training mixes in walks and stands, so the earlier skills are not forgotten.
   // The eval (mode.eval) is always a climb.
+  if (out.commands === "getup" && !(mode && mode.eval)) {
+    const roll = randomSource();
+    const g = config.getup;
+    out.commands = roll < g.mixGetup ? "getup" : roll < g.mixGetup + g.mixWalk ? "walk" : "none";
+  }
   if (out.commands === "climb" && !(mode && mode.eval)) {
     const roll = randomSource();
     const c = config.climb;
@@ -505,10 +510,21 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.frames = Math.round(c.seconds * config.physics.hz);
   }
   const walking = commands === "walk" || commands === "climb";
+  // GETUP: lying face up or face down, settled on the floor before the clock starts. The marks are
+  // moved to the standing pose in reset (getupMarks), and the feet carry none.
+  out.getup = false;
+  if (commands === "getup") {
+    const sign = randomSource() < 0.5 ? -1 : 1;
+    out.getup = true;
+    out.tilt = sign * (config.start.downTiltMinRadians + randomSource() * config.start.downTiltSpanRadians);
+    out.drop = config.start.downDropMeters;
+    out.settle = config.start.downSettleFrames;
+    out.frames = Math.round(config.getup.seconds * config.physics.hz);
+  }
   for (let i = 0; i < list.length; i++) {
     const target = list[i];
     const spec = config.targets[i];
-    if (walking && !spec.ride) {
+    if ((walking || commands === "getup") && !spec.ride) {
       target.on = false;
       target.gain = 0;
       target.dx = 0;
@@ -877,6 +893,24 @@ function placedBodyTargets(measure) {
     if (onMark(measure, i)) placed++;
   }
   return on ? placed / on : 0;
+}
+
+// GETUP: the head and hand marks go to the STANDING pose over the pelvis, not where the parts
+// lie. stampTrainTargets planted them on the lying body, which would pay for staying down.
+function getupMarks(measure, options) {
+  const targets = options && options.targets;
+  if (!targets) return;
+  const pelvisX = measure.partX[config.partIndex.torso] || 0;
+  for (let i = 0; i < config.targets.length; i++) {
+    const spec = config.targets[i];
+    if (!spec.ride) continue;
+    const target = targets[i];
+    if (!target || target.on === false) continue;
+    target.x = pelvisX + (spec.x || 0);
+    target.y = spec.y || 0;
+    target.angle = 0;
+    target.frozen = true;
+  }
 }
 
 // How many feet are on top of the box: centre inside it in x and at least top - slack high.
@@ -1594,6 +1628,7 @@ export function createSim(box) {
         this.climbBox = { x0, x1: x0 + 2 * half, top: climb.height };
       }
       this.measure.climbBox = this.climbBox;
+      if (this.options.getup) getupMarks(this.measure, this.options);
       this.measure.targets = episodeTargets(this.options);
       measureProximity(world, this.measure);
     }

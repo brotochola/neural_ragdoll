@@ -223,7 +223,14 @@ export const config = {
   // 6 walk: no foot marks, and the head and hand marks slide forward at a commanded speed.
   // 7 mix: each training episode is a stand (1) or a walk (6), so one net keeps both. Eval runs both.
   // 8 climb: a box ahead, the marks slide forward and rise by its height. Trained mixed with walks and stands.
-  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb"],
+  // 9 getup: starts lying face up or down and has to end standing. Trained mixed with stands and walks.
+  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb", "getup"],
+  getup: {
+    seconds: 10, // Getting up takes longer than the 6 s default.
+    standShare: 0.8, // Pass: standing for this share of the last window, and up at the end.
+    mixGetup: 0.6, // Skill 9 training: share of getup episodes. The rest split between stands and walks.
+    mixWalk: 0.2,
+  },
   climb: {
     boxHalfWidth: 3, // A 6 m platform. At 2 m a good climber walked off the far end before the episode ended and scored as not on top.
     nearMin: 0.45, // Near edge of the box, ahead of the feet midpoint, in metres.
@@ -523,6 +530,7 @@ export const config = {
       prone: 0.6,
       walk: 0.6,
       climb: 0.5, // Skill 8: ends with a foot on top of the box, upright, the head never touched anything.
+      getup: 0.7, // Skill 9: from lying, ends standing on both feet for most of the last 3 s.
       mix: 1, // Skill 7: both the stand bar and the walk bar (its rate is the worse of the two, as a share of its bar).
     }, // Fraction of held-out episodes that must pass each kind.
     walkGoalMeters: 2, // Marker distance used by the walk eval.
@@ -578,7 +586,7 @@ export function setTrainingByPhases(on) {
 
 export function setSkill(level) {
   const id = level | 0;
-  config.skill.level = id < 1 ? 1 : id > 8 ? 8 : id;
+  config.skill.level = id < 1 ? 1 : id > 12 ? 12 : id;
 }
 
 export function activeTrainingPhase() {

@@ -319,6 +319,13 @@ function obeys(row, spec) {
 
 function skillPass(skill, row) {
   const group = commandGroup(skill);
+  if (group === 'getup') {
+    // From lying: up at the end and standing for most of the last window. No headHit check:
+    // the head starts on the floor.
+    const frames = row.windowFrames || 0;
+    if (!(frames > 0) || !row.stoodUp) return false;
+    return row.windowStood / frames >= config.getup.standShare;
+  }
   if (group === 'climb') {
     // Both feet on top of the box at the end, upright over it, standing for half the last window, and
     // the head never touched anything on the way.
@@ -355,7 +362,7 @@ function skillPass(skill, row) {
 }
 
 function skillKey(skill) {
-  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix', 'climb'][skill] || 'stand';
+  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix', 'climb', 'getup', 'board', 'grip'][skill] || 'stand';
 }
 
 function targetGainText() {
