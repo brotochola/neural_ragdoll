@@ -10,13 +10,13 @@ import { ElmanNetwork } from '../src/net.js';
 import { makeSeededRandom } from '../src/utils.js';
 import { evalMode } from '../src/training.js';
 import * as pose from '../src/pose.js';
-import { makeMountain, makeWall } from '../src/terrain.js';
+import { makeCrag, makeWall } from '../src/terrain.js';
 import standNet from '../trained/stand-and-walk.json';
 import params from './params.json';
 import { makeController as makeWalker } from '../src/simbicon.js';
 import { installRunner } from '../src/run-selector.js';
 import { installWallPlanner } from '../src/wall-planner.js';
-import { installMountainPlanner } from '../src/mountain-planner.js';
+import { installCragPlanner } from '../src/crag-planner.js';
 
 setSkill(6);
 const sim = createSim(Box2D);
@@ -70,9 +70,9 @@ function reset() {
   start.frames = 1e9;
   start.shiftX = 0;
   terrain = { kind: state.scene };
-  let mtnH = 0, lift = 0, holesRel = [];
+  let crag = null, lift = 0, holesRel = [];
   if (state.scene === 'wall') start.terrain = makeWall();
-  else if (state.scene === 'mountain') { const m = makeMountain(r, 3, 0.5); mtnH = m.H; start.terrain = { statics: [], polys: m.polys, surface: m.surface }; }
+  else if (state.scene === 'mountain') { crag = makeCrag(r, 2.6, 0.55 + r() * 0.08); start.terrain = { statics: [], polys: crag.polys, surface: crag.surface }; }
   else if (state.scene === 'holes') {
     // a floor 0.6 m up with holes 0.5-0.9 m wide every 3-5 m, as in parkour.js
     lift = 0.6;
@@ -112,6 +112,7 @@ function reset() {
     terrain.rungs = ep.terrain.holds.map((h) => ({ x0: h.x0, x1: h.x1, y: h.y }));
   }
   if (ep.terrain && ep.terrain.surface) terrain.surface = ep.terrain.surface;
+  if (crag) { const dx = ep.terrain.surface[1][0] - crag.surface[1][0]; terrain.knobs = crag.knobs.map((k) => ({ lip: k.lip + dx, back: k.back + dx, y: k.y })); }
   const pv = pose.pelvisOf(world);
   targets.hips = { x: pv.x, y: pv.y };
   targets.feet = [P.footLeft, P.footRight].map((q) => { const s = pose.soleOf(world, q); return { x: s.x, y: s.y }; });
@@ -137,7 +138,7 @@ function reset() {
     ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   } else if (state.mode === 'climb') {
     if (state.scene === 'wall') installWallPlanner(ep, world, params.wall, Object.assign({ wallH: 3.3 }, pctx));
-    else if (state.scene === 'mountain') installMountainPlanner(ep, world, params.mountain, Object.assign({ H: mtnH }, pctx));
+    else if (state.scene === 'mountain') installCragPlanner(ep, world, params.crag, Object.assign({ crag }, pctx));
     else ep.updateGrip = ((orig) => function () { drive(this); orig(); })(ep.updateGrip.bind(ep));
   }
   // stand: the stand-and-walk network drives (nothing to install)
@@ -261,6 +262,13 @@ function draw() {
     for (const [x, y] of S) { const s = toScreen(x, y); ctx.lineTo(s.x, s.y); }
     const sl = toScreen(S[S.length - 1][0], -1); ctx.lineTo(sl.x, sl.y); ctx.closePath();
     ctx.fill(); ctx.stroke();
+    if (terrain.knobs) {
+      // the rock knobs (wedges sticking out of the face)
+      for (const k of terrain.knobs) {
+        const pts = [[k.lip, k.y], [k.lip + 0.03, k.y - 0.04], [k.back + 0.03, k.y - 0.07], [k.back + 0.03, k.y]];
+        ctx.beginPath(); pts.forEach(([x, y], i) => { const q = toScreen(x, y); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }); ctx.closePath(); ctx.fill(); ctx.stroke();
+      }
+    }
   }
   const showMarks = state.mode === 'manual' || (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene));
   // lines from each limb to its mark

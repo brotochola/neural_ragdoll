@@ -43,3 +43,4 @@ play/bundle.js
 trained/mountain-*.json
 trained/stepper-*.json
 *.log
+trained/crag-*.json

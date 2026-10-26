@@ -163,11 +163,28 @@ export function makeStepper(ep, world, pIn, ctx) {
         }
       }
     }
-    const pel = st.phase === 'shift' ? { x: st.pelvisFrom.x + (goalP.x - st.pelvisFrom.x) * pr, y: st.pelvisFrom.y + (goalP.y - st.pelvisFrom.y) * pr } : goalP;
+    let pel;
+    if (p.pelRate > 0) {
+      // the commanded hips move toward their goal no faster than pelRate (m/s): when the rear foot left
+      // a step the goal jumped 20 cm up at once and the kick threw the body back
+      if (!st.pc) st.pc = { ...st.pelvisFrom };
+      const dx = goalP.x - st.pc.x, dy = goalP.y - st.pc.y, d = Math.hypot(dx, dy), mx = p.pelRate / HZ;
+      if (d > mx) { st.pc.x += dx * mx / d; st.pc.y += dy * mx / d; } else { st.pc.x = goalP.x; st.pc.y = goalP.y; }
+      pel = { ...st.pc };
+    } else pel = st.phase === 'shift' ? { x: st.pelvisFrom.x + (goalP.x - st.pelvisFrom.x) * pr, y: st.pelvisFrom.y + (goalP.y - st.pelvisFrom.y) * pr } : goalP;
     pel.x -= p.kI * st.ix;
     const slope = Math.atan2(ground(feet[S].x + 0.4) - ground(feet[S].x - 0.2), 0.6);
     const lean = p.lean - p.leanK * Math.max(0, slope);
-    const hands = st.hands.map((h, k) => h || (st.phase === 'reach' && st.reach[k] && st.reach[k].now) || null);
+    // ARMS as a counterweight (p.armK): with nothing to hold they reach forward when the body sags back
+    // (and back when it pitches forward), at armFwd rad from hanging plus armK per metre of error
+    let armHand = null;
+    if (p.armK || p.armFwd) {
+      const pv = pose.pelvisOf(world);
+      const sh = { x: pv.x - Math.sin(pv.angle) * 0.52, y: pv.y + Math.cos(pv.angle) * 0.52 };
+      const ang = Math.max(-0.8, Math.min(2.4, (p.armFwd || 0) - (p.armK || 0) * err - (p.armKv || 0) * vel));
+      armHand = { x: sh.x + Math.sin(ang) * 0.5, y: sh.y - Math.cos(ang) * 0.5 };
+    }
+    const hands = st.hands.map((h, k) => h || (st.phase === 'reach' && st.reach[k] && st.reach[k].now) || armHand);
     const gripping = st.hands.map((h) => !!h);
     if (gripping[0] || gripping[1]) {
       // with hands on the rock the loop feet-hands is closed: lead the pelvis on a leash so the limbs agree
