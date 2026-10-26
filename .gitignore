@@ -40,3 +40,4 @@ trained/runner-box-init.json
 trained/runner-*-init.json
 play/_test.html
 play/bundle.js
+trained/mountain-*.json
