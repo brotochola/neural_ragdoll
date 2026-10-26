@@ -79,6 +79,7 @@ function run(w, seed, phase) {
   const share = frames > 0 ? s.windowStood / frames : 0;
   const pass = frames > 0 && s.stoodUp && share >= config.getup.standShare;
   const score = (pass ? 1 : 0) + share + (s.stoodUp ? 0.5 : 0) + 0.3 * Math.min(1, maxHead / config.body.standingHeadMeters);
+  if (process.env.DEBUG_RUN) console.log('  run', seed, start.startPose ? 'fall' : 'normal', 'side', side, 'pass', pass, 'score', score.toFixed(2));
   return { pass, score };
 }
 
