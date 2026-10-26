@@ -99,7 +99,8 @@ export function makeController(world) {
       action[swing.ankle] = command(swing.ankle, 0.1 - angleOf(swing.shin));
     } else {
       // flight: the leg that pushed trails, the other reaches for the landing
-      const placeW = p.place + (J2 ? p.jumpPlace : 0) + p.cd * d + p.cv * v;
+      // st.placeAdj: set by the caller to lengthen (+) or shorten (-) this step (hitting a take-off spot)
+      const placeW = p.place + (J2 ? p.jumpPlace : 0) + p.cd * d + p.cv * v + (st.placeAdj || 0);
       action[swing.hip] = command(swing.hip, placeW - torso);
       // in a jump the landing knee stays tucked while rising, extends as the body comes down
       const falling = (m.centerVelocityY || 0) < 0;

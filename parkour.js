@@ -126,11 +126,23 @@ function episode(p, seed, record) {
     this.speedCap = +(process.env.RUN_SPEED_CAP || config.body.maxJointSpeed);
     runner(p, this, tmp);
     const st = this.runner;
-    // Jump on the stride that lands within jumpWin before the next obstacle's front edge.
+    // At each touchdown: jump on the stride that lands within jumpWin before the next obstacle's front
+    // edge; before that (APPROACH, as long jumpers do) stretch or shorten the steps so a foot lands
+    // `takeoff` before the edge: n steps left of the average length, each made (D - takeoff) / n long.
     if (st && st.t === 1 / HZ && obstacles.length) {
       const fx = world.px[(st.stance ? P.footRight : P.footLeft)];
+      if (st.lastX != null) { const L = fx - st.lastX; if (L > 0.2 && L < 2.5) st.avgL = st.avgL ? 0.7 * st.avgL + 0.3 * L : L; }
+      st.lastX = fx;
       const nextO = obstacles.find((o) => o.x1 > fx);
+      st.placeAdj = 0;
       if (nextO && nextO.x0 - fx > 0 && nextO.x0 - fx < p.jumpWin) st.jumping = true;
+      else if (nextO && st.avgL && p.kStride) {
+        const D = nextO.x0 - fx - p.takeoff;
+        if (D > 0 && D < 5) {
+          const n = Math.max(1, Math.round(D / st.avgL));
+          st.placeAdj = Math.max(-0.35, Math.min(0.35, p.kStride * (D / n - st.avgL)));
+        }
+      }
     }
     for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
     orig();
@@ -184,6 +196,7 @@ function evaluate(v, seedBase, n) {
 
 // jumpWin is a selector parameter, searched with the rest
 SPEC.push(['jumpWin', 0.9, 0.3]);
+SPEC.push(['takeoff', 0.3, 0.15], ['kStride', 0, 0.5]);
 
 if (args.includes('--show')) {
   const v = JSON.parse(fs.readFileSync(init, 'utf8')).best;
