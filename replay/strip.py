@@ -72,11 +72,18 @@ for ax, fi in zip(axes, picks):
         ax.add_patch(Polygon([(b["x"] - 0.05, 0), (b["x"] + 0.05, 0), (b["x"], b["pivot"])], color="#8a7552"))
         pts = [(-b["half"], -b["thick"]), (b["half"], -b["thick"]), (b["half"], b["thick"]), (-b["half"], b["thick"])]
         ax.add_patch(Polygon([(b["x"] + c * x - sn * (y + b["thick"]) , b["pivot"] + sn * x + c * (y + b["thick"])) for x, y in pts], color="#b7a17a"))
+    if ep.get("swing") and f.get("sw"):
+        w = ep["swing"]; px, py, pa = f["sw"]; c, sn = math.cos(pa), math.sin(pa); r = w["half"] - w["inset"]
+        ax.plot([w["x"] - w["half"] - 0.2, w["x"] + w["half"] + 0.2], [w["barY"], w["barY"]], color="#8a7552", lw=3)
+        for side in (-1, 1):
+            ax.plot([w["x"] + side * r, px + c * side * r], [w["barY"], py + sn * side * r], color="#8a7552", lw=1)
+        pts = [(-w["half"], -w["thick"]), (w["half"], -w["thick"]), (w["half"], w["thick"]), (-w["half"], w["thick"])]
+        ax.add_patch(Polygon([(px + c * x - sn * y, py + sn * x + c * y) for x, y in pts], color="#b7a17a"))
     if f.get("mx") is not None:
         ax.add_patch(Circle((f["mx"], f["my"]), 0.12, fill=False, ls="--", color="#2a7fb8"))
     ax.axhline(0, color="#888", lw=1)
     ax.set_xlim(cx - 0.6, cx + 0.6)
-    ax.set_ylim(-0.05, 2.0)
+    ax.set_ylim(-0.05, 2.7 if ep.get("swing") else 2.0)
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_title(f"{fi / rec['fps']:.1f}s {'UP' if f['up'] else ''}", fontsize=8)

@@ -166,7 +166,7 @@ function drawPart(i, x, y, a, s, k) {
 }
 function draw() {
   const e = ep(), f = e.frames[Math.min(frame, e.frames.length - 1)];
-  const W = cv.width, H = cv.height, k = H / 2.4, groundY = H * 0.86;
+  const W = cv.width, H = cv.height, k = H / (e.swing ? 3.1 : 2.4), groundY = H * 0.86;
   const torsoX = f.p[0];
   if (camX == null) camX = torsoX; else camX += (torsoX - camX) * 0.08;
   const sx = (x) => W / 2 + (x - camX) * k, sy = (y) => groundY - y * k;
@@ -192,6 +192,22 @@ function draw() {
     ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 2;
     ctx.fillRect(-b.half * k, -2 * b.thick * k, 2 * b.half * k, 2 * b.thick * k);
     ctx.strokeRect(-b.half * k, -2 * b.thick * k, 2 * b.half * k, 2 * b.thick * k);
+    ctx.restore();
+  }
+  // the hanging swing: top bar, two ropes, plank
+  if (e.swing && f.sw) {
+    const w = e.swing, [px, py, pa] = f.sw, c = Math.cos(pa), sn = Math.sin(pa), r = w.half - w.inset;
+    ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(sx(w.x - w.half - 0.2), sy(w.barY)); ctx.lineTo(sx(w.x + w.half + 0.2), sy(w.barY)); ctx.stroke();
+    ctx.lineWidth = 2;
+    for (const side of [-1, 1]) {
+      ctx.beginPath(); ctx.moveTo(sx(w.x + side * r), sy(w.barY));
+      ctx.lineTo(sx(px + c * side * r), sy(py + sn * side * r)); ctx.stroke();
+    }
+    ctx.save(); ctx.translate(sx(px), sy(py)); ctx.rotate(-pa);
+    ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 2;
+    ctx.fillRect(-w.half * k, -w.thick * k, 2 * w.half * k, 2 * w.thick * k);
+    ctx.strokeRect(-w.half * k, -w.thick * k, 2 * w.half * k, 2 * w.thick * k);
     ctx.restore();
   }
   // the box to climb

@@ -42,6 +42,11 @@ const shapes = world.parts.map((p) => ({
   hx: +p.hx.toFixed(4), hy: +p.hy.toFixed(4), r: p.r ? +p.r.toFixed(4) : 0,
   ax: p.ax || 0, ay: p.ay || 0, capsule: !!p.capsule, circle: !!p.circle,
 }));
+// The swing plank: centre x, y and angle, from the world's thrown-object tracking.
+function swingPose(id) {
+  const t = Box2D.b2Body_GetTransform(id);
+  return [+t.p.x.toFixed(3), +t.p.y.toFixed(3), +Math.atan2(t.q.s, t.q.c).toFixed(3)];
+}
 const episodes = [];
 for (let e = 0; e < n; e++) {
   const i = firstSeed + e;
@@ -74,7 +79,7 @@ for (let e = 0; e < n; e++) {
         pose.push(+world.px[p].toFixed(3), +world.py[p].toFixed(3), +Math.atan2(world.s[p], world.c[p]).toFixed(3));
       }
       const head = ep.options.targets ? ep.options.targets[0] : null;
-      frames.push({ p: pose, up: isStanding(ep.measure) ? 1 : 0, mx: head && head.on ? +(+head.x).toFixed(3) : null, my: head && head.on ? +(+head.y).toFixed(3) : null, ba: ep.board ? +(ep.boardAngle || 0).toFixed(3) : undefined });
+      frames.push({ p: pose, up: isStanding(ep.measure) ? 1 : 0, mx: head && head.on ? +(+head.x).toFixed(3) : null, my: head && head.on ? +(+head.y).toFixed(3) : null, ba: ep.board ? +(ep.boardAngle || 0).toFixed(3) : undefined, sw: ep.swing ? swingPose(ep.swing.plank) : undefined });
     }
     done = ep.advanceOneFrame();
     f++;
@@ -85,6 +90,7 @@ for (let e = 0; e < n; e++) {
     walk: start.walk || null,
     box: ep.climbBox ? { x0: +ep.climbBox.x0.toFixed(3), x1: +ep.climbBox.x1.toFixed(3), top: +ep.climbBox.top.toFixed(3) } : null,
     onTop: s.climbOnTop ? true : false,
+    swing: ep.swing ? { x: +ep.swing.x.toFixed(3), half: config.swing.halfLength, thick: config.swing.halfThick, inset: config.swing.ropeInset, barY: config.swing.top + config.swing.ropeLength } : null,
     board: ep.board ? { x: +ep.boardX.toFixed(3), pivot: config.board.pivotHeight, half: config.board.halfLength, thick: config.board.halfThick, amp: start.board.amp, period: start.board.period } : null,
     fitness: +s.fitness.toFixed(3),
     stoodUp: !!s.stoodUp,
