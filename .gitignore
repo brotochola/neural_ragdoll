@@ -6,3 +6,4 @@ run*.log
 keyframes-up.json
 keyframes-down.json
 trained/bc-student.json
+trained/getup-expert.json
