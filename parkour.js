@@ -189,7 +189,8 @@ function episode(p, seed, record) {
   if (obstacles.length) score += 3 * cleared / obstacles.length + (cleared === obstacles.length && !fell ? 2 : 0);
   const why = 'speed ' + speed.toFixed(2) + ' avg ' + vAvg.toFixed(2) + ' up ' + upShare.toFixed(2) + ' flight ' + flightShare.toFixed(2) + ' fell ' + (fell ? (fellAt / HZ).toFixed(1) + 's' : '-') + (obstacles.length ? ' cleared ' + cleared + '/' + obstacles.length + ' sizes ' + obstacles.map((o) => (o.top ? o.top : o.x1 - o.x0).toFixed(2)).join(',') : '') + ' strides ' + (ep.runner ? ep.runner.strides : 0);
   const blocks = ep.terrain ? ep.terrain.statics : null;
-  return { score, pass: pass ? 1 : 0, why, frames: recFrames, blocks };
+  const status = (fell ? 'fell at ' + (fellAt / HZ).toFixed(1) + ' s' : 'kept running') + (obstacles.length ? ' · cleared ' + cleared + '/' + obstacles.length : '') + ' · ' + vAvg.toFixed(1) + ' m/s';
+  return { score, pass: pass ? 1 : 0, why, frames: recFrames, blocks, status };
 }
 
 function evaluate(v, seedBase, n) {
@@ -214,7 +215,7 @@ if (args.includes('--show')) {
     const eps = [];
     for (let i = 0; i < +arg('--n', 3); i++) {
       const r = episode(p, 100 + i, true);
-      eps.push({ seed: i, boxes: r.blocks ? r.blocks.map((b) => ({ x0: +b.x0.toFixed(3), x1: +b.x1.toFixed(3), top: +b.top.toFixed(3) })) : null, box: null, walk: null, board: null, finished: !!r.pass, frames: r.frames });
+      eps.push({ seed: i, boxes: r.blocks ? r.blocks.map((b) => ({ x0: +b.x0.toFixed(3), x1: +b.x1.toFixed(3), top: +b.top.toFixed(3) })) : null, box: null, walk: null, board: null, finished: !!r.pass, status: r.status, frames: r.frames });
     }
     fs.writeFileSync(rec, JSON.stringify({ skill: 6, fps: HZ / 2, shapes, episodes: eps }));
   }

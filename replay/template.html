@@ -124,7 +124,7 @@ function buildEps() {
     const walk = e.box
       ? `<span>box ${Math.round(e.box.top * 100)} cm · ${e.onTop ? 'on top' : 'not on top'}</span>`
       : e.walk ? `<span>${e.walkDist.toFixed(2)} / ${e.walkCmd.toFixed(2)} m ${e.walk.dir > 0 ? '→' : '←'}</span>` : '';
-    const status = e.finished != null ? (e.finished ? 'reached the flag' : 'did not finish') : `${e.stoodUp ? 'ends standing' : 'ends down'} · ${Math.round(e.standShare * 100)}% up`;
+    const status = e.status ? e.status : e.finished != null ? (e.finished ? 'reached the flag' : 'did not finish') : `${e.stoodUp ? 'ends standing' : 'ends down'} · ${Math.round(e.standShare * 100)}% up`;
     b.innerHTML = `<strong>Episode ${e.seed + 1}</strong><span>${status}</span>${walk}${extra}`;
     b.onclick = () => { epIndex = i; reset(); };
     box.appendChild(b);
