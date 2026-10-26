@@ -269,7 +269,15 @@ function run(seed, record) {
       const t = (this.frame - g.t0) / HZ;
       if (g.phase === 'rest') {
         for (let j = 0; j < OUT; j++) this.action[j] = stand.action[j];
-        if ((t > 0.6 && settled()) || t > 3) {
+        // A retry from the same resting pose failed the same way every time (every unfinished course
+        // ended retrying): first curl up for a second (hips flexed, knees bent) so it lies differently.
+        if (g.tries > 0 && t < 1.0 && !process.env.NO_CURL) {
+          const curl = g.tries % 2 ? 1 : -1;
+          for (const j of [5, 11]) this.action[j] = 0.8 * curl;
+          for (const j of [6, 12]) this.action[j] = -1;
+          for (const j of [2, 8]) this.action[j] = 0.7 * curl;
+        }
+        if ((t > (g.tries > 0 ? 1.6 : 0.6) && settled()) || t > 4) {
           g.phase = 'go'; g.t0 = this.frame; g.tries++;
           g.side = Math.atan2(world.s[0], world.c[0]) > 0 ? 'up' : 'down';
           getup = new ElmanNetwork(Float32Array.from(getupW));
