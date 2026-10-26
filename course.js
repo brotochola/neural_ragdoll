@@ -61,6 +61,9 @@ const load = (f) => JSON.parse(fs.readFileSync(path.resolve(root, f), 'utf8'));
 const standW = ElmanNetwork.copy(load('trained/stand-and-walk.json').theta);
 const getupSaved = load('trained/getup-expert-19.json');
 const getupW = Float32Array.from(getupSaved.theta);
+// Get-up experts tried in turn on retries (each gets up from different falls: on 20 course falls the
+// 18/20 one got up from 10, the 19/20 one from 7).
+const getupList = (process.env.GETUP_FILES || 'trained/getup-expert-19.json').split(',').map((f) => { const g = load(f); return { w: Float32Array.from(g.theta), handover: g.handover }; });
 const walkSaved = load(walkFile);
 const walkP = Object.assign(simb.decode(walkSaved.best), { track: !!walkSaved.track });
 // The slow walker (0.2-0.45 m/s) for approaching a step and braking: the fast one barely slows down
@@ -280,14 +283,15 @@ function run(seed, record) {
         if ((t > (g.tries > 0 ? 1.6 : 0.6) && settled()) || t > 4) {
           g.phase = 'go'; g.t0 = this.frame; g.tries++;
           g.side = Math.atan2(world.s[0], world.c[0]) > 0 ? 'up' : 'down';
-          getup = new ElmanNetwork(Float32Array.from(getupW));
+          g.expert = getupList[(g.tries - 1) % getupList.length];
+          getup = new ElmanNetwork(Float32Array.from(g.expert.w));
           // The expert reads a get-up clock (time since the start of the get-up) that only runs with
           // options.getup; without it the clock inputs were zero and it flailed (1 of 31 course falls).
           this.options.getup = true;
           this.options.startTime = -this.frame / HZ;
         }
       } else {
-        const hand = getupSaved.handover[g.side] || 3;
+        const hand = g.expert.handover[g.side] || 3;
         const src = t < hand ? getup.action : stand.action;
         for (let j = 0; j < OUT; j++) this.action[j] = src[j];
         if (t > hand + 2 && isStanding(m)) { this.gu = null; setMode('steady'); }
