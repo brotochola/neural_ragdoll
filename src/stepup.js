@@ -7,7 +7,10 @@
 //   3 TUCK   the trail leg rises over the edge
 //   4 PLANT  the trail leg comes down onto the box
 //   5 DONE   the stand net takes over (the caller decides)
-// Arms: a pose per state, and the grips close in the states listed by gripStates when the hands touch.
+// With p.hands (tall boxes): state -1 REACH first, arms up onto the top edge, grips closing when the
+// hands touch it. Then the arms pull while the lead leg lifts (0, 1), push down ("mantle") while the
+// body rises (2), and hold until both feet are up; the grips open when the stand net takes over.
+// Without hands: a pose per state, and the grips close in PLACE and PUSH if p.grip > 0.
 // Works for a box on either side: "forward" is toward the box (side = +1 or -1).
 import { config } from "../config.js";
 
@@ -23,12 +26,16 @@ export const SPEC = [
   ['armLift', 1.2, 0.5], ['armPush', -0.5, 0.5], ['elbow', 0.5, 0.4],
   ['lead', 0, 1], // > 0: right leg leads, else left
   ['grip', -1, 1], // > 0: grip during PLACE and PUSH
+  // Hands (used when the caller sets p.hands): upper-arm WORLD angles (0 = hanging, + = forward/up).
+  ['reachArm', 2.3, 0.3], ['reachElbow', 0.2, 0.3], ['reachT', 1.0, 0.3],
+  ['pullArm', 1.6, 0.4], ['pullElbow', 1.5, 0.4],
+  ['mantleArm', 0.2, 0.4], ['mantleElbow', 0.1, 0.3],
 ];
 
 export function decode(v) {
   const p = {};
   SPEC.forEach(([name, base], i) => (p[name] = base + (v[i] || 0)));
-  for (const k of ['liftT', 'placeT', 'pushT', 'tuckT', 'plantT']) p[k] = Math.max(0.15, Math.min(2, p[k]));
+  for (const k of ['liftT', 'placeT', 'pushT', 'tuckT', 'plantT', 'reachT']) p[k] = Math.max(0.15, Math.min(2.5, p[k]));
   return p;
 }
 
@@ -36,8 +43,8 @@ export function makeController(world) {
   const J = config.net.jointCount;
   const P = config.partIndex;
   const LEG = [
-    { thigh: 6, shin: 7, foot: P.footLeft, hip: 5, knee: 6, ankle: 7, shoulder: 2, elbow: 3 },
-    { thigh: 12, shin: 13, foot: P.footRight, hip: 11, knee: 12, ankle: 13, shoulder: 8, elbow: 9 },
+    { thigh: 6, shin: 7, foot: P.footLeft, hip: 5, knee: 6, ankle: 7, shoulder: 2, elbow: 3, arm: 3 },
+    { thigh: 12, shin: 13, foot: P.footRight, hip: 11, knee: 12, ankle: 13, shoulder: 8, elbow: 9, arm: 9 },
   ];
   const angleOf = (i) => Math.atan2(world.s[i], world.c[i]);
   function command(jointIndex, target) {
@@ -49,7 +56,7 @@ export function makeController(world) {
   // means swinging the thigh backward (negative). Joint limits still apply.
   return function stepup(p, ep, action) {
     const box = ep.climbBox;
-    const st = ep.stepup || (ep.stepup = { state: 0, t: 0 });
+    const st = ep.stepup || (ep.stepup = { state: p.hands ? -1 : 0, t: 0 });
     if (!box) return false;
     const dt = 1 / config.physics.hz;
     st.t += dt;
@@ -65,7 +72,9 @@ export function makeController(world) {
       st.state++;
       st.t = 0;
     };
-    if (st.state === 0 && ((over(lead.foot) && world.py[lead.foot] > top + 0.03) || st.t > p.liftT)) next();
+    const gripped = ep.grips ? ep.grips.filter((g) => g.joint).length : 0;
+    if (st.state === -1 && (gripped === 2 || st.t > p.reachT)) next();
+    else if (st.state === 0 && ((over(lead.foot) && world.py[lead.foot] > top + 0.03) || st.t > p.liftT)) next();
     else if (st.state === 1 && (onBox(lead.foot) || st.t > p.placeT)) next();
     else if (st.state === 2 && st.t > p.pushT) next();
     else if (st.state === 3 && ((over(trail.foot) && world.py[trail.foot] > top + 0.03) || st.t > p.tuckT)) next();
@@ -76,6 +85,25 @@ export function makeController(world) {
     // Which leg holds the body: the trail leg until the lead foot is on the box, then the lead leg.
     const stance = s <= 1 ? trail : lead;
     const swing = s <= 1 ? lead : trail;
+    if (s === -1) {
+      // REACH: both legs hold the body (stance servo on the trail leg, the lead leg straight),
+      // arms up onto the box top, grips on.
+      const stanceHip0 = angleOf(trail.thigh) - torso;
+      action[trail.hip] = command(trail.hip, stanceHip0 + (torso - side * p.standLean));
+      action[lead.hip] = command(lead.hip, angleOf(trail.thigh) - torso);
+      for (const leg of LEG) {
+        action[leg.knee] = command(leg.knee, p.stanceKnee);
+        action[leg.ankle] = command(leg.ankle, 0 - angleOf(leg.shin));
+        action[leg.shoulder] = command(leg.shoulder, side * p.reachArm - angleOf(1));
+        action[leg.elbow] = command(leg.elbow, p.reachElbow);
+      }
+      action[0] = 0;
+      action[1] = 0;
+      action[4] = 0;
+      action[10] = 0;
+      for (let j = J; j < action.length; j++) action[j] = 1;
+      return true;
+    }
     const lean = side * (s === 2 ? p.pushLean : p.standLean);
     const d = (m.centerX || 0) - world.px[stance.foot];
     const v = m.centerVelocityX || 0;
@@ -98,14 +126,24 @@ export function makeController(world) {
     action[swing.ankle] = command(swing.ankle, s === 2 ? p.pushAnkle : 0 - angleOf(swing.shin));
     action[0] = 0;
     action[1] = 0;
-    const arm = side * (s <= 1 ? p.armLift : p.armPush);
-    for (const leg of LEG) {
-      action[leg.shoulder] = command(leg.shoulder, arm - torso);
-      action[leg.elbow] = command(leg.elbow, p.elbow);
+    if (p.hands) {
+      // Pull while the lead leg goes up, then push down (mantle) and hold.
+      const armWorld = side * (s <= 1 ? p.pullArm : p.mantleArm);
+      const elbow = s <= 1 ? p.pullElbow : p.mantleElbow;
+      for (const leg of LEG) {
+        action[leg.shoulder] = command(leg.shoulder, armWorld - angleOf(1));
+        action[leg.elbow] = command(leg.elbow, elbow);
+      }
+    } else {
+      const arm = side * (s <= 1 ? p.armLift : p.armPush);
+      for (const leg of LEG) {
+        action[leg.shoulder] = command(leg.shoulder, arm - torso);
+        action[leg.elbow] = command(leg.elbow, p.elbow);
+      }
     }
     action[4] = 0;
     action[10] = 0;
-    const grip = p.grip > 0 && (s === 1 || s === 2) ? 1 : -1;
+    const grip = p.hands ? 1 : p.grip > 0 && (s === 1 || s === 2) ? 1 : -1;
     for (let j = J; j < action.length; j++) action[j] = grip;
     return true;
   };

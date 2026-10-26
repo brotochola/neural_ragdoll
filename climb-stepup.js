@@ -44,7 +44,9 @@ const J = config.net.jointCount;
 const OUT = outputCountOf();
 const G = OUT - J; // grip outputs
 const P = config.partIndex;
-const { SPEC, decode, makeController } = await import('./src/stepup.js');
+const { SPEC, decode: decodeBase, makeController } = await import('./src/stepup.js');
+const hands = args.includes('--hands'); // reach, grab the top edge, pull and mantle (tall boxes)
+const decode = (v) => Object.assign(decodeBase(v), { hands });
 const controller = makeController(world);
 const dims = SPEC.length;
 const rand = makeSeededRandom(side > 0 ? 77 : 88);
@@ -189,12 +191,12 @@ for (let it = 0; it < iters; it++) {
   }
   if (it % 5 === 0 || it === iters - 1) {
     console.log('iter', it, 'height', height, 'best', best.score.toFixed(3), 'held-out pass', best.pass + '/10', 'on top', best.top + '/10', 'gen best', cands[0].score.toFixed(3), 'sigma', (sigma.reduce((a, b) => a + b, 0) / dims).toFixed(3));
-    fs.writeFileSync(out, JSON.stringify({ side, height, controller: 'stepup', best: Array.from(best.v), score: best.score, pass: best.pass, frames: decode(best.v) }));
+    fs.writeFileSync(out, JSON.stringify({ side, height, controller: 'stepup', hands, best: Array.from(best.v), score: best.score, pass: best.pass, frames: decode(best.v) }));
   }
 }
 let fresh = 0;
 for (let i = 0; i < 10; i++) fresh += episode(decode(best.v), 100 + i).pass;
 const rec = episode(decode(best.v), 100, true);
-fs.writeFileSync(out, JSON.stringify({ side, height, controller: 'stepup', best: Array.from(best.v), score: best.score, pass: best.pass, freshPass: fresh, frames: decode(best.v), poses: rec.poses }));
+fs.writeFileSync(out, JSON.stringify({ side, height, controller: 'stepup', hands, best: Array.from(best.v), score: best.score, pass: best.pass, freshPass: fresh, frames: decode(best.v), poses: rec.poses }));
 console.log('done side', side, 'height', height, 'best pass', best.pass + '/' + seeds, 'fresh seeds', fresh + '/10', '->', out);
 sim.destroyWorld(world);

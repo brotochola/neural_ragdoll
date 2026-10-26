@@ -51,13 +51,14 @@ if (walkFile) {
   };
 } else {
   const { decode, makeController } = await import('./src/stepup.js');
-  const p = decode(JSON.parse(fs.readFileSync(path.resolve(root, stepFile), 'utf8')).best);
+  const savedStep = JSON.parse(fs.readFileSync(path.resolve(root, stepFile), 'utf8'));
+  const p = Object.assign(decode(savedStep.best), { hands: !!savedStep.hands });
   const c = makeController(world);
   drive = (ep) => {
     let done = false;
     const origGrip = ep.updateGrip.bind(ep);
     ep.updateGrip = function () {
-      if (!done && this.frame / config.physics.hz < 6) done = !c(p, this, this.action);
+      if (!done && this.frame / config.physics.hz < 9) done = !c(p, this, this.action);
       else done = true;
       if (done) for (let j = J; j < OUT; j++) this.action[j] = -1;
       origGrip();
@@ -76,7 +77,7 @@ for (let e = 0; e < n; e++) {
   if (start.climb) {
     start.climb.side = side;
     start.climb.height = height;
-    start.frames = 9 * config.physics.hz;
+    start.frames = 12 * config.physics.hz;
   }
   world.rebuild();
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: seed % 6 }, start));
