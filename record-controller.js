@@ -22,6 +22,7 @@ const side = +arg('--side', 1);
 const first = +arg('--first', 100);
 const speedMin = +arg('--speed-min', 0);
 const speedMax = +arg('--speed-max', 0);
+const bumps = +arg('--bumps', 0); // uneven ground from 1 m to 7 m ahead, blocks up to this tall
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -78,6 +79,16 @@ for (let e = 0; e < n; e++) {
   const r = makeSeededRandom((walkFile ? 3000 : 2000) + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(skill));
   if (start.walk && speedMax > 0) start.walk.speed = speedMin + r() * (speedMax - speedMin);
+  if (bumps > 0) {
+    const statics = [];
+    let x = 1.0;
+    while (x < 7) {
+      const w = 0.2 + r() * 0.4;
+      statics.push({ dx: x, w, h: 0.01 + r() * (bumps - 0.01) });
+      x += w + 0.1 + r() * 0.5;
+    }
+    start.terrain = { statics };
+  }
   if (start.climb) {
     start.climb.side = side;
     start.climb.height = height;
@@ -101,6 +112,7 @@ for (let e = 0; e < n; e++) {
   const s = ep.stats;
   episodes.push({
     seed, walk: start.walk || null,
+    boxes: ep.terrain ? ep.terrain.statics.map((b) => ({ x0: +b.x0.toFixed(3), x1: +b.x1.toFixed(3), top: +b.top.toFixed(3) })) : undefined,
     box: ep.climbBox ? { x0: +ep.climbBox.x0.toFixed(3), x1: +ep.climbBox.x1.toFixed(3), top: +ep.climbBox.top.toFixed(3) } : null,
     onTop: !!s.climbOnTop, board: null, fitness: +s.fitness.toFixed(3), stoodUp: !!s.stoodUp,
     standShare: s.windowFrames ? +(s.windowStood / s.windowFrames).toFixed(2) : 0,
