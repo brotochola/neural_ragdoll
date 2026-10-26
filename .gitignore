@@ -26,3 +26,5 @@ trained/stop-controller.json
 trained/climb-arrivals.json
 trained/stepup-arrival-*.json
 trained/stop-fast.json
+trained/course-falls.json
+trained/getup-expert-falls.json
