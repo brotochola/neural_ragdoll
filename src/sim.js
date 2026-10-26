@@ -1826,6 +1826,9 @@ export function createSim(box) {
           b2Body_SetAngularVelocity(part.id, vel ? vel[i * 3 + 2] : 0);
           b2Body_SetAwake(part.id, true);
         }
+        // Re-read the body: objects placed relative to the feet (climb box, stairs, terrain) were put
+        // where the default pose's feet were, 33 cm off from the recorded state.
+        readBodyState(world, this.measure);
       }
       // Grips from the last episode died with their boxes in cleanup.
       if (!this.grips) this.grips = [{ joint: null }, { joint: null }];

@@ -253,11 +253,20 @@ function run(seed, record) {
       // A tall enough rise ahead: slow down from 1.5 m, stop 0.4 m before it, steady, then climb.
       // Low steps: the stairs walk.
       const tall = ahead && ahead.rise > 0.15;
+      // DIRECT: from the slow walk, as soon as the front foot is down 0.25-0.5 m from the edge with the
+      // back foot down too, start the climb without stopping (stopping left the feet up to 1.1 m apart).
+      if (tall && process.env.DIRECT) {
+        const fl = world.px[config.partIndex.footLeft], fr = world.px[config.partIndex.footRight];
+        const gapF = ahead.box.x0 - Math.max(fl, fr);
+        const both = m.touch[config.partIndex.footLeft] && m.touch[config.partIndex.footRight];
+        if (gapF < +(process.env.DIRECT_GAP || 0.5) && gapF > 0.15 && both && Math.abs(fr - fl) < 0.6) { setMode('climb'); }
+      }
       // Near a tall step: the stand-and-walk NETWORK walks the last metres slowly and stops on its own
       // when its walk command goes to zero (it was trained to do both); the walking controllers do not
       // stop when asked.
       if (tall && ahead.dist < +(process.env.NETWALK_AT || 1.8) && process.env.NETWALK) { setMode('netwalk'); pinMarks(this); }
-      if (tall && ahead.dist < +(process.env.STOP_AT || 0.8)) setMode(process.env.STOP_MODE || (process.env.NO_BRAKE ? 'steady' : 'brake'));
+      if (mode !== 'walk') { /* switched above */ }
+      else if (tall && ahead.dist < +(process.env.STOP_AT || 0.8)) setMode(process.env.STOP_MODE || (process.env.NO_BRAKE ? 'steady' : 'brake'));
       else {
         const onStairs = ahead && ahead.rise <= 0.15 && ahead.dist < 1.0 && ahead.box.top > L.platformTop + 0.01;
         const near = tall && ahead.dist < 3.0;
