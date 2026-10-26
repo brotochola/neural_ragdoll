@@ -29,7 +29,9 @@ const falls = [];
 for (let k = 0; k < n; k++) {
   const rand = makeSeededRandom(9000 + k);
   const sign = k % 2 === 0 ? 1 : -1;
-  const tilt = sign * (0.12 + rand() * 0.3);
+  // 2-9 degrees: a nearly vertical collapse (knees give, squat, sit, then down). The first library
+  // used 7-24 degrees and even its first pose was a hard recovery: 6% of get-ups for 100 generations.
+  const tilt = sign * (0.035 + rand() * 0.12);
   world.rebuild();
   const ep = new sim.Episode(world, weights, tilt, 0.05, { frames: 600, period: 8, phase: 0, failOnHead: false });
   ep.passive = true;

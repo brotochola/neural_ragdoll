@@ -279,7 +279,7 @@ export const config = {
     maxCap: 1,
     capStep: 0.05,
     band: 0.3,
-    capPassRate: 0.3,
+    capPassRate: 0.2, // Was 0.3.
     capWindow: 10,
     seconds: 10, // Getting up takes longer than the 6 s default.
     standShare: 0.8, // Pass: standing for this share of the last window, and up at the end.
