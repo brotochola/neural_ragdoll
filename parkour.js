@@ -135,7 +135,10 @@ function episode(p, seed, record) {
       st.lastX = fx;
       const nextO = obstacles.find((o) => o.x1 > fx);
       st.placeAdj = 0;
-      if (nextO && nextO.x0 - fx > 0 && nextO.x0 - fx < p.jumpWin) st.jumping = true;
+      // jump now if an ordinary step (average length) would land within jumpMargin of the edge or beyond
+      // it (a foot landing on the edge slid into the hole); before the average is known, jumpWin
+      const win = st.avgL ? st.avgL + p.jumpMargin : p.jumpWin;
+      if (nextO && nextO.x0 - fx > 0.03 && nextO.x0 - fx < win) st.jumping = true;
       else if (nextO && st.avgL && p.kStride) {
         const D = nextO.x0 - fx - p.takeoff;
         if (D > 0 && D < 5) {
@@ -196,7 +199,8 @@ function evaluate(v, seedBase, n) {
 
 // jumpWin is a selector parameter, searched with the rest
 SPEC.push(['jumpWin', 0.9, 0.3]);
-SPEC.push(['takeoff', 0.3, 0.15], ['kStride', 0, 0.5]);
+SPEC.push(['takeoff', 0.3, 0.15], ['kStride', 1.0, 0.5]);
+SPEC.push(['jumpMargin', 0.2, 0.15]);
 
 if (args.includes('--show')) {
   const v = JSON.parse(fs.readFileSync(init, 'utf8')).best;

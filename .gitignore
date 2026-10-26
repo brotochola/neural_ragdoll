@@ -35,3 +35,4 @@ trained/walk-slow-starts2.json
 trained/course-falls-[0-9]*.json
 trained/getup-expert-falls2.json
 trained/runner-*.json
+trained/runner-gap-06c-init.json
