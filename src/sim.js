@@ -1091,6 +1091,7 @@ export function createSim(box) {
     b2Body_SetAngularVelocity,
     b2Body_SetAwake,
     b2Body_ApplyForceToCenter,
+    b2Body_ApplyTorque,
     b2RevoluteJoint_GetAngle,
     b2RevoluteJoint_SetMotorSpeed,
     b2RevoluteJoint_EnableMotor,
@@ -2839,6 +2840,17 @@ export function createSim(box) {
         ux = ux < -cap ? -cap : ux > cap ? cap : ux;
         b2Body_ApplyForceToCenter(world.parts[P.chest].id, vector(ux, 0), true);
         b2Body_ApplyForceToCenter(world.parts[P.torso].id, vector(-ux, 0), true);
+        // Pelvis orientation: a damped torsional spring toward upright. Without it the body hung
+        // rigid, leaning back 27 degrees with the feet out in front, and never counted as standing.
+        if (b2Body_ApplyTorque && g.harnessTilt) {
+          const angle = Math.atan2(m.partSin[P.torso] || 0, m.partCos[P.torso] || 1);
+          const spin = m.partSpin[P.torso] || 0;
+          const inertia = g.harnessInertia || 10;
+          let tau = assist * inertia * g.harnessTilt * (kp * -angle - kd * spin);
+          const tcap = assist * (g.harnessTorqueCap || 300);
+          tau = tau < -tcap ? -tcap : tau > tcap ? tcap : tau;
+          b2Body_ApplyTorque(world.parts[P.torso].id, tau, true);
+        }
       }
       b2World_Step(
         this.world.worldId,

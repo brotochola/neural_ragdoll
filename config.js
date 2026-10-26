@@ -284,7 +284,10 @@ export const config = {
     harnessHertz: 1, // Spring of the pelvis toward standing height over its start point.
     harnessDamping: 1, // Critically damped: no pendulum.
     harnessDrop: 0.08, // The pelvis target sits this far under standing height: hung at exactly 1.14 m the feet dangled.
-    harnessUpright: 1, // Spring keeping the chest over the pelvis.
+    harnessUpright: 1,
+    harnessTilt: 1, // Torsional spring keeping the pelvis upright.
+    harnessInertia: 10, // kg m^2: roughly the whole body about the pelvis.
+    harnessTorqueCap: 300, // Spring keeping the chest over the pelvis.
     fallsFile: "getup-falls.json",
     startCap: 0.25,
     maxCap: 1,
