@@ -35,6 +35,7 @@ const floorH = +arg('--floor', 0.6);
 const boxH = +arg('--box-h', 0.4);
 const boxW = +arg('--box-w', 0.4);
 const boxN = +arg('--boxes', 2);
+const boxMax = +arg('--box-max', boxH); // box heights random in --box-h..--box-max
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -91,8 +92,9 @@ function makeCourse(r) {
   } else if (mode === 'box') {
     let x = 4 + r() * 1.5;
     for (let i = 0; i < boxN; i++) {
-      statics.push({ dx: x, w: boxW, h: boxH });
-      boxes.push({ x0: x, x1: x + boxW, top: boxH });
+      const h = boxH + r() * (boxMax - boxH);
+      statics.push({ dx: x, w: boxW, h });
+      boxes.push({ x0: x, x1: x + boxW, top: h });
       x += boxW + 4 + r() * 2;
     }
   }
@@ -185,7 +187,7 @@ function episode(p, seed, record) {
   const pass = passRun && (obstacles.length === 0 || cleared === obstacles.length);
   let score = 4 * alive + 2 * upShare * alive + 2 * Math.min(1, Math.max(0, dist) / (speed * seconds)) - 2 * speedErr * alive + 1.5 * Math.min(1, flightShare / 0.25) * alive + (pass ? 3 : 0);
   if (obstacles.length) score += 3 * cleared / obstacles.length + (cleared === obstacles.length && !fell ? 2 : 0);
-  const why = 'speed ' + speed.toFixed(2) + ' avg ' + vAvg.toFixed(2) + ' up ' + upShare.toFixed(2) + ' flight ' + flightShare.toFixed(2) + ' fell ' + (fell ? (fellAt / HZ).toFixed(1) + 's' : '-') + (obstacles.length ? ' cleared ' + cleared + '/' + obstacles.length + ' sizes ' + obstacles.map((o) => (o.x1 - o.x0).toFixed(2)).join(',') : '') + ' strides ' + (ep.runner ? ep.runner.strides : 0);
+  const why = 'speed ' + speed.toFixed(2) + ' avg ' + vAvg.toFixed(2) + ' up ' + upShare.toFixed(2) + ' flight ' + flightShare.toFixed(2) + ' fell ' + (fell ? (fellAt / HZ).toFixed(1) + 's' : '-') + (obstacles.length ? ' cleared ' + cleared + '/' + obstacles.length + ' sizes ' + obstacles.map((o) => (o.top ? o.top : o.x1 - o.x0).toFixed(2)).join(',') : '') + ' strides ' + (ep.runner ? ep.runner.strides : 0);
   const blocks = ep.terrain ? ep.terrain.statics : null;
   return { score, pass: pass ? 1 : 0, why, frames: recFrames, blocks };
 }
