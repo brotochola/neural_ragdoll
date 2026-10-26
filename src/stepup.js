@@ -6,7 +6,10 @@
 //   2 PUSH   the lead leg straightens and the torso leans over it; the trail leg pushes off
 //   3 TUCK   the trail leg rises over the edge
 //   4 PLANT  the trail leg comes down onto the box
-//   5 DONE   the stand net takes over (the caller decides)
+//   5 RISE   (if p.riseT > 0.15) both feet on the box: both hips bring the torso up from the lean
+//            the climb ends in (25-40 degrees, and the stand net could not recover from it) to riseLean,
+//            knees to riseKnee, ankles keep the centre of mass over the feet
+//   6 DONE   the stand net takes over (the caller decides)
 // With p.hands (tall boxes): state -1 REACH first, arms up onto the top edge, grips closing when the
 // hands touch it. Then the arms pull while the lead leg lifts (0, 1), push down ("mantle") while the
 // body rises (2), and hold until both feet are up; the grips open when the stand net takes over.
@@ -30,6 +33,8 @@ export const SPEC = [
   ['reachArm', 2.3, 0.3], ['reachElbow', 0.2, 0.3], ['reachT', 1.0, 0.3],
   ['pullArm', 1.6, 0.4], ['pullElbow', 1.5, 0.4],
   ['mantleArm', 0.2, 0.4], ['mantleElbow', 0.1, 0.3],
+  // RISE (state 5); riseT 0 = no rise (older controllers)
+  ['riseT', 0, 0.6], ['riseLean', 0, 0.15], ['riseKnee', -0.1, 0.15], ['riseCd', 0, 0.5], ['riseCv', 0, 0.2],
 ];
 
 export function decode(v) {
@@ -79,8 +84,32 @@ export function makeController(world) {
     else if (st.state === 2 && st.t > p.pushT) next();
     else if (st.state === 3 && ((over(trail.foot) && world.py[trail.foot] > top + 0.03) || st.t > p.tuckT)) next();
     else if (st.state === 4 && (onBox(trail.foot) || st.t > p.plantT)) next();
-    if (st.state >= 5) return false;
+    if (st.state === 5 && !(p.riseT > 0.15)) return false;
     const torso = angleOf(0);
+    if (st.state === 5) {
+      if (!(p.riseT > 0.15) || st.t > p.riseT) return false;
+      if (st.torso0 == null) st.torso0 = torso;
+      const a = Math.min(1, st.t / Math.max(0.2, p.riseT * 0.7));
+      const e = a * a * (3 - 2 * a);
+      const leanGoal = st.torso0 * (1 - e) + side * p.riseLean * e;
+      const mid = (world.px[LEG[0].foot] + world.px[LEG[1].foot]) / 2;
+      const d = (m.centerX || 0) - mid;
+      const v = m.centerVelocityX || 0;
+      for (const leg of LEG) {
+        action[leg.hip] = command(leg.hip, angleOf(leg.thigh) - torso + (torso - leanGoal));
+        action[leg.knee] = command(leg.knee, p.riseKnee);
+        action[leg.ankle] = command(leg.ankle, 0 - angleOf(leg.shin) + p.riseCd * d + p.riseCv * v);
+        action[leg.shoulder] = command(leg.shoulder, 0 - torso);
+        action[leg.elbow] = command(leg.elbow, p.elbow);
+      }
+      action[0] = 0;
+      action[1] = 0;
+      action[4] = 0;
+      action[10] = 0;
+      for (let j = J; j < action.length; j++) action[j] = -1;
+      return true;
+    }
+    if (st.state >= 5) return false;
     const s = st.state;
     // Which leg holds the body: the trail leg until the lead foot is on the box, then the lead leg.
     const stance = s <= 1 ? trail : lead;
