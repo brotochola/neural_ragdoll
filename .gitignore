@@ -30,3 +30,5 @@ trained/course-falls.json
 trained/getup-expert-falls.json
 trained/walk-starts-[0-9]*.json
 trained/slow-handover.json
+trained/walk-starts2-controller.json
+trained/walk-slow-starts2.json
