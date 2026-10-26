@@ -557,12 +557,26 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.frames = Math.round(b.seconds * config.physics.hz);
   }
   out.getup = false;
+  out.startPose = null;
   if (commands === "getup") {
     const sign = randomSource() < 0.5 ? -1 : 1;
     out.getup = true;
     out.tilt = sign * (config.start.downTiltMinRadians + randomSource() * config.start.downTiltSpanRadians);
     out.drop = config.start.downDropMeters;
     out.settle = config.start.downSettleFrames;
+    // Training with the fall library: start somewhere along a recorded fall (reverse curriculum).
+    const falls = mode && mode.getupFalls;
+    if (falls && falls.length && mode.getupMax > 0) {
+      const g = config.getup;
+      const cap = Math.min(g.maxCap, mode.getupMax);
+      const low = Math.max(0, cap - g.band);
+      const frac = low + randomSource() * (cap - low);
+      const fall = falls[(randomSource() * falls.length) | 0];
+      out.startPose = fall[Math.round(frac * (fall.length - 1))];
+      out.startFrac = frac;
+      out.settle = 2; // A mid-fall pose would collapse in a passive 40-frame settle.
+      out.tilt = 0;
+    }
     out.frames = Math.round(config.getup.seconds * config.physics.hz);
   }
   for (let i = 0; i < list.length; i++) {
@@ -1014,6 +1028,7 @@ export function summariseEpisode(rows, offset, count, out) {
   let climbOnTop = 0;
   let climbHeight = 0;
   let headHit = 0;
+  let isGetup = 0;
   const last = offset + count;
   for (let i = offset; i < last; i++) {
     const row = rows[i];
@@ -1032,6 +1047,7 @@ export function summariseEpisode(rows, offset, count, out) {
     climbOnTop += row.climbOnTop || 0;
     climbHeight += row.climbHeight || 0;
     headHit += row.headHit || 0;
+    isGetup += row.isGetup || 0;
     if ((row.headImpact || 0) > headImpact) headImpact = row.headImpact;
     if (!row.stoodUp) stoodUp = false;
   }
@@ -1056,6 +1072,7 @@ export function summariseEpisode(rows, offset, count, out) {
   out.climbOnTop = climbOnTop / n;
   out.climbHeight = climbHeight / n;
   out.headHit = headHit / n;
+  out.isGetup = isGetup / n;
   return out;
 }
 
@@ -1693,6 +1710,18 @@ export function createSim(box) {
       this.cleanup();
       const world = this.world;
       resetPose(world, tilt, drop, this.options);
+      // A recorded whole-body pose (get-up curriculum): every part placed, at rest.
+      const pose = this.options.startPose;
+      if (pose && pose.length === world.parts.length * 3) {
+        const shift = this.options.shiftX || 0;
+        for (let i = 0; i < world.parts.length; i++) {
+          const part = world.parts[i];
+          b2Body_SetTransform(part.id, vector(pose[i * 3] + shift, pose[i * 3 + 1] + 0.01), b2MakeRot(pose[i * 3 + 2]));
+          b2Body_SetLinearVelocity(part.id, vector(0, 0));
+          b2Body_SetAngularVelocity(part.id, 0);
+          b2Body_SetAwake(part.id, true);
+        }
+      }
       // Grips from the last episode died with their boxes in cleanup.
       if (!this.grips) this.grips = [{ joint: null }, { joint: null }];
       this.grips[0].joint = null;
@@ -2842,6 +2871,7 @@ export function createSim(box) {
         climbOnTop: this.climbBox ? (this.footOnTop() ? 1 : 0) : 0,
         climbHeight: this.climbBox ? this.climbBox.top : 0,
         onBoard: this.board ? 1 : 0,
+        isGetup: this.options.getup ? 1 : 0,
       };
     }
     get weights() {

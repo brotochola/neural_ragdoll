@@ -271,6 +271,16 @@ export const config = {
     mixWalk: 0.2,
   },
   getup: {
+    // Reverse curriculum: training starts from a pose along a recorded passive fall
+    // (make-falls.js -> getup-falls.json), drawn in [cap - band, cap] of the way down. The cap
+    // rises as get-ups succeed; at 1 the start is lying still. The eval always starts lying.
+    fallsFile: "getup-falls.json",
+    startCap: 0.25,
+    maxCap: 1,
+    capStep: 0.05,
+    band: 0.3,
+    capPassRate: 0.3,
+    capWindow: 10,
     seconds: 10, // Getting up takes longer than the 6 s default.
     standShare: 0.8, // Pass: standing for this share of the last window, and up at the end.
     mixGetup: 0.6, // Skill 9 training: share of getup episodes. The rest split between stands and walks.
