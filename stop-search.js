@@ -16,6 +16,9 @@ const arg = (name, fallback) => {
 const iters = +arg('--iters', 40);
 const out = arg('--out', 'trained/stop-controller.json');
 const seeds = +arg('--seeds', 5);
+// --walk file --speed v: brake from this walker at this speed (default: the slow walker at 0.3 m/s).
+const walkFile = arg('--walk', 'trained/walk-controller.json');
+const walkSpeed = +arg('--speed', 0.3);
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
 const { ElmanNetwork } = await import('./src/net.js');
@@ -30,7 +33,7 @@ const world = sim.build();
 const HZ = config.physics.hz;
 const OUT = config.net.jointCount + config.net.gripOutputs;
 const standW = ElmanNetwork.copy(JSON.parse(fs.readFileSync(path.join(root, 'trained/stand-and-walk.json'), 'utf8')).theta);
-const slowSaved = JSON.parse(fs.readFileSync(path.join(root, 'trained/walk-controller.json'), 'utf8'));
+const slowSaved = JSON.parse(fs.readFileSync(path.join(root, walkFile), 'utf8'));
 const slowP = Object.assign(simb.decode(slowSaved.best), { track: true });
 const ctl = simb.makeController(world);
 // Stop parameters (offsets on the slow walker): swing targets, feedback gains, knee, step time.
@@ -47,7 +50,7 @@ function episode(v, seed) {
   const r = makeSeededRandom(6000 + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   start.tilt = 0;
-  start.walk.speed = 0.3;
+  start.walk.speed = walkSpeed;
   start.frames = 7.5 * HZ;
   world.rebuild();
   const ep = new sim.Episode(world, standW, 0, start.drop || 0, Object.assign({ phase: 0 }, start));
@@ -59,7 +62,7 @@ function episode(v, seed) {
     const m = this.measure;
     const f = this.frame;
     if (f < 0.5 * HZ) return orig();
-    if (f < switchAt) { m.walkSpeed = 0.3; m.walkDir = 1; ctl(slowP, this, tmp); }
+    if (f < switchAt) { m.walkSpeed = walkSpeed; m.walkDir = 1; ctl(slowP, this, tmp); }
     else if (f < switchAt + 2 * HZ) { m.walkSpeed = 0; m.walkDir = 1; ctl(p, this, tmp); }
     else {
       if (!hold) hold = [config.partIndex.footLeft, config.partIndex.footRight].map((q) => pose.soleOf(world, q));
@@ -111,7 +114,7 @@ for (let it = 0; it < iters; it++) {
       const val = evaluate(c.v, 500, 10);
       if (!best || val.score > best.score) {
         best = { v: c.v, ...val };
-        fs.writeFileSync(path.resolve(root, out), JSON.stringify({ params: Object.fromEntries(SPEC.map(([k, b], i) => [k, b + best.v[i]])), pass: best.pass }));
+        fs.writeFileSync(path.resolve(root, out), JSON.stringify({ walk: walkFile, speed: walkSpeed, params: Object.fromEntries(SPEC.map(([k, b], i) => [k, b + best.v[i]])), pass: best.pass }));
       }
     }
     console.log('iter', it, 'held-out stops', best.pass + '/10', 'gen best', cands[0].score.toFixed(2));
