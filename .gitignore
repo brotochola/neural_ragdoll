@@ -19,3 +19,4 @@ trained/walk-expert.json
 trained/walk-simbicon3.json
 trained/walk-fast*.json
 trained/run-*.json
+trained/plan-climb-*.json
