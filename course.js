@@ -23,6 +23,10 @@ const stairsFile = arg('--stairs-walk', null);
 const stepFile = arg('--stepup', 'trained/stepup-r-03-final.json');
 const seconds = +arg('--seconds', 70);
 const verbose = args.includes('--verbose');
+// --dump-states file: save the whole-body state (positions relative to the step's edge, velocities)
+// each time the selector hands over to the climb, to tune the climb from real arrivals.
+const dumpFile = arg('--dump-states', null);
+const dumped = [];
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -52,6 +56,9 @@ const walkP = Object.assign(simb.decode(walkSaved.best), { track: !!walkSaved.tr
 // when asked (it reached the platform at 1.25 m/s with 0.3 requested).
 const slowSaved = load(arg('--slow-walk', 'trained/walk-controller.json'));
 const slowP = Object.assign(simb.decode(slowSaved.best), { track: !!slowSaved.track });
+// STOP: the walking controller with no forward swing target and strong balance feedback places each
+// swing foot under where the body is heading (the capture point), so it halts in a step or two.
+const stopP = Object.assign({}, slowP, { swing0: +(process.env.STOP_SWING || 0.05), swing1: 0, cd: +(process.env.STOP_CD || 1.2), cv: +(process.env.STOP_CV || 0.5), track: true });
 const stairsSaved = stairsFile ? load(stairsFile) : null;
 const stairsP = stairsSaved ? Object.assign(simb.decode(stairsSaved.best), { track: !!stairsSaved.track }) : walkP;
 const stepP = step.decode(load(stepFile).best);
@@ -108,6 +115,18 @@ function run(seed, record) {
       const fl = world.px[config.partIndex.footLeft], fr = world.px[config.partIndex.footRight];
       log.push(((ep.frame / HZ).toFixed(1)) + 's ' + m + (m === 'climb' ? ' [L ' + fl.toFixed(2) + ' R ' + fr.toFixed(2) + (ep.climbBox || nextRiseLog() ? ' edge ' + nextRiseLog() : '') + ']' : ''));
       if (verbose) console.log('  ', (ep.frame / HZ).toFixed(1), 's ->', m, 'x', ((world.px[0] - startX)).toFixed(2));
+    }
+    if (m === 'climb' && dumpFile) {
+      const a = nextRise();
+      if (a) {
+        const pose = [];
+        const vel = [];
+        for (let k = 0; k < world.parts.length; k++) {
+          pose.push(+(world.px[k] - a.box.x0).toFixed(4), +(world.py[k] - a.here).toFixed(4), +Math.atan2(world.s[k], world.c[k]).toFixed(4));
+          vel.push(+world.vx[k].toFixed(3), +world.vy[k].toFixed(3), +world.spin[k].toFixed(3));
+        }
+        dumped.push({ pose, vel, rise: +a.rise.toFixed(3) });
+      }
     }
     mode = m;
     modeT = 0;
@@ -168,7 +187,7 @@ function run(seed, record) {
     // The stand-and-walk net reads the walk command as an input: zero it unless walking, or it walks.
     // The gait clock is an input too: outside walking the stand net gets no walk command at all,
     // exactly as in its standing training.
-    if (mode === 'walk' || mode === 'brake' || mode === 'netwalk') { if (!this.options.walk) this.options.walk = walkSpec; this.options.walk.speed = mode === 'netwalk' ? 0.3 : start.walk.speed; }
+    if (mode === 'walk' || mode === 'brake' || mode === 'netwalk' || mode === 'stop') { if (!this.options.walk) this.options.walk = walkSpec; this.options.walk.speed = mode === 'netwalk' ? 0.3 : start.walk.speed; }
     else this.options.walk = null;
     if (mode === 'steady' || mode === 'getup' || mode === 'backoff') pinMarks(this);
     const m = this.measure;
@@ -204,7 +223,7 @@ function run(seed, record) {
       // when its walk command goes to zero (it was trained to do both); the walking controllers do not
       // stop when asked.
       if (tall && ahead.dist < +(process.env.NETWALK_AT || 1.8) && process.env.NETWALK) { setMode('netwalk'); pinMarks(this); }
-      if (tall && ahead.dist < +(process.env.STOP_AT || 0.8)) setMode(process.env.NO_BRAKE ? 'steady' : 'brake');
+      if (tall && ahead.dist < +(process.env.STOP_AT || 0.8)) setMode(process.env.STOP_MODE || (process.env.NO_BRAKE ? 'steady' : 'brake'));
       else {
         const onStairs = ahead && ahead.rise <= 0.15 && ahead.dist < 1.0 && ahead.box.top > L.platformTop + 0.01;
         const near = tall && ahead.dist < 3.0;
@@ -238,6 +257,27 @@ function run(seed, record) {
       // middle of a wide stance left it 14 cm away and the knee hit the edge.
       const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
       if (!ahead || ahead.box.x0 - front < +(process.env.STOP_FRONT || 0.3)) setMode('steady');
+    } else if (mode === 'stop') {
+      m.walkSpeed = 0;
+      m.walkDir = 1;
+      walkCtl(stopP, this, tmp);
+      for (let j = 0; j < OUT; j++) this.action[j] = tmp[j];
+      if (modeT > 0.6 && Math.abs(m.centerVelocityX || 0) < 0.1 && this.measure.touch[config.partIndex.footLeft] && this.measure.touch[config.partIndex.footRight]) setMode('hold');
+      else if (modeT > 3) setMode('hold');
+    } else if (mode === 'hold') {
+      // Stand still on both feet with the pose executor, then decide.
+      if (!this.holdFeet) this.holdFeet = [config.partIndex.footLeft, config.partIndex.footRight].map((f) => pose.soleOf(world, f));
+      const g = groundUnder(world.px[0]);
+      const mid = (this.holdFeet[0].x + this.holdFeet[1].x) / 2;
+      const goal = { pelvis: { x: mid, y: g + 0.92 }, torso: 0, feet: this.holdFeet.map((q) => ({ x: q.x, y: q.y, angle: 0 })), planted: [true, true] };
+      pose.commandsFor(world, pose.balancedTargets(goal, m, { planted: [true, true], kHip: 1.5, kAnkle: 3, kAnkleVel: 0.15, kHipVel: 0.1 }), this.action);
+      if (modeT > 1.0) {
+        this.holdFeet = null;
+        const front = Math.max(world.px[config.partIndex.footLeft], world.px[config.partIndex.footRight]);
+        const gap = ahead ? ahead.box.x0 - front : 9;
+        if (ahead && ahead.rise > 0.15 && gap < 0.6) setMode('climb');
+        else setMode('walk');
+      }
     } else if (mode === 'brake') {
       // The walking controller asked for zero speed steps in place and comes to a stop; the stand net
       // took over from a 0.3 m/s walk badly (it fell forward onto the platform).
@@ -295,4 +335,5 @@ for (let i = 0; i < n; i++) {
 }
 console.log('course finished', ok + '/' + n);
 if (recordFile) fs.writeFileSync(recordFile, JSON.stringify({ skill: 6, fps: HZ / 3, shapes, episodes }));
+if (dumpFile) { fs.writeFileSync(dumpFile, JSON.stringify(dumped)); console.log('states', dumped.length, '->', dumpFile); }
 sim.destroyWorld(world);

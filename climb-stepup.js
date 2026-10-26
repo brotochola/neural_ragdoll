@@ -52,7 +52,11 @@ const stairPause = +arg('--pause', 1.0); // seconds of the stand net between ste
 const hands = args.includes('--hands');
 // --robust: varied starting stance (feet 0.12-0.8 m apart) and distance to the edge (0.2-0.55 m),
 // as after walking up to a box on the course.
-const robust = args.includes('--robust'); // reach, grab the top edge, pull and mantle (tall boxes)
+const robust = args.includes('--robust');
+// --states file: start from recorded arrivals (course.js --dump-states): body positions relative to the
+// box edge, with velocities. Half the starts, the other half --robust random ones if given.
+const statesFile = arg('--states', null);
+const arrivals = statesFile ? JSON.parse(fs.readFileSync(statesFile, 'utf8')) : null; // reach, grab the top edge, pull and mantle (tall boxes)
 const decode = (v) => Object.assign(decodeBase(v), { hands });
 const controller = makeController(world);
 const dims = SPEC.length;
@@ -68,6 +72,17 @@ function makeStart(seed) {
   if (robust) {
     start.stance = 0.06 + r() * 0.34;
     start.climb.near = 0.2 + r() * 0.35;
+  }
+  if (arrivals && (!robust || r() < 0.5)) {
+    const a = arrivals[Math.floor(r() * arrivals.length)];
+    const P = config.partIndex;
+    const mid = (a.pose[P.footLeft * 3] + a.pose[P.footRight * 3]) / 2;
+    start.startPose = a.pose;
+    start.startVel = a.vel;
+    start.climb.near = -mid; // the box edge sits where it was when the course handed over
+    start.tilt = 0;
+    start.drop = 0;
+    start.settle = 0;
   }
   if (stairsN > 0) {
     start.climb = null;
