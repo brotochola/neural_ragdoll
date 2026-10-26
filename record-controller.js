@@ -20,6 +20,8 @@ const out = arg('--out', 'rec-controller.json');
 const height = +arg('--height', 0.3);
 const side = +arg('--side', 1);
 const first = +arg('--first', 100);
+const speedMin = +arg('--speed-min', 0);
+const speedMax = +arg('--speed-max', 0);
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -36,6 +38,7 @@ const weights = ElmanNetwork.copy(JSON.parse(fs.readFileSync(path.join(root, 'tr
 const J = config.net.jointCount;
 const OUT = outputCountOf();
 let drive;
+if (speedMax > 0) config.walk.maxStandSpeed = Math.max(config.walk.maxStandSpeed, speedMax * 1.6);
 if (walkFile) {
   const { decode, makeController } = await import('./src/simbicon.js');
   const saved = JSON.parse(fs.readFileSync(path.resolve(root, walkFile), 'utf8'));
@@ -74,6 +77,7 @@ for (let e = 0; e < n; e++) {
   const seed = first + e;
   const r = makeSeededRandom((walkFile ? 3000 : 2000) + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(skill));
+  if (start.walk && speedMax > 0) start.walk.speed = speedMin + r() * (speedMax - speedMin);
   if (start.climb) {
     start.climb.side = side;
     start.climb.height = height;
