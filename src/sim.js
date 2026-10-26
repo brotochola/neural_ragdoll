@@ -1905,6 +1905,27 @@ export function createSim(box) {
         this.grippable.push({ id, cx: x0 + half, cy: climb.height / 2 });
         if (climb.high) highboxMarks(this.options, this.climbBox);
       }
+      // STAIRS: n steps of rise x run starting near the feet, then a landing. Each step is a static box
+      // from its front edge to the end of the landing, (i+1) x rise tall. this.climbBox is the first.
+      this.stairs = null;
+      const stairs = this.options.stairs;
+      if (stairs && stairs.n > 0) {
+        const mid =
+          ((this.measure.partX[config.partIndex.footLeft] || 0) +
+            (this.measure.partX[config.partIndex.footRight] || 0)) / 2;
+        const start = mid + (stairs.near || 0.3);
+        const end = start + stairs.n * stairs.run + (stairs.landing || 1);
+        this.stairs = [];
+        for (let i = 0; i < stairs.n; i++) {
+          const x0 = start + i * stairs.run;
+          const top = (i + 1) * stairs.rise;
+          const id = spawnStaticBox(world, (x0 + end) / 2, (end - x0) / 2, top / 2);
+          this.objects.push(id);
+          this.stairs.push({ x0, x1: end, top, side: 1 });
+          this.grippable.push({ id, cx: (x0 + end) / 2, cy: top / 2 });
+        }
+        this.climbBox = this.stairs[0];
+      }
       this.measure.climbBox = this.climbBox;
       if (this.options.getup) getupMarks(this.measure, this.options);
       // BOARD: the foot marks sit on the plank, not on the floor. Planted at floor height they were

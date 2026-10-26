@@ -45,6 +45,9 @@ const OUT = outputCountOf();
 const G = OUT - J; // grip outputs
 const P = config.partIndex;
 const { SPEC, decode: decodeBase, makeController } = await import('./src/stepup.js');
+const stairsN = +arg('--stairs', 0); // a flight of N steps instead of one box
+const rise = +arg('--rise', 0.18);
+const run = +arg('--run', 0.3);
 const hands = args.includes('--hands'); // reach, grab the top edge, pull and mantle (tall boxes)
 const decode = (v) => Object.assign(decodeBase(v), { hands });
 const controller = makeController(world);
@@ -58,6 +61,10 @@ function makeStart(seed) {
   const start = sim.fillTrainingStart({}, r, evalMode(11));
   start.climb.side = side;
   start.climb.height = height;
+  if (stairsN > 0) {
+    start.climb = null;
+    start.stairs = { n: stairsN, rise, run, near: 0.25 + r() * 0.2, landing: 1 };
+  }
   return start;
 }
 
@@ -67,9 +74,19 @@ function episode(p, seed, record) {
   world.rebuild();
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: 0 }, start));
   let done = false;
+  let step = 0; // stairs: which step the controller is climbing
   const setCommand = (e) => {
-    if (!done && e.frame / config.physics.hz < maxSeconds) done = !controller(p, e, e.action);
-    else done = true;
+    if (!done && e.frame / config.physics.hz < maxSeconds) {
+      done = !controller(p, e, e.action);
+      // Stairs: one step done, aim at the next and start the step-up again.
+      if (done && e.stairs && step < e.stairs.length - 1) {
+        step++;
+        e.climbBox = e.stairs[step];
+        e.measure.climbBox = e.climbBox;
+        e.stepup = null;
+        done = !controller(p, e, e.action);
+      }
+    } else done = true;
     e.controllerState = done ? 5 : (e.stepup ? e.stepup.state : 0);
     if (done) for (let j = J; j < OUT; j++) e.action[j] = -1; // let go once the stand net drives
   };
@@ -87,6 +104,7 @@ function episode(p, seed, record) {
   let bestRise = 0; // highest head over the box top while both feet are on it
   let tipped = 0; // frames with the torso tipped past ~80 degrees: the hands search flipped head-first onto the box
   let allFrames = 0;
+  let stepsUp = 0; // stairs: highest step with both feet on it and the head up
   let bestHip = 0;
   const poses = record ? [] : null;
   let f = 0;
@@ -104,6 +122,7 @@ function episode(p, seed, record) {
     // propped on the box (head 0.13 m), which paid the feet-on-top terms.
     const headUpNow = Math.max(0, Math.min(1, (m.headHeight - top) / standHead));
     allFrames++;
+    if (ep.stairs && m.headHeight > 1.0) for (let k = stepsUp; k < ep.stairs.length; k++) if (feetOnBox(m, ep.stairs[k]) === 2) stepsUp = k + 1;
     if (m.torsoCos < 0.2) tipped++;
     if (m.headHeight > 0.9) {
       bestFoot = Math.max(bestFoot, Math.min(1, low / top) * 0.7 + Math.min(1, high / top) * 0.3);
@@ -128,10 +147,10 @@ function episode(p, seed, record) {
   }
   const s = ep.stats;
   const frames2 = s.windowFrames || 0;
-  const pass = !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
-  const why = 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
+  const pass = (!ep.stairs || stepsUp === ep.stairs.length) && !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
+  const why = (ep.stairs ? 'steps ' + stepsUp + '/' + ep.stairs.length + ' ' : '') + 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
   const boxInfo = ep.climbBox ? { x0: ep.climbBox.x0, x1: ep.climbBox.x1, top: ep.climbBox.top } : null;
-  return { boxInfo, why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise - 4 * tipped / Math.max(1, allFrames), pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
+  return { boxInfo, why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise - 4 * tipped / Math.max(1, allFrames) + 2 * stepsUp, pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
 }
 
 // seedBase: each generation draws new practice starts. With 3 fixed ones the 0.3 m search passed
