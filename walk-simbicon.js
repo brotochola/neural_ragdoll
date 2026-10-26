@@ -25,7 +25,7 @@ const seeds = +arg('--seeds', 4);
 const init = arg('--init', null);
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
-const { createSim } = await import('./src/sim.js');
+const { createSim, feetOnBox } = await import('./src/sim.js');
 const { ElmanNetwork, outputCountOf } = await import('./src/net.js');
 const { makeSeededRandom, randomNormalSample } = await import('./src/utils.js');
 const { evalMode } = await import('./src/training.js');
@@ -51,6 +51,10 @@ const hold = +arg('--hold', 0);
 const speedMin = +arg('--speed-min', 0);
 const speedMax = +arg('--speed-max', 0);
 const run = args.includes('--run');
+// --stairs N --rise R --tread T: walk up a flight of stairs that starts 0.6-0.9 m ahead.
+const stairsN = +arg('--stairs', 0);
+const stairRise = +arg('--rise', 0.1);
+const stairTread = +arg('--tread', 0.3);
 if (arg('--period', null)) config.walk.periodSeconds = +arg('--period', 0.9);
 if (speedMax > 0) config.walk.maxStandSpeed = Math.max(config.walk.maxStandSpeed, speedMax * 1.6);
 const decode = (v) => Object.assign(decodeBase(v), { track, clock });
@@ -59,6 +63,10 @@ function episode(p, seed) {
   const r = makeSeededRandom(3000 + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   if (speedMax > 0) start.walk.speed = speedMin + r() * (speedMax - speedMin);
+  if (stairsN > 0) {
+    start.stairs = { n: stairsN, rise: stairRise, run: stairTread, near: 0.6 + r() * 0.3, landing: 2 };
+    start.frames = Math.round((4 + stairsN * 1.2) * config.physics.hz);
+  }
   world.rebuild();
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: seed % 6 }, start));
   const delay = Math.round((start.walk.delay || 0) * config.physics.hz);
@@ -81,11 +89,13 @@ function episode(p, seed) {
   let frames = 0;
   let upright = 0;
   let stride = 0;
+  let stepsUp = 0;
   while (!ep.advanceOneFrame()) {
     if (ep.frame < delay) continue;
     frames++;
     if (!ep.measure.touch[feet[0]] && !ep.measure.touch[feet[1]]) flight++;
     if (ep.measure.headHeight > 1.35 && ep.measure.torsoCos > 0.8) upright++;
+    if (ep.stairs && ep.measure.torsoCos > 0.7) for (let k = stepsUp; k < ep.stairs.length; k++) if (feetOnBox(ep.measure, ep.stairs[k]) === 2) stepsUp = k + 1;
     for (let k = 0; k < 2; k++) {
       const down = !!ep.measure.touch[feet[k]];
       const x = world.px[feet[k]];
@@ -114,6 +124,13 @@ function episode(p, seed) {
   // With --track: walking at the commanded speed matters (the first controller walked 3.2 m for 2.0).
   const speedErr = track && s.walkCmd > 0 ? Math.abs(Math.min(2, (s.walkDist || 0) / s.walkCmd) - 1) : 0;
   const score = -1.5 * speedErr + 3 * share + 2 * Math.min(1, walked) * (0.3 + 0.7 * share) + 2 * alt * alive + 2 * alive - (run ? 0 : 2) * flightShare + (pass ? 3 : 0);
+  if (stairsN > 0) {
+    const topNow = ep.stairs ? ep.stairs[ep.stairs.length - 1].top : 0;
+    const up = (ep.measure.headHeight - topNow) > 1.35 && ep.measure.torsoCos > 0.8;
+    const passS = stepsUp === stairsN && up;
+    const scoreS = 3 * stepsUp / stairsN + (up ? 1 : 0) + 2 * alive + (passS ? 3 : 0) + alt;
+    return { score: scoreS, pass: passS ? 1 : 0, alt, why: 'steps ' + stepsUp + '/' + stairsN + ' up ' + (up ? 1 : 0) + ' head ' + ep.measure.headHeight.toFixed(2) };
+  }
   const why = 'stood ' + share.toFixed(2) + ' walked ' + (s.walkDist || 0).toFixed(2) + '/' + (s.walkCmd || 0).toFixed(2) + ' steps ' + steps.join('/') + ' flight ' + flightShare.toFixed(2) + ' step ' + (stride / Math.max(1, steps[0] + steps[1])).toFixed(2) + 'm speed ' + (start.walk.speed).toFixed(2) + ' head ' + (ep.measure.headHeight || 0).toFixed(2);
   return { score, pass: pass ? 1 : 0, alt, why };
 }
@@ -181,11 +198,11 @@ for (let it = 0; it < iters; it++) {
   }
   if (it % 5 === 0 || it === iters - 1) {
     console.log('iter', it, 'held-out best', best.score.toFixed(3), 'pass', best.pass + '/12', 'alt', best.alt.toFixed(2), 'gen best', cands[0].score.toFixed(3));
-    fs.writeFileSync(out, JSON.stringify({ track, clock, hold, run, period: config.walk.periodSeconds, speedMin, speedMax, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass, alt: best.alt }));
+    fs.writeFileSync(out, JSON.stringify({ track, clock, hold, run, period: config.walk.periodSeconds, speedMin, speedMax, stairs: stairsN ? { n: stairsN, rise: stairRise, tread: stairTread } : null, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass, alt: best.alt }));
   }
 }
 let fresh = 0;
 for (let i = 0; i < 12; i++) fresh += episode(decode(best.v), 100 + i).pass;
-fs.writeFileSync(out, JSON.stringify({ track, clock, hold, run, period: config.walk.periodSeconds, speedMin, speedMax, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass, alt: best.alt, freshPass: fresh }));
+fs.writeFileSync(out, JSON.stringify({ track, clock, hold, run, period: config.walk.periodSeconds, speedMin, speedMax, stairs: stairsN ? { n: stairsN, rise: stairRise, tread: stairTread } : null, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass, alt: best.alt, freshPass: fresh }));
 console.log('done fresh pass', fresh + '/12', '->', out);
 sim.destroyWorld(world);
