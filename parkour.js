@@ -204,6 +204,7 @@ function evaluate(v, seedBase, n) {
 SPEC.push(['jumpWin', 0.9, 0.3]);
 SPEC.push(['takeoff', 0.3, 0.15], ['kStride', 1.0, 0.5]);
 SPEC.push(['jumpMargin', 0.2, 0.15]);
+SPEC.push(['jumpTrail', 0, 0.4]);
 
 if (args.includes('--show')) {
   const v = JSON.parse(fs.readFileSync(init, 'utf8')).best;

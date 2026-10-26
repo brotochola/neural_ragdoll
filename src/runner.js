@@ -41,6 +41,8 @@ export const SPEC = [
   ['jumpPlace', 0, 0.2], // landing thigh
   ['jumpArm', 0, 0.4], // arm swing amplitude
 ];
+// Added later and kept out of SPEC so older parameter vectors keep their layout (parkour.js appends it):
+// jumpTrail, the trailing thigh in the air (+ = brought forward and up, to clear a box).
 
 export function decode(v) {
   const p = {};
@@ -106,7 +108,7 @@ export function makeController(world) {
       const falling = (m.centerVelocityY || 0) < 0;
       action[swing.knee] = command(swing.knee, p.reachKnee + (J2 && !falling ? p.jumpTuck : 0));
       action[swing.ankle] = command(swing.ankle, 0.0 - angleOf(swing.shin));
-      action[stance.hip] = command(stance.hip, p.trailHip - torso);
+      action[stance.hip] = command(stance.hip, p.trailHip + (J2 ? p.jumpTrail || 0 : 0) - torso);
       action[stance.knee] = command(stance.knee, p.trailKnee + (J2 ? p.jumpTuck : 0));
       action[stance.ankle] = command(stance.ankle, 0.1 - angleOf(stance.shin));
     }
