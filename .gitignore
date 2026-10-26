@@ -44,3 +44,4 @@ trained/mountain-*.json
 trained/stepper-*.json
 *.log
 trained/crag-*.json
+trained/simb-*.json
