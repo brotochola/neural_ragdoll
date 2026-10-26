@@ -41,7 +41,8 @@ const rewardTotalInputCount =
 // then three terrain numbers for the climb level: a box ahead (0/1), the distance from the feet
 // to its near edge, and its height. All 0 when there is no walk and no box, so a net trained to
 // stand is unchanged by them.
-const walkInputCount = 6;
+// Then two grip flags: 1 while that hand is holding something (left, right).
+const walkInputCount = 8;
 
 export const config = {
   physics: {
@@ -57,6 +58,7 @@ export const config = {
   net: {
     hidden: [47, 31, 40, 0], // Counts, input toward the outputs. The last layer is the recurrent one. These two widths are what 0.3 and 0.2 built at 156 inputs.
     feedbackUnits: 0, // Nonlinear summary of the previous action. It enters the recurrent layer only.
+    gripOutputs: 2, // Extra outputs after the 14 motors: grab with the left hand, grab with the right. See sim updateGrip.
     walkSkip: true, // Each joint output also reads the three walk inputs directly, so a rhythm is a one-layer problem. Zero-initialised.
     skipTargetInputs: false, // Each joint output also reads the target columns directly, not only through the hidden units. That makes "move this joint toward this command" a one-layer problem. Off for now: it was tried and it hurt skill 1 (0.45 at gen 480 against 0.95 at gen 160 without it), and there is no evidence it helps. See the README.
     jointCount: 14, // Motor joints, and the width of the action vector. Waist, neck, and six joints on each side.
@@ -98,6 +100,9 @@ export const config = {
     hipMeters: 0.96, // Hip joint height in the standing blueprint.
     armReachMeters: 0.57, // Shoulder to hand centre, arm straight: 0.28 + 0.26 + 0.03.
     legReachMeters: 0.945, // Hip to foot centre, leg straight: 0.44 + 0.42 + 0.085.
+    shoulderTorque: 250, // Was 70. Climbing a box with the hands holds the body on the arms.
+    elbowTorque: 200, // Was 50.
+    wristTorque: 60, // Was 25.
     velocityScale: 4, // Metres per second that maps to a full-scale input for part velocity. A diving head hits 2-3 m/s, a swinging hand 4-5.
     waistForwardRadians: (12 * Math.PI) / 180, // Chest flexes this far toward the toes.
     waistBackRadians: (6 * Math.PI) / 180, // Chest extends this far backward. Less than the forward bend.
@@ -225,7 +230,29 @@ export const config = {
   // 8 climb: a box ahead, the marks slide forward and rise by its height. Trained mixed with walks and stands.
   // 9 getup: starts lying face up or down and has to end standing. Trained mixed with stands and walks.
   // 10 board: standing on a plank that tilts on a pivot, driven by a slow wave.
-  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb", "getup", "board"],
+  // 11 highbox: a tall box ahead or behind, marks for head, hands and feet standing on top. Grip helps.
+  commands: ["", "none", "head", "hand", "foot", "all", "walk", "mix", "climb", "getup", "board", "highbox"],
+  highbox: {
+    halfWidth: 0.5, // A 1 m wide box: room to stand on top.
+    nearMin: 0.25, // Gap from the feet midpoint to the facing edge.
+    nearMax: 0.45,
+    startCap: 0.3, // Curriculum: the cap starts here and climbs to maxCap. The eval is always evalHeight.
+    maxCap: 0.9, // About half the doll's height.
+    capStep: 0.03,
+    band: 0.1,
+    capPassRate: 0.25,
+    capWindow: 10,
+    evalHeight: 0.9,
+    standInset: 0.35, // Where the standing marks go: this far onto the box from the facing edge.
+    seconds: 12,
+    standShare: 0.5,
+    mixHighbox: 0.6, // Training: share of tall-box episodes. The rest split between stands and walks.
+    mixWalk: 0.2,
+  },
+  grip: {
+    on: 0.5, // A grip output above this, with the hand touching a grippable object, grabs it.
+    off: 0.3, // Below this, the hand lets go.
+  },
   board: {
     halfLength: 0.8, // A 1.6 m plank.
     halfThick: 0.025,
@@ -548,6 +575,7 @@ export const config = {
       prone: 0.6,
       walk: 0.6,
       climb: 0.5, // Skill 8: ends with a foot on top of the box, upright, the head never touched anything.
+      highbox: 0.5, // Skill 11: both feet on top of the tall box at the end, upright over it, head never down.
       board: 0.7, // Skill 10: on the tilting plank, standing 80% of the last 3 s, up at the end, head never down.
       getup: 0.7, // Skill 9: from lying, ends standing on both feet for most of the last 3 s.
       mix: 1, // Skill 7: both the stand bar and the walk bar (its rate is the worse of the two, as a share of its bar).

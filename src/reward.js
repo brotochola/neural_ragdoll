@@ -252,7 +252,9 @@ function uprightRow(measure) {
       // the box top. The walking gait skims the floor (<2 cm), so the parent climbed 5 cm boxes
       // 7/12 and 8 cm boxes 0/12: nothing paid for raising the foot until it was already on top.
       const zone = config.climb.liftZone || 0;
-      if (weight.climbLift && zone > 0 && x > box.x0 - zone && x < box.x0 + 0.05 && box.top > 0) {
+      const facing = box.side < 0 ? box.x1 : box.x0;
+      const inZone = box.side < 0 ? x < facing + zone && x > facing - 0.05 : x > facing - zone && x < facing + 0.05;
+      if (weight.climbLift && zone > 0 && inZone && box.top > 0) {
         let lift = (y - config.skill.footGroundMeters) / box.top;
         lift = lift < 0 ? 0 : lift > 1 ? 1 : lift;
         climb += weight.climbLift * lift;

@@ -301,9 +301,11 @@ export class RagDoll2D {
     addJoint(1, 2, 0, 1.56, -0.5, 0.5, 20);
     for (let side = 0; side < 2; side++) {
       const base = 3 + 6 * side;
-      addJoint(1, base, 0, 1.48, -2, 2.5, 70);
-      addJoint(base, base + 1, 0, 1.2, 0, 2.4, 50);
-      addJoint(base + 1, base + 2, 0, 0.94, -1, 1, 25);
+      // Arm torques come from config.body (shoulder, elbow, wrist). They were 70, 50 and 25: too weak
+      // to hold 41 kg on the arms, which climbing a box with the hands needs.
+      addJoint(1, base, 0, 1.48, -2, 2.5, cfg.body.shoulderTorque || 70);
+      addJoint(base, base + 1, 0, 1.2, 0, 2.4, cfg.body.elbowTorque || 50);
+      addJoint(base + 1, base + 2, 0, 0.94, -1, 1, cfg.body.wristTorque || 25);
       addJoint(0, base + 3, 0, 0.96, -cfg.body.hipBackRadians, cfg.body.hipForwardRadians, 140, cfg.joint.hipHertz);
       addJoint(base + 3, base + 4, 0, 0.52, -2.4, 0, 140, cfg.joint.kneeHertz);
       addJoint(base + 4, base + 5, 0, 0.1, -0.6, 0.6, 60);

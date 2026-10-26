@@ -320,6 +320,13 @@ function obeys(row, spec) {
 
 function skillPass(skill, row) {
   const group = commandGroup(skill);
+  if (group === 'highbox') {
+    // Both feet on top of the tall box at the end, upright over it, standing half the last window.
+    const frames = row.windowFrames || 0;
+    if (!(frames > 0) || !row.climbOnTop) return false;
+    if ((row.headHeight || 0) - (row.climbHeight || 0) < config.body.standingHeadMeters) return false;
+    return row.windowStood / frames >= config.highbox.standShare;
+  }
   if (group === 'board') {
     // On the plank: up at the end, standing for most of the last window, head never down.
     const frames = row.windowFrames || 0;
@@ -369,7 +376,7 @@ function skillPass(skill, row) {
 }
 
 function skillKey(skill) {
-  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix', 'climb', 'getup', 'board', 'grip'][skill] || 'stand';
+  return ['', 'stand', 'head', 'hand', 'foot', 'all', 'walk', 'mix', 'climb', 'getup', 'board', 'highbox', 'sequence'][skill] || 'stand';
 }
 
 function targetGainText() {
@@ -818,8 +825,8 @@ async function runMain() {
     }
     meanWalk /= scores.length;
     // CLIMB curriculum: raise the box cap when the recent climb episodes succeed often enough.
-    if ((state.skill | 0) === 8) {
-      const c = config.climb;
+    if ((state.skill | 0) === 8 || (state.skill | 0) === 11) {
+      const c = (state.skill | 0) === 11 ? config.highbox : config.climb;
       if (!(state.climbMax > 0)) state.climbMax = c.startCap;
       let tried = 0;
       let made = 0;
@@ -1208,7 +1215,7 @@ function skillJobs(weights, skill, n, secondsHere, trace) {
           const leaned = last && last.leaned != null ? ' leaned ' + last.leaned.toFixed(3) + ' swing ' + (last.bestSwing || 0).toFixed(3) + ' land ' + (last.bestClosed || 0).toFixed(3) + '/' + (last.stoodLeanN || 0) : '';
           const steps = last && last.steps != null ? ' steps ' + last.steps.toFixed(2) : '';
           const walked = last && last.walk ? ' walked ' + last.walk.toFixed(3) + ' best ' + last.bestWalk.toFixed(2) : '';
-          const climbed = (state.skill | 0) === 8 ? ' climb cap ' + (state.climbMax || 0).toFixed(2) + ' rate ' + (state.climbRate || 0).toFixed(2) : '';
+          const climbed = (state.skill | 0) === 8 || (state.skill | 0) === 11 ? ' climb cap ' + (state.climbMax || 0).toFixed(2) + ' rate ' + (state.climbRate || 0).toFixed(2) : '';
           log('gen ' + state.gen + ' skill ' + skill + ' mean ' + (last ? last.mean.toFixed(3) : '?') + ' stood ' + (last ? last.stood.toFixed(2) : '?') + alive + foot + closed + leaned + steps + walked + climbed + ' ever ' + state.bestEverScore.toFixed(3) + ' ' + sec + 's');
           saveTrainState(state);
         }

@@ -233,6 +233,8 @@ function buildObservationLabels() {
     labels.push({ name: "box ahead", tip: "Climb level only: 1 while there is a box. Zero otherwise." });
     labels.push({ name: "box distance", tip: "Climb level only: near edge of the box minus the feet midpoint, in metres, clamped to -1..1." });
     labels.push({ name: "box height", tip: "Climb level only: height of the box top over 0.5 m." });
+    labels.push({ name: "grip left", tip: "1 while the left hand is holding something." });
+    labels.push({ name: "grip right", tip: "1 while the right hand is holding something." });
   }
   if (labels.length !== config.net.inputCount)
     throw new Error("observation labels " + labels.length);
@@ -458,6 +460,11 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.commands = randomSource() < (config.walk.mixWalkShare ?? 0.5) ? "walk" : "none";
   // CLIMB training mixes in walks and stands, so the earlier skills are not forgotten.
   // The eval (mode.eval) is always a climb.
+  if (out.commands === "highbox" && !(mode && mode.eval)) {
+    const roll = randomSource();
+    const h = config.highbox;
+    out.commands = roll < h.mixHighbox ? "highbox" : roll < h.mixHighbox + h.mixWalk ? "walk" : "none";
+  }
   if (out.commands === "board" && !(mode && mode.eval)) {
     const roll = randomSource();
     const b = config.board;
@@ -515,6 +522,25 @@ export function fillTrainingStart(out, randomSource, mode) {
     out.frames = Math.round(c.seconds * config.physics.hz);
   }
   const walking = commands === "walk" || commands === "climb";
+  // HIGHBOX: a tall box on either side. No walk: the marks are the standing pose on top of it,
+  // feet included (highboxMarks in reset).
+  if (commands === "highbox") {
+    const h = config.highbox;
+    let height = h.evalHeight;
+    if (mode && mode.climbMax > 0) {
+      const cap = Math.min(h.maxCap, mode.climbMax);
+      const low = Math.max(0.05, cap - h.band);
+      height = low + randomSource() * (cap - low);
+    }
+    out.climb = {
+      near: h.nearMin + randomSource() * (h.nearMax - h.nearMin),
+      height,
+      side: randomSource() < 0.5 ? -1 : 1,
+      half: h.halfWidth,
+      high: true,
+    };
+    out.frames = Math.round(h.seconds * config.physics.hz);
+  }
   // GETUP: lying face up or face down, settled on the floor before the clock starts. The marks are
   // moved to the standing pose in reset (getupMarks), and the feet carry none.
   // BOARD: start standing in the middle of a plank on a pivot. The plank follows a slow tilt wave.
@@ -911,6 +937,31 @@ function placedBodyTargets(measure) {
     if (onMark(measure, i)) placed++;
   }
   return on ? placed / on : 0;
+}
+
+// HIGHBOX: every mark is the standing pose on top of the box, standInset from the facing edge.
+// The feet marks sit on the box top, one stance apart.
+function highboxMarks(options, box) {
+  const targets = options && options.targets;
+  if (!targets) return;
+  const inset = config.highbox.standInset;
+  const standX = box.side > 0 ? box.x0 + inset : box.x1 - inset;
+  const stance = config.skill.stanceMeters || 0.11;
+  for (let i = 0; i < config.targets.length; i++) {
+    const spec = config.targets[i];
+    const target = targets[i];
+    if (!target) continue;
+    target.on = true;
+    target.angle = 0;
+    target.frozen = true;
+    if (spec.ride) {
+      target.x = standX + (spec.x || 0);
+      target.y = box.top + (spec.y || 0);
+    } else {
+      target.x = standX + (spec.id === "footR" ? stance : -stance);
+      target.y = box.top + config.skill.footGroundMeters;
+    }
+  }
 }
 
 // GETUP: the head and hand marks go to the STANDING pose over the pelvis, not where the parts
@@ -1439,6 +1490,20 @@ export function createSim(box) {
     return id;
   }
 
+  // A grippable body the hand touches, or null. grippable is [{ id, cx, cy }] of static boxes.
+  function touchingGrippable(world, handId, grippable) {
+    const capacity = b2Body_GetContactCapacity(handId);
+    if (!capacity) return null;
+    while (contactData.length < capacity) contactData.push(freshContact());
+    const count = b2Body_GetContactData(handId, contactData, capacity);
+    for (let i = 0; i < count; i++) {
+      const other = otherBody(contactData[i], handId);
+      if (!other) continue;
+      for (let g = 0; g < grippable.length; g++) if (sameBody(other, grippable[g].id)) return grippable[g];
+    }
+    return null;
+  }
+
   // BOARD: a static pivot block and a dynamic plank hinged on it. Both go in objects, so cleanup
   // destroys them (the joint goes with the plank). The plank is registered with the rays.
   function spawnBoard(world, x, objects) {
@@ -1628,6 +1693,12 @@ export function createSim(box) {
       this.cleanup();
       const world = this.world;
       resetPose(world, tilt, drop, this.options);
+      // Grips from the last episode died with their boxes in cleanup.
+      if (!this.grips) this.grips = [{ joint: null }, { joint: null }];
+      this.grips[0].joint = null;
+      this.grips[1].joint = null;
+      this.grippable = [];
+      this.gripCount = 0;
       this.board = null;
       if (this.options.board) {
         readBodyState(world, this.measure);
@@ -1676,10 +1747,14 @@ export function createSim(box) {
         const mid =
           ((this.measure.partX[config.partIndex.footLeft] || 0) +
             (this.measure.partX[config.partIndex.footRight] || 0)) / 2;
-        const half = config.climb.boxHalfWidth;
-        const x0 = mid + climb.near;
-        this.objects.push(spawnStaticBox(world, x0 + half, half, climb.height / 2));
-        this.climbBox = { x0, x1: x0 + 2 * half, top: climb.height };
+        const half = climb.half || config.climb.boxHalfWidth;
+        const side = climb.side || 1;
+        const x0 = side > 0 ? mid + climb.near : mid - climb.near - 2 * half;
+        const id = spawnStaticBox(world, x0 + half, half, climb.height / 2);
+        this.objects.push(id);
+        this.climbBox = { x0, x1: x0 + 2 * half, top: climb.height, side, high: !!climb.high };
+        this.grippable.push({ id, cx: x0 + half, cy: climb.height / 2 });
+        if (climb.high) highboxMarks(this.options, this.climbBox);
       }
       this.measure.climbBox = this.climbBox;
       if (this.options.getup) getupMarks(this.measure, this.options);
@@ -1856,13 +1931,17 @@ export function createSim(box) {
         const box = this.climbBox;
         if (box) {
           input[cursor++] = 1;
-          input[cursor++] = clamp(box.x0 - footMid, -1, 1);
+          // Signed distance to the nearest edge facing the doll: positive ahead, negative behind.
+          const near = box.side < 0 ? box.x1 : box.x0;
+          input[cursor++] = clamp(near - footMid, -1, 1);
           input[cursor++] = box.top / 0.5;
         } else {
           input[cursor++] = 0;
           input[cursor++] = 0;
           input[cursor++] = 0;
         }
+        input[cursor++] = this.grips[0].joint ? 1 : 0;
+        input[cursor++] = this.grips[1].joint ? 1 : 0;
       }
       if (cursor !== config.net.inputCount)
         throw new Error("observation length " + cursor);
@@ -1985,6 +2064,7 @@ export function createSim(box) {
         this.sampleReward();
       this.trackGoalProgress();
       this.driveBoard();
+      this.updateGrip();
       this.applyMotors();
       this.stepPhysics();
       this.frame++;
@@ -2003,6 +2083,39 @@ export function createSim(box) {
     // floor, and held it to the end.
     footOnTop() {
       return feetOnBox(this.measure, this.climbBox) === 2;
+    }
+    // GRIP: a hand whose grip output is above grip.on and that touches a grippable object (a
+    // climb box) is pinned to it with a revolute joint at the hand centre, so the wrist can still
+    // turn. It lets go when the output drops below grip.off. Joints die with the box at cleanup.
+    updateGrip() {
+      const world = this.world;
+      const action = this.network.action;
+      const base = config.net.jointCount;
+      if (!(config.net.gripOutputs > 0) || action.length < base + 2) return;
+      for (let k = 0; k < 2; k++) {
+        const grip = this.grips[k];
+        const out = action[base + k];
+        if (grip.joint) {
+          if (out < config.grip.off) {
+            if (world.b2DestroyJoint) world.b2DestroyJoint(grip.joint);
+            grip.joint = null;
+          }
+          continue;
+        }
+        if (out <= config.grip.on || !this.grippable.length) continue;
+        const handPart = k === 0 ? config.partIndex.handLeft : config.partIndex.handRight;
+        const hand = world.parts[handPart];
+        const target = touchingGrippable(world, hand.id, this.grippable);
+        if (!target) continue;
+        const hx = this.measure.partX[handPart] || 0;
+        const hy = this.measure.partY[handPart] || 0;
+        grip.joint = world.CreateRevoluteJoint({
+          worldId: world.worldId, bodyIdA: hand.id, bodyIdB: target.id,
+          anchorA: vector(0, 0), anchorB: vector(hx - target.cx, hy - target.cy),
+          enableLimit: false, enableMotor: false, collideConnected: false,
+        }).jointId;
+        this.gripCount = (this.gripCount || 0) + 1;
+      }
     }
     // The plank's pivot motor chases a slow sine; its torque is capped, so the doll can push back.
     driveBoard() {

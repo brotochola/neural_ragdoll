@@ -85,6 +85,9 @@ function buildLayout() {
 
 // One object. ask() and tell() read it once per weight.
 const layout = buildLayout();
+// Output rows: the motor joints, then one grip output per hand (config.net.gripOutputs).
+const outputCount = net.jointCount + (net.gripOutputs || 0);
+export const outputCountOf = () => outputCount;
 
 export class ElmanNetwork {
   // The last hidden layer is the Elman, with memory. Every layer before it is tanh of the previous layer, with no memory. One hidden layer means that layer is the Elman.
@@ -95,7 +98,7 @@ export class ElmanNetwork {
   // Weights of the current net. With one layer this is the same packing as before.
   static get weightCount() {
     const layout = ElmanNetwork.layout;
-    return layout.outputBase + net.jointCount * layout.outputStride;
+    return layout.outputBase + outputCount * layout.outputStride;
   }
 
   // Copies the vector when it has exactly that length. Otherwise null.
@@ -129,22 +132,23 @@ export class ElmanNetwork {
   // converted to this net. New input columns and new walk-skip weights are 0, so the converted
   // net behaves exactly like the old one while the new inputs are 0.
   // oldWalkSkip is how many walk-skip weights each joint row had (0 before the skip existed).
-  static convert(source, oldInputCount, oldWalkSkip) {
+  static convert(source, oldInputCount, oldWalkSkip, oldOutputs) {
     const layout = ElmanNetwork.layout;
     if (!source || !layout.ff.length) return null;
+    const oldRows = oldOutputs || net.jointCount;
     const first = layout.ff[0];
     const oldFirstStride = 1 + oldInputCount;
     const newFirstStride = 1 + layout.inputCount;
     const oldOutStride = layout.outputStride - layout.walkSkip + oldWalkSkip;
     const middle = layout.outputBase - first.block;
-    const expected = first.units * oldFirstStride + middle + net.jointCount * oldOutStride;
-    if (source.length !== expected || oldInputCount > layout.inputCount || oldWalkSkip > layout.walkSkip) return null;
+    const expected = first.units * oldFirstStride + middle + oldRows * oldOutStride;
+    if (source.length !== expected || oldInputCount > layout.inputCount || oldWalkSkip > layout.walkSkip || oldRows > outputCount) return null;
     const out = new Float32Array(ElmanNetwork.weightCount);
     let from = 0;
     for (let unit = 0; unit < first.units; unit++)
       for (let i = 0; i < oldFirstStride; i++) out[unit * newFirstStride + i] = source[from++];
     for (let i = 0; i < middle; i++) out[first.block + i] = source[from++];
-    for (let joint = 0; joint < net.jointCount; joint++)
+    for (let joint = 0; joint < oldRows; joint++)
       for (let i = 0; i < oldOutStride; i++) out[layout.outputBase + joint * layout.outputStride + i] = source[from++];
     return out;
   }
@@ -179,7 +183,8 @@ export class ElmanNetwork {
     this.compressed = this.ff.length ? this.ff[0] : new Float32Array(0);
     this.feedback = new Float32Array(layout.feedback);
     this.feedbackFrom = new Float32Array(net.jointCount);
-    this.action = new Float32Array(net.jointCount);
+    // The motor joints, then the grip outputs (one per hand). Motors read only the first jointCount.
+    this.action = new Float32Array(outputCount);
   }
 
   // One step forward. Writes the new action and leaves `hidden` at this step's state.
@@ -204,7 +209,7 @@ export class ElmanNetwork {
       }
       incoming = acts;
     }
-    this.feedbackFrom.set(this.action);
+    this.feedbackFrom.set(this.action.subarray(0, net.jointCount));
     for (let unit = 0; unit < layout.feedback; unit++) {
       let sum = weights[cursor++];
       for (let i = 0; i < net.jointCount; i++) sum += weights[cursor++] * this.feedbackFrom[i];
@@ -218,7 +223,7 @@ export class ElmanNetwork {
       for (let i = 0; i < layout.recurrent; i++) sum += weights[cursor++] * this.hidden[i];
       this.nextHidden[unit] = leak * this.hidden[unit] + (1 - leak) * Math.tanh(sum);
     }
-    for (let joint = 0; joint < net.jointCount; joint++) {
+    for (let joint = 0; joint < outputCount; joint++) {
       let sum = weights[cursor++];
       for (let unit = 0; unit < layout.recurrent; unit++) sum += weights[cursor++] * this.nextHidden[unit];
       // Shortcut: the target error goes straight to the joint, not through the hidden-layer bottleneck.
@@ -248,11 +253,13 @@ export function zeroSkip(weights) {
 // 1 when that output joint is trained. The list is config.search.trainableJointIndexes.
 // All 14 are on: the neck and the wrists are back, or the head and hand rotation rows
 // had no way to move. Built once.
-const limbJoint = new Uint8Array(net.jointCount);
+const limbJoint = new Uint8Array(outputCount);
 for (let jointIndex = 0; jointIndex < search.trainableJointIndexes.length; jointIndex++) {
   const joint = search.trainableJointIndexes[jointIndex];
   if (joint >= 0 && joint < limbJoint.length) limbJoint[joint] = 1;
 }
+// The grip outputs always train.
+for (let g = net.jointCount; g < outputCount; g++) limbJoint[g] = 1;
 
 // When set, the noise and Adam touch only those outputs. The rest of the vector stays at the checkpoint.
 let outputJointMask = null;
