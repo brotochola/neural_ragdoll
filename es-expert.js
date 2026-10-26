@@ -43,13 +43,14 @@ const saved = JSON.parse(fs.readFileSync(path.join(root, from), 'utf8'));
 const handover = saved.handover;
 let theta = Float64Array.from(saved.theta);
 
-let useFalls = false;
+let useFalls = null;
 function run(w, seed, phase) {
   setSkill(9);
   const rand = makeSeededRandom(seed);
   const start = sim.fillTrainingStart({}, rand, evalMode(9));
   let side = start.tilt > 0 ? 'up' : 'down';
-  if (falls && (useFalls || rand() < 0.5)) {
+  // useFalls: true = always a fall, false = never (official eval), null = half and half (training)
+  if (falls && (useFalls === true || (useFalls === null && rand() < 0.5))) {
     const f = falls[Math.floor(rand() * falls.length)];
     const P = config.partIndex;
     const mid = (f.pose[P.footLeft * 3] + f.pose[P.footRight * 3]) / 2;
@@ -83,13 +84,14 @@ function run(w, seed, phase) {
 
 function evaluate(w, n) {
   let ok = 0;
+  useFalls = false;
   for (let i = 0; i < n; i++) if (run(w, config.eval.seed + 9 * 10007 + i * 17, i % 6).pass) ok++;
-  if (!falls) return ok;
+  if (!falls) { useFalls = null; return ok; }
   // With falls: the official lying starts plus as many real course falls (fixed seeds).
   useFalls = true;
   let okF = 0;
   for (let i = 0; i < n; i++) if (run(w, 777000 + i * 13, i % 6).pass) okF++;
-  useFalls = false;
+  useFalls = null;
   lastFalls = okF;
   return ok + okF;
 }
