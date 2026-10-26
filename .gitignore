@@ -13,3 +13,4 @@ backups-*/
 keyframes-climb-*.json
 trained/walk-cpg.json
 trained/walk-simbicon.json
+trained/stepup-*.json
