@@ -41,7 +41,11 @@ const { SPEC, decode: decodeBase, makeController } = await import('./src/simbico
 const simbicon = makeController(world);
 const dims = SPEC.length;
 const track = args.includes('--track'); // swing feedback on speed relative to the commanded speed
-const decode = (v) => Object.assign(decodeBase(v), { track });
+// --clock: the controller follows the network's gait clock (copyable). --hold N: it acts only every
+// N frames, like the network (config.cadence.actionEveryNFrames = 6).
+const clock = args.includes('--clock');
+const hold = +arg('--hold', 0);
+const decode = (v) => Object.assign(decodeBase(v), { track, clock });
 
 function episode(p, seed) {
   const r = makeSeededRandom(3000 + seed);
@@ -50,8 +54,14 @@ function episode(p, seed) {
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: seed % 6 }, start));
   const delay = Math.round((start.walk.delay || 0) * config.physics.hz);
   const orig = ep.applyMotors.bind(ep);
+  const now = new Float64Array(OUT);
+  const held = new Float64Array(OUT);
   ep.applyMotors = function () {
-    if (this.frame >= delay) simbicon(p, this, this.action);
+    if (this.frame >= delay) {
+      simbicon(p, this, now);
+      if (!hold || this.frame % hold === 0) held.set(now);
+      for (let j = 0; j < OUT; j++) this.action[j] = held[j];
+    }
     orig();
   };
   const feet = [P.footLeft, P.footRight];
@@ -156,11 +166,11 @@ for (let it = 0; it < iters; it++) {
   }
   if (it % 5 === 0 || it === iters - 1) {
     console.log('iter', it, 'held-out best', best.score.toFixed(3), 'pass', best.pass + '/12', 'alt', best.alt.toFixed(2), 'gen best', cands[0].score.toFixed(3));
-    fs.writeFileSync(out, JSON.stringify({ track, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass, alt: best.alt }));
+    fs.writeFileSync(out, JSON.stringify({ track, clock, hold, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass, alt: best.alt }));
   }
 }
 let fresh = 0;
 for (let i = 0; i < 12; i++) fresh += episode(decode(best.v), 100 + i).pass;
-fs.writeFileSync(out, JSON.stringify({ track, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass, alt: best.alt, freshPass: fresh }));
+fs.writeFileSync(out, JSON.stringify({ track, clock, hold, best: Array.from(best.v), params: decode(best.v), score: best.score, pass: best.pass, alt: best.alt, freshPass: fresh }));
 console.log('done fresh pass', fresh + '/12', '->', out);
 sim.destroyWorld(world);

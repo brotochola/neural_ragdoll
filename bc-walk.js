@@ -26,6 +26,7 @@ const batch = +arg('--batch', 8);
 const lr = +arg('--lr', 0.001);
 const betaIters = +arg('--beta-iters', 10);
 const evalN = +arg('--eval-n', 20);
+const hold = +arg('--hold', 0);
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -69,6 +70,7 @@ function episode(seed, drive, w, level = 6) {
     decided = true;
   };
   const studentAction = new Float64Array(OUT);
+  const held = new Float64Array(OUT);
   const origMotors = ep.applyMotors.bind(ep);
   ep.applyMotors = function () {
     for (let j = 0; j < OUT; j++) studentAction[j] = this.action[j];
@@ -79,7 +81,9 @@ function episode(seed, drive, w, level = 6) {
       targets.push(Array.from(teacher));
       decided = false;
     }
-    if (drive === 'teacher') for (let j = 0; j < OUT; j++) this.action[j] = teacher[j];
+    // --hold N: the teacher only acts every N frames, like the network (config.cadence.actionEveryNFrames).
+    if (drive === 'teacher' && (!hold || this.frame % hold === 0)) for (let j = 0; j < OUT; j++) held[j] = teacher[j];
+    if (drive === 'teacher') for (let j = 0; j < OUT; j++) this.action[j] = hold ? held[j] : teacher[j];
     origMotors();
     if (drive === 'teacher') for (let j = 0; j < OUT; j++) this.action[j] = studentAction[j];
   };

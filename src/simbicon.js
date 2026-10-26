@@ -49,14 +49,22 @@ export function makeController(world) {
   const st = ep.simbicon || (ep.simbicon = { stance: 0, t: 0 });
   const dt = 1 / config.physics.hz;
   st.t += dt;
-  const stance = LEG[st.stance];
-  const swing = LEG[1 - st.stance];
   const m = ep.measure;
-  if ((st.t >= p.T && m.touch[swing.foot]) || st.t >= 2 * p.T) {
+  if (p.clock && m.gaitPhase != null) {
+    // Clock mode: the stance leg and the time within the step come from the gait clock the network
+    // sees (left swings while sin > 0, as in the gait reward), so a network can learn to copy it.
+    // The step lasts half the clock period; no contact-based switching.
+    const ph = ((m.gaitPhase % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    st.stance = ph < Math.PI ? 1 : 0;
+    p.T = (config.walk.periodSeconds || 0.9) / 2;
+    st.t = ((ph % Math.PI) / Math.PI) * p.T;
+  } else if ((st.t >= p.T && m.touch[LEG[1 - st.stance].foot]) || st.t >= 2 * p.T) {
     st.stance = 1 - st.stance;
     st.t = 0;
     return simbicon(p, ep, action);
   }
+  const stance = LEG[st.stance];
+  const swing = LEG[1 - st.stance];
   const early = st.t < p.split * p.T;
   const torso = angleOf(0);
   const d = (m.centerX || 0) - world.px[stance.foot];
