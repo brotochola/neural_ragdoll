@@ -48,6 +48,7 @@ const { SPEC, decode: decodeBase, makeController } = await import('./src/stepup.
 const stairsN = +arg('--stairs', 0); // a flight of N steps instead of one box
 const rise = +arg('--rise', 0.18);
 const run = +arg('--run', 0.3);
+const stairPause = +arg('--pause', 1.0); // seconds of the stand net between steps
 const hands = args.includes('--hands'); // reach, grab the top edge, pull and mantle (tall boxes)
 const decode = (v) => Object.assign(decodeBase(v), { hands });
 const controller = makeController(world);
@@ -75,16 +76,27 @@ function episode(p, seed, record) {
   const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: 0 }, start));
   let done = false;
   let step = 0; // stairs: which step the controller is climbing
+  let pause = 0; // stairs: frames of the stand net between steps, to settle on the tread
   const setCommand = (e) => {
-    if (!done && e.frame / config.physics.hz < maxSeconds) {
-      done = !controller(p, e, e.action);
-      // Stairs: one step done, aim at the next and start the step-up again.
-      if (done && e.stairs && step < e.stairs.length - 1) {
+    if (pause > 0) {
+      pause--;
+      for (let j = J; j < OUT; j++) e.action[j] = -1;
+      if (pause === 0) {
         step++;
         e.climbBox = e.stairs[step];
         e.measure.climbBox = e.climbBox;
         e.stepup = null;
-        done = !controller(p, e, e.action);
+      }
+      return;
+    }
+    if (!done && e.frame / config.physics.hz < maxSeconds) {
+      done = !controller(p, e, e.action);
+      // Stairs: one step done; the stand net steadies it for stairPause s, then the next step-up.
+      if (done && e.stairs && step < e.stairs.length - 1) {
+        done = false;
+        pause = Math.round(stairPause * config.physics.hz);
+        for (let j = J; j < OUT; j++) e.action[j] = -1;
+        return;
       }
     } else done = true;
     e.controllerState = done ? 5 : (e.stepup ? e.stepup.state : 0);
