@@ -25,3 +25,4 @@ trained/walk-bumps*.json
 trained/stop-controller.json
 trained/climb-arrivals.json
 trained/stepup-arrival-*.json
+trained/stop-fast.json
