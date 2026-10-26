@@ -28,3 +28,5 @@ trained/stepup-arrival-*.json
 trained/stop-fast.json
 trained/course-falls.json
 trained/getup-expert-falls.json
+trained/walk-starts-[0-9]*.json
+trained/slow-handover.json
