@@ -113,6 +113,7 @@ function episode(frames, seed, record) {
   let n = 0;
   let bestFoot = 0; // highest the LOWER foot got, as a share of the box height (both feet up)
   let bestFeetOn = 0; // most feet on the box at once, with the head up
+  let bestRise = 0; // highest head over the box top while both feet are on it
   let bestHip = 0;
   const poses = record ? [] : null;
   let f = 0;
@@ -133,6 +134,8 @@ function episode(frames, seed, record) {
       bestFoot = Math.max(bestFoot, Math.min(1, low / top) * 0.7 + Math.min(1, high / top) * 0.3);
       if (b) bestFeetOn = Math.max(bestFeetOn, feetOnBox(m, b));
     }
+    // Rising on the box: the 0.3 m search got both feet up and then lay across the box (head 0.5 m).
+    if (b && feetOnBox(m, b) === 2) bestRise = Math.max(bestRise, headUpNow);
     bestHip = Math.max(bestHip, Math.min(1, (world.py[P.torso] - top) / config.body.torsoHeightMeters) * (0.5 + 0.5 * headUpNow));
     if (record && f % 2 === 0) {
       const p = [];
@@ -152,7 +155,7 @@ function episode(frames, seed, record) {
   const frames2 = s.windowFrames || 0;
   const pass = !!s.climbOnTop && frames2 > 0 && s.windowStood / frames2 >= config.highbox.standShare && ep.measure.headHeight - (s.climbHeight || 0) >= standHead;
   const why = 'head ' + ep.measure.headHeight.toFixed(2) + ' top ' + (s.climbHeight || 0).toFixed(2) + ' stood ' + (frames2 ? (s.windowStood / frames2).toFixed(2) : 0) + ' torsoCos ' + ep.measure.torsoCos.toFixed(2);
-  return { why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip), pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
+  return { why, score: score / Math.max(1, n) + 1.5 * bestFoot + 1.0 * bestFeetOn + 0.5 * Math.max(0, bestHip) + 2 * bestRise, pass: pass ? 1 : 0, onTop: s.climbOnTop ? 1 : 0, poses };
 }
 
 function evaluate(v) {
