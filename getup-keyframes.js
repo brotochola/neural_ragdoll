@@ -24,6 +24,9 @@ const pop = +arg('--pop', 24);
 const elite = +arg('--elite', 6);
 const seeds = +arg('--seeds', 3);
 const netFile = arg('--net', 'trained/stand-and-walk.json');
+const init = arg('--init', null); // Start the search from a saved keyframes file.
+const sigmaStart = +arg('--sigma', 0.8);
+const sigmaFloor = +arg('--sigma-floor', 0.15); // The first runs collapsed to 0.05 and stopped exploring.
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -107,7 +110,10 @@ function episode(frames, seed, record) {
     if (f < last) continue;
     const head = Math.min(1, m.headHeight / config.body.standingHeadMeters);
     const feet = (m.touch[P.footLeft] ? 0.25 : 0) + (m.touch[P.footRight] ? 0.25 : 0);
-    score += 2 * head + Math.max(0, m.torsoCos) + feet + (isStanding(m) ? 1 : 0);
+    // The first searches ended in a wide, leaning lunge (stance 0.7-0.95 m, 24-40 degrees): reward
+    // an upright torso and a normal stance, and standing for real, more.
+    const stance = m.stanceWidth > 0.6 ? Math.max(0, 1 - (m.stanceWidth - 0.6) / 0.4) : 1;
+    score += 2 * head + 2 * Math.max(0, m.torsoCos) + feet + stance + (isStanding(m) ? 3 : 0);
     n++;
   }
   // A small credit for the highest head reached, so a near miss beats lying still.
@@ -127,7 +133,11 @@ function evaluate(v) {
 }
 
 let mean = new Float64Array(dims);
-let sigma = new Float64Array(dims).fill(0.8);
+if (init) {
+  const saved = JSON.parse(fs.readFileSync(init, 'utf8')).best;
+  for (let d = 0; d < dims && d < saved.length; d++) mean[d] = saved[d];
+}
+let sigma = new Float64Array(dims).fill(sigmaStart);
 let best = null;
 for (let it = 0; it < iters; it++) {
   const cands = [];
@@ -147,7 +157,7 @@ for (let it = 0; it < iters; it++) {
     for (const c of top) s += (c.v[d] - m) ** 2;
     s = Math.sqrt(s / top.length);
     mean[d] = 0.7 * m + 0.3 * mean[d];
-    sigma[d] = Math.max(0.05, 0.7 * s + 0.3 * sigma[d]);
+    sigma[d] = Math.max(sigmaFloor, 0.7 * s + 0.3 * sigma[d]);
   }
   if (it % 5 === 0 || it === iters - 1) {
     console.log('iter', it, 'best', best.score.toFixed(3), 'stood', best.stood + '/' + seeds, 'gen best', cands[0].score.toFixed(3), 'sigma', (sigma.reduce((a, b) => a + b, 0) / dims).toFixed(3));
