@@ -1565,6 +1565,25 @@ export function createSim(box) {
     return id;
   }
 
+  // A rigid static terrain made of convex polygons, one body (a mountain: the area under an irregular line,
+  // cut into trapezoids). quads: [[[x, y], ...], ...] in world coordinates.
+  function spawnPolys(world, quads) {
+    const bd = box.b2DefaultBodyDef();
+    bd.type = staticBody;
+    bd.position = vector(0, 0);
+    const bodyId = box.b2CreateBody(world.worldId, bd);
+    for (const q of quads) {
+      const hull = box.b2ComputeHull(q.map(([x, y]) => vector(x, y)), q.length);
+      const poly = box.b2MakePolygon(hull, 0);
+      const sd = box.b2DefaultShapeDef();
+      sd.friction = 2;
+      box.b2CreatePolygonShape(bodyId, sd, poly);
+    }
+    world.thrownIds.push(bodyId);
+    world.thrownShapes.push(world.shapeOf(bodyId));
+    return bodyId;
+  }
+
   // A grippable body the hand touches, or null. grippable is [{ id, cx, cy }] of static boxes.
   function touchingGrippable(world, handId, grippable) {
     const capacity = b2Body_GetContactCapacity(handId);
@@ -1934,6 +1953,15 @@ export function createSim(box) {
           this.objects.push(id);
           this.terrain.statics.push({ x0: mid + b.dx, x1: mid + b.dx + b.w, top: b.h, side: 1 });
           this.grippable.push({ id, cx: mid + b.dx + b.w / 2, cy: b.h / 2 });
+        }
+        // POLYS: a rigid terrain of convex polygons (terrain.polys, x relative to the feet), grippable
+        // anywhere; terrain.surface is the top line it was cut from, also relative.
+        if (terrain.polys && terrain.polys.length) {
+          const quads = terrain.polys.map((q) => q.map(([x, y]) => [mid + x, y]));
+          const id = spawnPolys(world, quads);
+          this.objects.push(id);
+          this.grippable.push({ id, cx: 0, cy: 0 });
+          this.terrain.surface = (terrain.surface || []).map(([x, y]) => [mid + x, y]);
         }
         // HOLDS: small grippable boxes in the air (climbing rungs on a wall face): [{dx, y, w, h}], y the
         // hold's centre height. terrain.holds keeps their absolute positions.
