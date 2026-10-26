@@ -137,7 +137,7 @@ function episode(p, seed, record) {
     if (done && walkAfterFile) {
       if (doneAt < 0) doneAt = e.frame;
       if (e.frame - doneAt > config.physics.hz) {
-        if (walkFrom == null) { walkFrom = world.px[P.torso]; walkStart = e.frame; e.simbicon = null; }
+        if (walkFrom == null) { walkFrom = world.px[P.torso]; walkStart = e.frame; e.simbicon = null; if (process.env.DEBUG_WA) console.log('  walk starts: torso', Math.atan2(world.s[0], world.c[0]).toFixed(2), 'feet', world.px[P.footLeft].toFixed(2), world.px[P.footRight].toFixed(2), 'edge', e.climbBox.x0.toFixed(2), 'done at', (doneAt / config.physics.hz).toFixed(2)); }
         e.measure.walkSpeed = 0.9;
         e.measure.walkDir = 1;
         walkCtl(walkAfterP, e, walkTmp);

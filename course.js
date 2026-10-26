@@ -106,7 +106,7 @@ function layout(r) {
   for (let i = 0; i < nSteps; i++) statics.push({ dx: stairsX + i * tread, w: end - (stairsX + i * tread), h: platformTop + (i + 1) * rise });
   // loose light boxes on the platform, 11.5-14 m
   const dynamics = [];
-  for (let i = 0; i < 3; i++) dynamics.push({ dx: 11.5 + i * 0.8 + r() * 0.3, w: +(process.env.BOX_W || 0.1), h: +(process.env.BOX_H || 0.06), density: +(process.env.BOX_D || 3), y: platformTop });
+  for (let i = 0; i < (process.env.NO_DYN ? 0 : 3); i++) dynamics.push({ dx: 11.5 + i * 0.8 + r() * 0.3, w: +(process.env.BOX_W || 0.1), h: +(process.env.BOX_H || 0.06), density: +(process.env.BOX_D || 3), y: platformTop });
   return { statics, dynamics, platformX, platformTop, stairsX, finish: stairsX + (nSteps - 1) * tread + 1.5, end };
 }
 
@@ -172,7 +172,10 @@ function run(seed, record) {
   const nextRise = () => {
     // distances from the middle of the feet, as the step-up controller was tuned (0.25-0.45 m)
     const fx = (world.px[config.partIndex.footLeft] + world.px[config.partIndex.footRight]) / 2;
-    const here = groundUnder(fx - 0.05);
+    // The floor we are on: the higher of the two feet's (a foot on a block means we are on it; by the
+    // middle of the feet, a body standing with its back foot at the edge saw the block it had just
+    // climbed as a rise ahead, braked and stepped back off it).
+    const here = process.env.HERE_MID ? groundUnder(fx - 0.05) : Math.max(groundUnder(world.px[config.partIndex.footLeft] - 0.03), groundUnder(world.px[config.partIndex.footRight] - 0.03));
     let best = null;
     for (const b of blocks) {
       if (b.x0 > fx - 0.02 && b.top - here > 0.06 && (!best || b.x0 < best.x0)) best = b;
@@ -413,7 +416,7 @@ function run(seed, record) {
         this.climbBox = ahead && ahead.box.x0 - front < 0.7 ? ahead.box : null;
         // Lead with whichever foot is in front (the climb was tuned with the right one in front and
         // the legs are identical in 2D); with the left in front it tried to lift the back leg forever.
-        this.climbP = Object.assign({}, stepP, { lead: fr >= fl ? 1 : -1 });
+        this.climbP = process.env.LEAD_PARAM ? stepP : Object.assign({}, stepP, { lead: fr >= fl ? 1 : -1 });
       }
       if (this.climbBox) {
         const going = stepCtl(this.climbP || stepP, this, tmp);
