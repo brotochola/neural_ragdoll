@@ -168,11 +168,11 @@ function drawPart(i, x, y, a, s, k) {
 }
 function draw() {
   const e = ep(), f = e.frames[Math.min(frame, e.frames.length - 1)];
-  const W = cv.width, H = cv.height, k = H / (e.swing ? 3.1 : e.holds ? 3.8 : 2.4);
+  const W = cv.width, H = cv.height, k = H / (e.swing ? 3.1 : e.holds ? 3.8 : e.surface ? 3.4 : 2.4);
   const torsoX = f.p[0];
   if (camX == null) camX = torsoX; else camX += (torsoX - camX) * 0.08;
   // follow the feet up onto platforms and steps
-  const footY = Math.max(0, Math.min(f.p[8 * 3 + 1], f.p[14 * 3 + 1]) - (e.holds ? 0.6 : 0.17));
+  const footY = Math.max(0, Math.min(f.p[8 * 3 + 1], f.p[14 * 3 + 1]) - (e.holds ? 0.6 : e.surface ? 0.4 : 0.17));
   camY += (footY - camY) * 0.05;
   const groundY = H * 0.86 + camY * k;
   const sx = (x) => W / 2 + (x - camX) * k, sy = (y) => groundY - y * k;
@@ -223,6 +223,13 @@ function draw() {
       const bx = sx(b.x0), bw = (b.x1 - b.x0) * k, bt = sy(b.top), bh = groundY - bt;
       ctx.fillRect(bx, bt, bw, bh); ctx.strokeRect(bx, bt, bw, bh);
     }
+  }
+  // a mountain: the filled area under its jagged line
+  if (e.surface) {
+    ctx.fillStyle = css('--box'); ctx.strokeStyle = css('--box-edge'); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(sx(e.surface[0][0]), sy(-1));
+    for (const [x, y] of e.surface) ctx.lineTo(sx(x), sy(y));
+    ctx.lineTo(sx(e.surface[e.surface.length - 1][0]), sy(-1)); ctx.closePath(); ctx.fill(); ctx.stroke();
   }
   // climbing holds (rungs on a wall face), drawn over the wall
   if (e.holds) {

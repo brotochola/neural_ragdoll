@@ -61,7 +61,10 @@ const SPEC = [
   ['kHip', 1.0, 0.4], // balance by hips (as in the pose executor), on two feet
   ['kAnkle', 2.0, 0.6], // balance by ankles
   ['torsoGain', 0.4, 0.3], // supporting legs turn the trunk back to its lean
-  ['handReach', 0.5, 0.06], // hands go this far at most from the shoulder
+  ['handReach', 0.62, 0.08], // hands go this far at most from the shoulder
+  ['footSlope', 0.6, 0.12], // steepest ground a foot stands on without hands (rad)
+  ['handAhead', 0.45, 0.1], // a hand goes onto the rock this far ahead of the leading foot
+  ['leanRate', 0.8, 0.3], // rad/s the trunk may turn toward its planned lean
 ];
 const decode = (v) => {
   const p = {};
@@ -93,15 +96,20 @@ function episode(p, seed, record) {
   const groundMax = (a, b) => { let m = Math.max(ground(a), ground(b)); for (const [x, y] of S) if (x > a && x < b) m = Math.max(m, y); return m; };
   // a foothold: the ground within 7 cm either side is level to 5 cm and the foot is not against a rise
   const flatAt = (x) => { const a = ground(x - 0.07), b = ground(x), c = ground(x + 0.07); return Math.max(a, b, c) - Math.min(a, b, c) < 0.05; };
-  const footholdAfter = (fromX, fromY, maxRise) => {
+  // a foothold on ground no steeper than maxSlope (the foot lies along it; friction 2 holds ~40 degrees),
+  // not more than maxRise above the foot it steps from; the farthest such spot within a step
+  const slopeAt = (x) => Math.atan2(ground(x + 0.06) - ground(x - 0.06), 0.12);
+  const footholdAfter = (fromX, fromY, maxRise, maxSlope) => {
     let best = null;
     for (let x = fromX + 0.08; x <= fromX + p.stepMax; x += 0.02) {
-      const y = ground(x);
-      if (y - fromY > maxRise || !flatAt(x)) continue;
-      best = { x, y };
+      const y = ground(x) + SOLE;
+      const a = slopeAt(x);
+      if (y - fromY > maxRise || Math.abs(a) > maxSlope) continue;
+      best = { x, y, angle: a };
     }
     return best;
   };
+  const SOLE = 0.05; // pose.soleOf reads a standing sole 5 cm above the ground
   const feet0 = [P.footLeft, P.footRight].map((q) => pose.soleOf(world, q));
   const lim = {
     foot: feet0.map((f) => ({ x: f.x, y: f.y })),
@@ -112,16 +120,20 @@ function episode(p, seed, record) {
   let pelvisGoal = { x: pv0.x, y: pv0.y };
   let pelvisFrom = { ...pelvisGoal };
   let leanNow = 0;
+  let leanCur = 0;
   let move = null;
   let stuck = 0;
-  const scrambling = () => lim.grip[0] || lim.grip[1];
+  // SCRAMBLE mode: set when the ground ahead rises steeply (hips down, trunk leaning in, hands to the
+  // rock), cleared when it eases and the hands have been released
+  let scramble = false;
+  const scrambling = () => scramble || lim.grip[0] || lim.grip[1];
   const lead = () => (lim.foot[0].x >= lim.foot[1].x ? 0 : 1);
   const riseAhead = (x, y) => groundMax(x, x + 0.6) - y;
   const slopeAhead = (x) => Math.atan2(ground(x + 0.5) - ground(x - 0.1), 0.6);
   const shoulderAt = (pg, lean) => ({ x: pg.x + Math.sin(-lean) * 0.52, y: pg.y + Math.cos(lean) * 0.52 });
-  const handholdFrom = (sh) => {
+  const handholdFrom = (sh, minX = -1e9) => {
     let best = null;
-    for (let x = sh.x - 0.1; x <= sh.x + p.handReach; x += 0.02) {
+    for (let x = Math.max(minX, sh.x - 0.1); x <= sh.x + p.handReach; x += 0.02) {
       const y = ground(x) + 0.03;
       if (Math.hypot(x - sh.x, y - sh.y) > p.handReach) continue;
       if (!best || x > best.x) best = { x, y };
@@ -131,26 +143,36 @@ function episode(p, seed, record) {
   const next = () => {
     const L = lead(), T = 1 - L;
     const lf = lim.foot[L], tf = lim.foot[T];
-    const steep = riseAhead(lf.x, lf.y) > p.handRise;
+    // hands go to the rock when the feet alone find no foothold ahead (too high or too steep)
+    const footOnly = footholdAfter(lf.x, lf.y, p.stepUp, p.footSlope);
+    const steep = !footOnly || riseAhead(lf.x, lf.y - SOLE) > p.handRise;
+    if (steep) scramble = true;
     // the planned hips and shoulders for this stance, to see what the hands can reach
     const pg = pelvisFor(null);
     const sh = shoulderAt(pg, leanNow);
+    if (process.env.DEBUG_MT) console.log('    steep', steep, 'rise', riseAhead(lf.x, lf.y - SOLE).toFixed(2), 'pelvis plan', pg.x.toFixed(2), pg.y.toFixed(2), 'shoulder', sh.x.toFixed(2), sh.y.toFixed(2), 'lean', leanNow.toFixed(2), 'ground ahead', [0.1, 0.3, 0.5, 0.7].map((d) => ground(lf.x + d).toFixed(2)).join(' '));
     if (steep) {
       // hands: the one behind (or not down) goes forward first, while it can move ahead
+      // a handhold on the rock ahead of the leading foot (handAhead), the trunk turns toward it
       for (const k of [0, 1].sort((a, b) => (lim.hand[a] ? lim.hand[a].x : -9) - (lim.hand[b] ? lim.hand[b].x : -9))) {
         const h = lim.hand[k];
-        const hold = handholdFrom(sh);
-        if (hold && (!h || hold.x > h.x + 0.1)) return { kind: 'hand', k, target: hold };
+        const hx = Math.max(lf.x + p.handAhead, h ? h.x + 0.2 : -9);
+        const hold = { x: hx, y: ground(hx) + 0.03 };
+        if (!h || hold.x > h.x + 0.1) return { kind: 'hand', k, target: hold };
       }
-    } else if (scrambling() && riseAhead(lf.x, lf.y) < p.handRise * 0.5 && lim.hand.every((h) => !h || h.x < pg.x + 0.1)) {
+    } else if (scrambling() && riseAhead(lf.x, lf.y - SOLE) < p.handRise * 0.5 && lim.hand.every((h) => !h || h.x < pg.x + 0.1)) {
+      scramble = false;
       return { kind: 'release' };
     }
     // feet: the trailing foot steps past the leading one onto the next foothold
-    const maxRise = scrambling() ? p.stepUp + 0.15 : p.stepUp;
-    let hold = footholdAfter(lf.x, lf.y, maxRise);
+    const handsOn = lim.grip[0] || lim.grip[1];
+    const maxRise = handsOn ? p.stepUp + 0.2 : p.stepUp;
+    const maxSlope = handsOn ? p.footSlope + 0.25 : p.footSlope;
+    if (scramble && !handsOn) return null; // wait for a hand on the rock first
+    let hold = footholdAfter(lf.x, lf.y, maxRise, maxSlope);
     if (hold) return { kind: 'foot', k: T, target: hold };
     // no foothold past the lead foot: bring the trailing foot up next to it
-    hold = footholdAfter(tf.x, tf.y, maxRise);
+    hold = footholdAfter(tf.x, tf.y, maxRise, maxSlope);
     if (hold && hold.x < lf.x + 0.02) return { kind: 'foot', k: T, target: hold };
     return null;
   };
@@ -166,13 +188,23 @@ function episode(p, seed, record) {
       const hx = hands.reduce((a, h) => a + h.x, 0) / hands.length;
       x = x + p.handPull * (hx - x);
     }
-    leanNow = -p.leanK * slopeAhead(x) - (hands.length ? p.handLean : 0);
-    let y = ground(x) + (hands.length ? p.hipHands : p.hipH);
+    leanNow = -p.leanK * slopeAhead(x);
+    let y = ground(x) + (scrambling() ? p.hipHands : p.hipH) + SOLE;
+    if (scrambling()) {
+      // trunk toward the hands (or where they are going): lean = angle of hips->hands from vertical, less a bit
+      const goingTo = m && m.kind === 'hand' ? m.target : null;
+      const hs = lim.hand.filter((h) => h).concat(goingTo ? [goingTo] : []);
+      if (hs.length) {
+        const hx = hs.reduce((a, h) => a + h.x, 0) / hs.length, hy = hs.reduce((a, h) => a + h.y, 0) / hs.length;
+        leanNow = -Math.max(0, Math.min(1.3, Math.atan2(hx - x, hy - y + p.handLean)));
+      }
+    }
     for (const k of planted) y = Math.min(y, lim.foot[k].y + 0.93);
     return { x, y };
   }
   const startMove = () => {
     const m = next();
+    if (process.env.DEBUG_MT) console.log('  t', (ep.frame / HZ).toFixed(1), m ? m.kind + (m.k != null ? m.k : '') + (m.target ? ' -> ' + m.target.x.toFixed(2) + ',' + m.target.y.toFixed(2) : '') : 'none', 'feet', lim.foot.map((f) => f.x.toFixed(2) + ',' + f.y.toFixed(2)).join(' '), 'hands', lim.hand.map((h, k) => (h ? h.x.toFixed(2) + ',' + h.y.toFixed(2) : '-') + (lim.grip[k] ? 'G' : '')).join(' '));
     if (!m) { stuck += 1; move = { kind: 'hold', t: 0, dur: 0.5 }; return; }
     move = Object.assign(m, { t: 0, wait: 0 });
     if (m.kind === 'foot') { move.dur = p.tFoot; move.from = { ...lim.foot[m.k] }; }
@@ -191,7 +223,7 @@ function episode(p, seed, record) {
     if (!move) startMove();
     move.t += 1 / HZ;
     const s = Math.min(1, move.t / move.dur);
-    const feet = lim.foot.map((f) => ({ x: f.x, y: f.y, angle: 0 }));
+    const feet = lim.foot.map((f) => ({ x: f.x, y: f.y, angle: f.angle || 0 }));
     const hands = lim.hand.map((h) => (h ? { x: h.x, y: h.y } : null));
     const gripping = lim.grip.slice();
     const planted = [true, true];
@@ -206,12 +238,12 @@ function episode(p, seed, record) {
         let si = 0;
         while (si < 2 && q > cuts[si + 1]) si++;
         const e = smooth(Math.min(1, (q - cuts[si]) / (cuts[si + 1] - cuts[si])));
-        feet[move.k] = { x: pts[si].x + (pts[si + 1].x - pts[si].x) * e, y: pts[si].y + (pts[si + 1].y - pts[si].y) * e, angle: 0 };
+        feet[move.k] = { x: pts[si].x + (pts[si + 1].x - pts[si].x) * e, y: pts[si].y + (pts[si + 1].y - pts[si].y) * e, angle: si === 2 ? (move.target.angle || 0) * e : 0 };
         planted[move.k] = false;
       }
     } else if (move.kind === 'hand') {
-      const top = Math.max(move.from.y, move.target.y) + 0.12;
-      const pts = [move.from, { x: move.from.x, y: top }, { x: move.target.x, y: move.target.y + 0.08 }, move.target];
+      // a hand goes forward and a little above its hold, then down onto it
+      const pts = [move.from, { x: (move.from.x + move.target.x) / 2, y: Math.max(move.from.y, move.target.y) + 0.1 }, { x: move.target.x, y: move.target.y + 0.06 }, move.target];
       const cuts = [0, 0.3, 0.75, 1];
       let si = 0;
       while (si < 2 && s > cuts[si + 1]) si++;
@@ -224,7 +256,10 @@ function episode(p, seed, record) {
     const goalNow = pelvisFor(move);
     const pr = smooth(Math.min(1, move.t / Math.max(0.2, move.kind === 'foot' ? move.dur * p.shift : move.dur * 0.6)));
     pelvisGoal = { x: pelvisFrom.x + (goalNow.x - pelvisFrom.x) * pr, y: pelvisFrom.y + (goalNow.y - pelvisFrom.y) * pr };
-    const goal = { pelvis: pelvisGoal, torso: leanNow, feet, hands, gripping, planted, torsoGain: p.torsoGain };
+    // the trunk turns toward its lean at a limited rate (leaning over at once toppled it before the
+    // hands were out)
+    leanCur += Math.max(-p.leanRate / HZ, Math.min(p.leanRate / HZ, leanNow - leanCur));
+    const goal = { pelvis: pelvisGoal, torso: leanCur, feet, hands, gripping, planted, torsoGain: p.torsoGain };
     const actual = pose.actualOf(world);
     const support = move.kind === 'foot' ? lim.foot[1 - move.k].x : undefined;
     const jt = scrambling() ? pose.jointTargets(goal, actual) : pose.balancedTargets(goal, m, { planted, support, kHip: p.kHip, kAnkle: p.kAnkle, kAnkleVel: 0.15, kHipVel: 0.1 }, actual);
@@ -238,8 +273,8 @@ function episode(p, seed, record) {
     if (s >= 1) {
       if (move.kind === 'foot') {
         const so = pose.soleOf(world, move.k === 0 ? P.footLeft : P.footRight);
-        if (Math.abs(so.y - move.target.y) < 0.08 && Math.abs(so.x - move.target.x) < 0.12) { lim.foot[move.k] = { x: so.x, y: ground(so.x) }; move = null; stuck = 0; }
-        else if ((move.wait += 1 / HZ) > 0.4) { lim.foot[move.k] = { x: so.x, y: Math.max(so.y, ground(so.x)) }; move = null; stuck++; }
+        if (Math.abs(so.y - move.target.y) < 0.08 && Math.abs(so.x - move.target.x) < 0.12) { lim.foot[move.k] = { x: so.x, y: ground(so.x) + SOLE, angle: slopeAt(so.x) }; move = null; stuck = 0; }
+        else if ((move.wait += 1 / HZ) > 0.4) { lim.foot[move.k] = { x: so.x, y: Math.max(so.y, ground(so.x) + SOLE) }; move = null; stuck++; }
       } else if (move.kind === 'hand') {
         const g = this.grips[move.k];
         if (g && g.joint) { const hp = pose.handOf(world, move.k === 0 ? P.handLeft : P.handRight); lim.hand[move.k] = { x: hp.x, y: hp.y }; lim.grip[move.k] = true; move = null; stuck = 0; }
@@ -260,7 +295,7 @@ function episode(p, seed, record) {
       recFrames.push({ p: pz, up: m.torsoCos > 0.7 ? 1 : 0, gl: ep.grips[0].joint ? 1 : 0, gr: ep.grips[1].joint ? 1 : 0 });
     }
     const headAbove = m.headHeight - ground(world.px[2]);
-    if (headAbove < 0.5 || m.torsoCos < 0) { fell = true; break; }
+    if (headAbove < 0.22 || m.torsoCos < -0.3) { fell = true; break; } // scrambling bends the trunk over the rock, so only a head on the ground or a flipped trunk is a fall
     best = Math.max(best, Math.min(lim.foot[0].y, lim.foot[1].y));
     const onTop = lim.foot.every((f) => f.x > summitX + 0.1) && m.torsoCos > 0.8 && headAbove > 1.3;
     upTop = onTop ? upTop + 1 / HZ : 0;
