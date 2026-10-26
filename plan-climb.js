@@ -18,6 +18,8 @@ const first = +arg('--first', 0);
 const recordFile = arg('--record', null);
 const paramsFile = arg('--params', null);
 const debug = args.includes('--debug');
+// --actual: aim free limbs from the body's actual pose (tested: it destabilises single-leg balance).
+const useActual = args.includes('--actual');
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -50,6 +52,9 @@ export function runClimb(seed, p, record) {
   let planDone = false;
   const origGrip = ep.updateGrip.bind(ep);
   ep.updateGrip = function () {
+    // The start drops and tilts the body: the stand net settles it for the first second, then the plan
+    // starts from a calm stance (its 'hold' targets are read when each key starts).
+    if (this.frame < config.physics.hz) { origGrip(); return; }
     if (!runner && this.climbBox) runner = makePlanRunner(climbPlan(height, this.climbBox.x0, p), world, config.physics.hz);
     const before = runner ? runner.key : -1;
     goal = !planDone && runner ? runner.step() : null;
@@ -68,7 +73,8 @@ export function runClimb(seed, p, record) {
     if (!goal) planDone = true;
     if (goal) {
       const anyDown = goal.planted[0] || goal.planted[1];
-      const t = pose.balancedTargets(goal, this.measure, anyDown ? { planted: goal.planted } : { planted: goal.planted, kHip: 0, kHipVel: 0 });
+      goal.gripping = this.grips.map((g) => !!g.joint);
+      const t = pose.balancedTargets(goal, this.measure, anyDown ? { planted: goal.planted, support: goal.support != null ? goal.support : undefined } : { planted: goal.planted, kHip: 0, kHipVel: 0 }, useActual ? pose.actualOf(world) : undefined);
       pose.commandsFor(world, t, this.action);
       for (let j = J; j < OUT; j++) this.action[j] = goal.grip ? 1 : -1;
     } else for (let j = J; j < OUT; j++) this.action[j] = -1;

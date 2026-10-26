@@ -39,11 +39,20 @@ export function twoLink(root, target, l1, l2, bend) {
 
 // Goal -> joint target angles (radians). goal: { pelvis: {x,y}, torso, chest, feet: [{x,y,angle}x2],
 // hands: [{x,y}x2] } with feet[0]/hands[0] the LEFT limbs. Missing hands: arms hang.
-export function jointTargets(goal) {
+// actual (optional): { pelvis:{x,y}, torso, chest } of the body now. Limbs that are NOT supporting
+// (feet not planted, hands not gripping) are aimed from the actual hip/shoulder and torso, so they
+// reach their world targets even when the trunk is off its plan; supporting limbs use the goal, so
+// moving them moves the body toward the goal.
+export function jointTargets(goal, actual) {
   const t = new Float64Array(14);
   const torso = goal.torso || 0;
   const chest = goal.chest != null ? goal.chest : torso;
   const hip = goal.pelvis;
+  const planted = goal.planted || [true, true];
+  const gripping = goal.gripping || [false, false];
+  const aTorso = actual ? actual.torso : torso;
+  const aChest = actual ? (actual.chest != null ? actual.chest : actual.torso) : chest;
+  const aHip = actual ? actual.pelvis : hip;
   t[0] = chest - torso; // waist
   t[1] = 0; // neck
   const legs = [[5, 6, 7], [11, 12, 13]];
@@ -52,13 +61,21 @@ export function jointTargets(goal) {
     const fa = f.angle || 0;
     const off = rot(fa, BODY.soleFromAnkle.x, BODY.soleFromAnkle.y);
     const ankle = { x: f.x - off.x, y: f.y - off.y };
-    const ik = twoLink(hip, ankle, BODY.thigh, BODY.shin, -1);
-    t[legs[k][0]] = ik.upper - torso; // hip joint = thigh - torso
+    const free = !planted[k] && actual;
+    const ik = twoLink(free ? aHip : hip, ankle, BODY.thigh, BODY.shin, -1);
+    t[legs[k][0]] = ik.upper - (free ? aTorso : torso); // hip joint = thigh - torso
+    // Supporting leg: the hip also holds the TORSO upright in world frame (as SIMBICON's stance hip).
+    // If the trunk pitches past its goal, the hip joint moves so the trunk turns back.
+    if (!free && actual) t[legs[k][0]] += (goal.torsoGain != null ? goal.torsoGain : +(globalThis.process?.env?.TORSO_GAIN || 0)) * (aTorso - torso);
     t[legs[k][1]] = ik.middle; // knee
     t[legs[k][2]] = fa - ik.lower; // ankle = foot - shin
   }
-  const waist = { x: hip.x + rot(torso, 0, BODY.hipToWaist).x, y: hip.y + rot(torso, 0, BODY.hipToWaist).y };
-  const shoulder = { x: waist.x + rot(chest, 0, BODY.waistToShoulder).x, y: waist.y + rot(chest, 0, BODY.waistToShoulder).y };
+  const shoulderOf = (h, tr, ch) => {
+    const w = { x: h.x + rot(tr, 0, BODY.hipToWaist).x, y: h.y + rot(tr, 0, BODY.hipToWaist).y };
+    return { x: w.x + rot(ch, 0, BODY.waistToShoulder).x, y: w.y + rot(ch, 0, BODY.waistToShoulder).y };
+  };
+  const shoulderGoal = shoulderOf(hip, torso, chest);
+  const shoulderNow = shoulderOf(aHip, aTorso, aChest);
   const arms = [[2, 3, 4], [8, 9, 10]];
   for (let k = 0; k < 2; k++) {
     const h = goal.hands && goal.hands[k];
@@ -68,8 +85,9 @@ export function jointTargets(goal) {
       t[arms[k][2]] = 0;
       continue;
     }
-    const ik = twoLink(shoulder, h, BODY.upperArm, BODY.forearm, 1);
-    t[arms[k][0]] = ik.upper - chest; // shoulder = upper arm - chest
+    const free = !gripping[k] && actual;
+    const ik = twoLink(free ? shoulderNow : shoulderGoal, h, BODY.upperArm, BODY.forearm, 1);
+    t[arms[k][0]] = ik.upper - (free ? aChest : chest); // shoulder = upper arm - chest
     t[arms[k][1]] = ik.middle; // elbow
     t[arms[k][2]] = 0;
   }
@@ -98,9 +116,9 @@ export function balanced(goal, measure, opts = {}) {
 }
 
 // jointTargets plus the balance ankle offset on planted feet.
-export function balancedTargets(goal, measure, opts) {
+export function balancedTargets(goal, measure, opts, actual) {
   const b = balanced(goal, measure, opts);
-  const t = jointTargets(b.goal);
+  const t = jointTargets(b.goal, actual);
   if (b.planted[0]) t[7] += b.ankle;
   if (b.planted[1]) t[13] += b.ankle;
   return t;
@@ -124,6 +142,10 @@ export function soleOf(world, footPart) {
 }
 export function handOf(world, handPart) {
   return { x: world.px[handPart], y: world.py[handPart] };
+}
+export function actualOf(world) {
+  const pv = pelvisOf(world);
+  return { pelvis: { x: pv.x, y: pv.y }, torso: pv.angle, chest: Math.atan2(world.s[1], world.c[1]) };
 }
 export function pelvisOf(world) {
   const a = Math.atan2(world.s[0], world.c[0]);

@@ -29,20 +29,22 @@ const SPEC = [
   ['liftX', 0.08], ['liftY', 0.06], ['liftT', 0.2], ['placeT', 0.15],
   ['riseX', 0.08], ['riseY', 0.08], ['riseLean', 0.15], ['riseT', 0.25],
   ['trailX', 0.06], ['trailLift', 0.06], ['trailT', 0.2], ['standX', 0.06], ['standT', 0.2],
+  ['shiftT', 0.2], ['stepLean', 0.12], ['kneeBack', 0.06], ['loadY', 0.08], ['loadBack', 0.08],
 ];
 const DEFAULTS = {
   handX: 0.12, handAbove: 0.15, lean: -0.35, standBack: 0.30, reachT: 0.7, downT: 0.3,
   crouchY: 0.72, crouchT: 0.4, supportArm: 0.42, supportLean: -0.6, pushT: 0.45,
-  tuckX: -0.10, footX: 0.12, tuckT: 0.5,
-  liftX: -0.05, liftY: 0.15, liftT: 0.8, placeT: 0.6,
+  tuckX: -0.10, footX: 0.25, tuckT: 0.5,
+  liftX: -0.05, liftY: 0.12, liftT: 1.2, placeT: 0.8,
   riseX: 0.15, riseY: 0.78, riseLean: -0.45, riseT: 1.0,
-  trailX: 0.33, trailLift: 0.2, trailT: 0.8, standX: 0.26, standT: 1.0,
+  trailX: 0.33, trailLift: 0.2, trailT: 1.0, standX: 0.26, standT: 1.0, loadBack: 0.15,
+  shiftT: 0.8, stepLean: -0.15, kneeBack: 0.10, loadY: 0.5,
 };
 const dims = SPEC.length;
 const toParams = (v) => {
   const p = {};
   SPEC.forEach(([name], i) => (p[name] = DEFAULTS[name] + v[i]));
-  for (const k of ['reachT', 'downT', 'crouchT', 'pushT', 'tuckT', 'liftT', 'placeT', 'riseT', 'trailT', 'standT']) p[k] = Math.max(0.1, p[k]);
+  for (const k of ['reachT', 'downT', 'crouchT', 'pushT', 'tuckT', 'liftT', 'placeT', 'riseT', 'trailT', 'standT', 'shiftT']) p[k] = Math.max(0.1, p[k]);
   return p;
 };
 
