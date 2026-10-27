@@ -1580,8 +1580,11 @@ export function createSim(box) {
       sd.friction = 2;
       box.b2CreatePolygonShape(bodyId, sd, poly);
     }
-    world.thrownIds.push(bodyId);
-    world.thrownShapes.push(world.shapeOf(bodyId));
+    // every polygon is seen by the rays (only the first one was: lying on a summit the get-up network
+    // saw no ground under it and flailed)
+    const shapes = [];
+    world.getShapes(bodyId, shapes);
+    for (const sh of shapes) { world.thrownIds.push(bodyId); world.thrownShapes.push(sh); }
     return bodyId;
   }
 

@@ -251,12 +251,12 @@ export function installCragPlanner(ep, world, p, ctx) {
       const t = mt.t;
       const hand = (ctx.nets.handover && ctx.nets.handover[mt.side]) || 3;
       // as the expert was trained: it is the episode's network until the handover, then the stand net
-      const src = mt.phase === 'getup' && t < hand ? e.network.action : mt.stand.action;
+      const src = mt.phase === 'getup' && t >= hand && mt.stand ? mt.stand.action : e.network.action;
       if (src !== e.network.action) for (let j = 0; j < OUT; j++) e.network.action[j] = src[j];
       for (let k = 0; k < 2; k++) e.action[J + k] = -1;
       const up = e.measure.headHeight - wallH > 1.35 && e.measure.torsoCos > 0.8;
-      if (mt.phase === 'getup' && t > hand + 1 && up) { mt.phase = 'stand'; e.options.getup = false; e.options.startTime = 0; stood = true; }
-      else if (mt.phase === 'getup' && t > hand + 6) { mt.phase = 'lie'; mt.t = 0; e.options.getup = false; e.options.startTime = 0; }
+      if (mt.phase === 'getup' && t > hand + 1 && up) { mt.phase = 'stand'; e.options.getup = false; e.options.startTime = 0; stood = true; e.network = mt.stand; mt.stand = null; mt.getup = null; }
+      else if (mt.phase === 'getup' && t > hand + 6) { mt.phase = 'lie'; mt.t = 0; e.options.getup = false; e.options.startTime = 0; e.network = mt.stand; mt.stand = null; mt.getup = null; }
       return;
     }
     if (mt.phase === 'lie') {
@@ -323,8 +323,10 @@ export function installCragPlanner(ep, world, p, ctx) {
       if (mt && mt.stand) mt.stand.forward(this.input);
     };
   }
+  let handedOff = false;
   ep.updateGrip = ((orig) => function () {
     const m = this.measure;
+    if (handedOff) { orig(); return; }
     if (mt) { runMantle(this); orig(); return; }
     if (!move) startMove();
     if (mt) { runMantle(this); orig(); return; }
@@ -419,5 +421,5 @@ export function installCragPlanner(ep, world, p, ctx) {
     }
     orig();
   })(ep.updateGrip.bind(ep));
-  return { lim, feetTop, handsTop, rungs, wallX, wallH, N, TOP, faceAt, get mantled() { return mantled; }, get stood() { return stood; }, get phase() { return mt ? mt.phase : null; } };
+  return { lim, feetTop, handsTop, rungs, wallX, wallH, N, TOP, faceAt, get mantled() { return mantled; }, get stood() { return stood; }, handOff() { handedOff = true; }, get phase() { return mt ? mt.phase : null; } };
 }

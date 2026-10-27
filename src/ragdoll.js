@@ -373,7 +373,9 @@ export class RagDoll2D {
       if (joints[i].id && this.b2DestroyJoint) this.b2DestroyJoint(joints[i].id);
     joints.length = 0;
     const thrown = this.thrownIds || [];
-    for (let i = 0; i < thrown.length; i++) this.b2DestroyBody(thrown[i]);
+    // a body may be listed once per shape (rock polygons): destroy it once
+    const seen = new Set();
+    for (let i = 0; i < thrown.length; i++) { if (seen.has(thrown[i])) continue; seen.add(thrown[i]); this.b2DestroyBody(thrown[i]); }
     thrown.length = 0;
     const parts = this.parts || [];
     for (let i = 0; i < parts.length; i++)
