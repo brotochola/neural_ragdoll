@@ -60,7 +60,7 @@ function episode(p, seed, record) {
   const r = makeSeededRandom(12000 + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   const speed = speedMin + r() * (speedMax - speedMin);
-  const course = makeRopeCourse(r, { gapMin, gapMax, lift: LIFT, low: +arg('--rope-low', 1.25) });
+  const course = makeRopeCourse(r, { gapMin, gapMax, lift: LIFT, low: +arg('--rope-low', 1.25), ropeAt: +arg('--rope-at', 0.5), ropeDensity: +arg('--rope-density', 120) });
   const rs = runStates[Math.floor(r() * runStates.length)];
   const pz = rs.pose.slice();
   for (let k = 0; k < world.parts.length; k++) pz[k * 3 + 1] += LIFT;

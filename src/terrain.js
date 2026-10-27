@@ -79,7 +79,7 @@ export function makeRopeCourse(r, opts = {}) {
   return {
     statics: [{ dx: -4, w: 4 + x0, h: LIFT }, { dx: x0 + w, w: 30, h: LIFT }],
     hole: { x0, x1: x0 + w },
-    ropes: [{ dx: x0 + w * (opts.ropeAt || 0.5), top: LIFT + top, length: top - low, seg: opts.seg || 0.3, density: opts.ropeDensity || 300 }],
+    ropes: [{ dx: x0 + w * (opts.ropeAt || 0.5), top: LIFT + top, length: top - low, seg: opts.seg || 0.3, density: opts.ropeDensity || 120 }],
     lift: LIFT,
   };
 }
