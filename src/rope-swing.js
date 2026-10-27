@@ -25,6 +25,7 @@ export const SPEC = [
   ['landV', 1.3, 0.3], // let go faster than this: land running; slower: drop, steady, walk off, run
   ['dropHip', 0.3, 0.2], ['dropKnee', -0.4, 0.2], // legs while dropping onto the far floor (thigh world angle, knee)
   ['steadyT', 1.2, 0.4], // seconds the stand network steadies the body after the drop
+  ['relCos', 0.8, 0.1], // let go only with the trunk this upright (cosine of its tilt)
 ];
 
 export function installRopeRunner(ep, world, p, ctx) {
@@ -152,7 +153,8 @@ export function installRopeRunner(ep, world, p, ctx) {
       // past the far edge (relDx), or near the forward end of the swing (slower than relV) and past the rope
       // let go over the far floor: moving on (or at the end of the swing, nearly still)
       const overFar = px > hole.x1 + p.relDx;
-      if (overFar && (vx > p.relV || (vx < 0.3 && S.t > 0.4))) {
+      // ... and with the trunk upright enough to land on the feet (let go leaning far back it landed on its back)
+      if (overFar && (m.torsoCos || 0) > p.relCos && (vx > p.relV || (vx < 0.3 && S.t > 0.4))) {
         this.action[J] = this.action[J + 1] = -1;
         if (vx > p.landV || !ctx.walkP) {
           // fast: the runner takes over in the air, the front foot reaching for the landing

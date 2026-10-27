@@ -125,7 +125,7 @@ if (args.includes('--show')) {
   if (rec) {
     const shapes = world.parts.map((q) => ({ hx: +q.hx.toFixed(4), hy: +q.hy.toFixed(4), r: q.r ? +q.r.toFixed(4) : 0, ax: q.ax || 0, ay: q.ay || 0, capsule: !!q.capsule, circle: !!q.circle }));
     const eps = [];
-    for (let i = 0; i < +arg('--n', 3); i++) { const e = episode(p, 100 + i, true); eps.push({ seed: i, boxes: e.blocks, rope: e.rope, status: e.status, frames: e.frames }); }
+    for (let i = 0; i < +arg('--n', 3); i++) { const e = episode(p, base + i, true); eps.push({ seed: i, boxes: e.blocks, rope: e.rope, status: e.status, frames: e.frames }); }
     fs.writeFileSync(rec, JSON.stringify({ skill: 6, fps: HZ / 2, shapes, episodes: eps }));
   }
   process.exit(0);
