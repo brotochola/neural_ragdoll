@@ -92,7 +92,7 @@ function episode(p, seed, record) {
     const feetLow = Math.min(world.py[P.footLeft], world.py[P.footRight]);
     if ((world.py[0] < LIFT - 0.1 || feetLow < LIFT - 0.25) && !(ep.grips[0].joint || ep.grips[1].joint)) { fell = true; break; }
     if (overFloor && m.headHeight - LIFT < 0.5) { fell = true; break; }
-    if (['land', 'run2', 'drop', 'steady', 'walk'].includes(RS.phase)) {
+    if (['land', 'run2', 'drop', 'steady', 'walk', 'plant'].includes(RS.phase)) {
       if (landedX == null && (m.touch[P.footLeft] || m.touch[P.footRight]) && pelX > hole.x1) landedX = pelX;
       if (landedX != null && m.headHeight - LIFT > 1.3 && m.torsoCos > 0.7) upAfter++;
     }
@@ -101,7 +101,7 @@ function episode(p, seed, record) {
   const after = landedX != null ? Math.max(0, maxX - hole.x1) : 0;
   const ran = Math.min(1, after / 3);
   const pass = !fell && landedX != null && after > 2.5 ? 1 : 0;
-  const score = (caught ? 2 : Math.max(0, Math.min(1.5, (maxX - hole.x0) / 1))) + (landedX != null ? 2 : 0) + 3 * ran + (fell ? -1 : 1) + upAfter / HZ * 0.3 + (pass ? 3 : 0);
+  const score = (caught ? 2 : Math.max(0, Math.min(1.5, (maxX - hole.x0) / 1))) + (landedX != null ? 2 : 0) + 3 * ran + (fell ? -1 : 1) + Math.min(3, upAfter / HZ) + (pass ? 3 : 0);
   const why = 'gap ' + (hole.x1 - hole.x0).toFixed(2) + ' speed ' + speed.toFixed(1) + (caught ? ' CAUGHT' : ' missed') + (landedX != null ? ' landed, ran ' + after.toFixed(1) + ' m' : '') + (fell ? ' FELL ' + T.toFixed(1) + 's' : '') + ' phase ' + RS.phase + (pass ? ' PASS' : '');
   const status = (pass ? 'swung across a ' : fell ? 'fell at a ' : 'stopped at a ') + (hole.x1 - hole.x0).toFixed(1) + ' m hole' + (caught ? ' (caught the rope)' : ' (missed the rope)');
   return { score, pass, why, status, frames: recFrames, blocks: course.statics.map((b) => ({ x0: +(x0 + b.dx).toFixed(3), x1: +(x0 + b.dx + b.w).toFixed(3), top: b.h })), rope: { x: ep.terrain.ropes[0].x, top: ep.terrain.ropes[0].top } };

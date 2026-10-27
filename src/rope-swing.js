@@ -31,6 +31,9 @@ export const SPEC = [
   ['relLand', 0.5, 0.2], // let go when a free flight from here lands this far past the far edge
   ['ropeLandLean', -0.2, 0.15], ['ropeLandKnee', 0, 0.2], ['ropeLandPlace', 0, 0.2], // the landing stride after the rope
   ['landArm', 1.5, 0.5], // arms (world angle) in the air after letting go
+  ['plant', 1, 0], // > 0: feet down on the far floor still holding: stand up over the feet first, then let go
+  ['plantT', 1.2, 0.4], ['plantDx', 0.03, 0.05],
+  ['holdShoulder', 2.4, 0.3], // holding arm angle to the trunk while swinging (0: keep the angle it has)
 ];
 
 export function installRopeRunner(ep, world, p, ctx) {
@@ -148,6 +151,22 @@ export function installRopeRunner(ep, world, p, ctx) {
         const sb = this.simbicon;
         if (S.t > 2.5 && sb && sb.t < 1.5 / HZ) { S.phase = 'run2'; S.t = 0; this.runner = { stance: sb.stance, t: 0, flight: false, jumping: false, jumpNext: false, strides: 0 }; }
       }
+    } else if (S.phase === 'plant') {
+      // three or four points down: feet on the floor, hands on the rope; the hips come forward over the
+      // feet and the trunk straightens (pose executor), then the hands open and it steadies
+      this.speedCap = 0;
+      const mid = (S.feet[0].x + S.feet[1].x) / 2, q = Math.min(1, S.t / p.plantT);
+      const pv = ctx.pose.pelvisOf(world);
+      if (!S.pel0) S.pel0 = { x: pv.x, y: pv.y, a: pv.angle };
+      const goal = {
+        pelvis: { x: S.pel0.x + (mid + p.plantDx - S.pel0.x) * q, y: S.pel0.y + ((ctx.lift || 0) + 0.9 - S.pel0.y) * q },
+        torso: S.pel0.a * (1 - q), feet: S.feet.map((f) => ({ x: f.x, y: f.y, angle: 0 })), planted: [true, true],
+        hands: [0, 1].map((k) => (held[k] ? { x: world.px[HAND[k]], y: world.py[HAND[k]] } : null)), gripping: held.slice(),
+      };
+      ctx.pose.commandsFor(world, ctx.pose.jointTargets(goal, ctx.pose.actualOf(world)), this.action);
+      for (let k = 0; k < 2; k++) this.action[J + k] = held[k] ? 1 : -1;
+      const err = Math.abs((m.centerX || 0) - mid);
+      if ((q >= 1 && err < 0.08 && (m.torsoCos || 0) > 0.9) || S.t > p.plantT + 1.5) { this.action[J] = this.action[J + 1] = -1; S.phase = 'steady'; S.t = 0; S.feet = null; }
     } else if (S.phase === 'swing') {
       // hanging on: the arms keep the angle of the holding arm, the other hand closes when it gets to the
       // rope; the legs tuck, then reach forward; past the far edge the hands open
@@ -160,7 +179,9 @@ export function installRopeRunner(ep, world, p, ctx) {
       const shW = { x: world.px[1] - Math.sin(ca) * 0.10, y: world.py[1] + Math.cos(ca) * 0.10 };
       for (let k = 0; k < 2; k++) {
         const sh = k === 0 ? 2 : 8, el = k === 0 ? 3 : 9;
-        if (held[k]) { this.action[sh] = command(sh, a); this.action[el] = command(el, p.holdElbow); continue; }
+        // the holding arm: overhead at a set angle to the trunk (keeping whatever angle it had let the body
+        // spin round the hands and flip)
+        if (held[k]) { this.action[sh] = command(sh, p.holdShoulder > 0 ? p.holdShoulder : a); this.action[el] = command(el, p.holdElbow); continue; }
         const hk = HAND[k0];
         const ik = ctx.pose.twoLink(shW, { x: world.px[hk], y: world.py[hk] - 0.06 }, 0.28, 0.29, 1);
         this.action[sh] = command(sh, ik.upper - ca); this.action[el] = command(el, ik.middle);
@@ -191,7 +212,11 @@ export function installRopeRunner(ep, world, p, ctx) {
       const tl = (vy + Math.sqrt(disc)) / 9.81;
       const xLand = (m.centerX || px) + vx * tl;
       const ballistic = p.relLand != null && vx > 0.5 && xLand > hole.x1 + p.relLand && cy > yl - 0.1;
-      if ((ballistic && (m.torsoCos || 0) > p.relCos) || (p.relLand == null && feetOver && vx > p.relV && (m.torsoCos || 0) > p.relCos) || touching) {
+      if (touching && p.plant > 0) {
+        // feet on the far floor still holding the rope: keep holding, stand up over the feet, then let go
+        S.phase = 'plant'; S.t = 0; S.feet = [P.footLeft, P.footRight].map((q) => ctx.pose.soleOf(world, q));
+        S.hands = [0, 1].map((k) => (held[k] ? { x: world.px[HAND[k]], y: world.py[HAND[k]] } : null));
+      } else if ((ballistic && (m.torsoCos || 0) > p.relCos) || (p.relLand == null && feetOver && vx > p.relV && (m.torsoCos || 0) > p.relCos) || touching) {
         this.action[J] = this.action[J + 1] = -1;
         if (ctx.debug) console.log('  release: torso', angleOf(0).toFixed(2), 'cos', (m.torsoCos || 0).toFixed(2), 'vx', vx.toFixed(2), 'vy', (m.centerVelocityY || 0).toFixed(2), 'pelvis above floor', (world.py[0] - (ctx.lift || 0)).toFixed(2), 'past edge', (px - hole.x1).toFixed(2));
         if (vx > p.landV || !ctx.walkP) {
