@@ -35,7 +35,11 @@ const stopK = rd('trained/stop-controller.json').params;
 const stop = Object.assign({}, slow, stopK, { track: true });
 const g = rd('trained/getup-expert-19.json');
 const getup = { theta: g.theta.map((x) => +x.toFixed(5)), handover: g.handover };
-const cragObstacle = Object.assign({}, crag, { belly: 1, doneX: 3.0 });
+// the obstacle chain uses the numbers tuned on 2 m rocks from varied start distances
+let obV = [];
+try { obV = rd(process.env.CRAG_OBSTACLE || 'trained/crag-2m-wide.json').best; } catch (e) {}
+const cragObstacle = Object.assign(decodeWith(cragSpec, obV), { belly: 1, doneX: 3.0 });
+for (const k of ['tHand', 'tFoot', 'tRise', 'tPress', 'tOver', 'tPull']) cragObstacle[k] = Math.max(0.2, cragObstacle[k]);
 const ropeSpec = (await import('../src/rope-swing.js')).SPEC;
 let ropeBest = [];
 try { ropeBest = rd(process.env.ROPE || 'trained/rope-a.json').best; } catch (e) {}
