@@ -26,6 +26,9 @@ export const SPEC = [
   ['dropHip', 0.3, 0.2], ['dropKnee', -0.4, 0.2], // legs while dropping onto the far floor (thigh world angle, knee)
   ['steadyT', 1.2, 0.4], // seconds the stand network steadies the body after the drop
   ['relCos', 0.8, 0.1], // let go only with the trunk this upright (cosine of its tilt)
+  ['poseHold', 1, 0], // > 0: steady with the pose executor instead of the stand network
+  ['holdH', 0.75, 0.08], ['holdLean', -0.35, 0.15], // its crouch height and trunk lean at the start
+  ['relLand', 0.5, 0.2], // let go when a free flight from here lands this far past the far edge
 ];
 
 export function installRopeRunner(ep, world, p, ctx) {
@@ -111,9 +114,22 @@ export function installRopeRunner(ep, world, p, ctx) {
         if (m.touch[P.footLeft] && m.touch[P.footRight] || S.t > 1.5) { S.phase = 'steady'; S.t = 0; }
       } else if (S.phase === 'steady') {
         this.groundOffset = ctx.lift || 0;
-        for (let j = 0; j < J; j++) this.action[j] = this.network.action[j];
+        // the stand network's marks on this floor (at y = 0 they were 2 m below it and it reached for them)
+        if (!this.options.targets || this.options.targets.length !== config.targets.length) this.options.targets = config.targets.map((t) => Object.assign({}, t));
+        for (let i = 0; i < config.targets.length; i++) {
+          const spec = config.targets[i], mk = this.options.targets[i];
+          if (spec.ride) { mk.x = world.px[0] + (spec.x || 0); mk.y = (ctx.lift || 0) + (spec.y || 0); }
+          else { mk.x = world.px[spec.id === 'footR' ? P.footRight : P.footLeft]; mk.y = (ctx.lift || 0) + config.skill.footGroundMeters; }
+        }
+        if (p.poseHold > 0) {
+          // or the pose executor: crouch over the feet, trunk a little forward, balance on hips and ankles
+          if (!S.feet) S.feet = [P.footLeft, P.footRight].map((q) => ctx.pose.soleOf(world, q));
+          const mid = (S.feet[0].x + S.feet[1].x) / 2, q = Math.min(1, S.t / p.steadyT);
+          const goal = { pelvis: { x: mid, y: (ctx.lift || 0) + p.holdH + (0.92 - p.holdH) * q }, torso: p.holdLean * (1 - q), feet: S.feet.map((f) => ({ x: f.x, y: f.y, angle: 0 })), planted: [true, true] };
+          ctx.pose.commandsFor(world, ctx.pose.balancedTargets(goal, m, { planted: [true, true], kHip: 1.5, kAnkle: 3.1, kAnkleVel: 0.15, kHipVel: 0.1 }, ctx.pose.actualOf(world)), this.action);
+        } else for (let j = 0; j < J; j++) this.action[j] = this.network.action[j];
         this.action[J] = this.action[J + 1] = -1;
-        if (S.t > p.steadyT) { S.phase = 'walk'; S.t = 0; this.simbicon = { stance: 0, t: 0 }; }
+        if (S.t > p.steadyT + (p.poseHold > 0 ? 0.5 : 0)) { S.phase = 'walk'; S.t = 0; this.simbicon = { stance: 0, t: 0 }; }
       } else {
         m.walkSpeed = Math.min(1.2, 0.3 + S.t * 0.6); m.walkDir = 1;
         walker(ctx.walkP, this, tmp);
@@ -152,10 +168,21 @@ export function installRopeRunner(ep, world, p, ctx) {
       const vx = m.centerVelocityX || 0;
       // past the far edge (relDx), or near the forward end of the swing (slower than relV) and past the rope
       // let go over the far floor: moving on (or at the end of the swing, nearly still)
-      const overFar = px > hole.x1 + p.relDx;
-      // ... and with the trunk upright enough to land on the feet (let go leaning far back it landed on its back)
-      if (overFar && (m.torsoCos || 0) > p.relCos && (vx > p.relV || (vx < 0.3 && S.t > 0.4))) {
+      // let go as the feet come over the far floor, still moving on (later, the feet were on the floor with
+      // the rope pulling the body back and it fell over backward); or if the feet already touch it
+      const feetX = Math.min(world.px[P.footLeft], world.px[P.footRight]);
+      const feetOver = feetX > hole.x1 + p.relDx;
+      const touching = (m.touch[P.footLeft] || m.touch[P.footRight]) && px > hole.x1;
+      // BALLISTIC: let go as soon as the centre of mass, flying free from here, would come down (to standing
+      // height over the far floor) at least relLand past the edge, the trunk upright enough
+      const cy = m.centerY || world.py[0], vy = m.centerVelocityY || 0, yl = (ctx.lift || 0) + 0.85;
+      const disc = vy * vy + 2 * 9.81 * Math.max(0, cy - yl);
+      const tl = (vy + Math.sqrt(disc)) / 9.81;
+      const xLand = (m.centerX || px) + vx * tl;
+      const ballistic = p.relLand != null && vx > 0.5 && xLand > hole.x1 + p.relLand && cy > yl - 0.1;
+      if ((ballistic && (m.torsoCos || 0) > p.relCos) || (p.relLand == null && feetOver && vx > p.relV && (m.torsoCos || 0) > p.relCos) || touching) {
         this.action[J] = this.action[J + 1] = -1;
+        if (ctx.debug) console.log('  release: torso', angleOf(0).toFixed(2), 'cos', (m.torsoCos || 0).toFixed(2), 'vx', vx.toFixed(2), 'vy', (m.centerVelocityY || 0).toFixed(2), 'pelvis above floor', (world.py[0] - (ctx.lift || 0)).toFixed(2), 'past edge', (px - hole.x1).toFixed(2));
         if (vx > p.landV || !ctx.walkP) {
           // fast: the runner takes over in the air, the front foot reaching for the landing
           S.phase = 'land'; S.t = 0;
