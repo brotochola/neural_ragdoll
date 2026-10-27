@@ -80,7 +80,7 @@ function reset() {
   else if (state.scene === 'mountain') { crag = makeCrag(r, 2.6, 0.55 + r() * 0.08); start.terrain = { statics: [], polys: crag.polys, surface: crag.surface }; }
   else if (state.scene === 'rope') {
     // a hole with a rope over it, the floor raised 0.6 m so the hole is a real drop
-    ropeCourse = makeRopeCourse(r, { gapMin: 1.4, gapMax: 2.2 });
+    ropeCourse = makeRopeCourse(r, { gapMin: 1.4, gapMax: 2.2, lift: 2.0, low: 1.25 });
     lift = ropeCourse.lift;
     start.terrain = { statics: ropeCourse.statics, ropes: ropeCourse.ropes };
   } else if (state.scene === 'obstacle') {
@@ -153,7 +153,7 @@ function reset() {
     if (state.scene === 'rope') {
       const hole = { x0: mid0 + ropeCourse.hole.x0, x1: mid0 + ropeCourse.hole.x1 };
       terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
-      chain = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => state.speed.run, hole, rope: ep.terrain.ropes[0], lift });
+      chain = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift, walkP: params.walkFast }); // 2.4 m/s: the speed it crosses best at
     } else if (state.scene === 'obstacle') {
       chain = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag, H: 2.0, speed: () => state.speed.run, stopAt: 0.6, vswitch: 1.3, params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragObstacle, getup: params.getup } });
     } else installRunner(ep, world, params.runner, { config, speed: () => state.speed.run, obstacles: terrain.holes || [] });
@@ -164,7 +164,7 @@ function reset() {
     else ep.updateGrip = ((orig) => function () { drive(this); orig(); })(ep.updateGrip.bind(ep));
   }
   // stand: the stand-and-walk network drives (nothing to install)
-  $('modeNote').textContent = MODE_NOTE[state.mode] + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
+  $('modeNote').textContent = (state.mode === 'run' && state.scene === 'rope' ? 'Corre, salta en el borde, agarra la soga en el aire, cruza el agujero, cae y sigue corriendo. En la simulación cruza bien unas 6 de cada 10 veces (si se cae, vuelve a empezar solo).' : state.mode === 'run' && state.scene === 'obstacle' ? 'Corre, frena antes de la roca de 2 m, trepa, se arrastra sobre el borde, se levanta arriba y vuelve a correr. Tarda casi un minuto y todavía sale pocas veces.' : MODE_NOTE[state.mode]) + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
 }
 const MODE_NOTE = {
   manual: 'Vos sos el planificador: arrastrá las marcas.',
