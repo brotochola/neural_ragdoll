@@ -103,7 +103,7 @@ function episode(p, seed, record) {
   start.tilt = 0;
   start.walk = null;
   start.frames = Math.round(seconds * HZ);
-  const crag = makeCrag(r, cragH, +(process.env.WALL_DX || 0.55) + r() * 0.08, { tierMin, tierMax });
+  const crag = makeCrag(r, cragH, +(process.env.WALL_DX || 0.55) + r() * +(process.env.DX_RANGE || 0.08), { tierMin, tierMax });
   start.terrain = { statics: [], polys: crag.polys, surface: crag.surface };
   world.rebuild();
   const ep = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, start));

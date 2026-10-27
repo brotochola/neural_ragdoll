@@ -20,7 +20,7 @@ export function installObstacleRunner(ep, world, ctx) {
   const tmp = new Float64Array(J + 2);
   let mode = 'run', modeT = 0, PL = null, holdFeet = null;
   const log = [];
-  const setMode = (m2) => { if (m2 !== mode) { log.push((ep.frame / HZ).toFixed(1) + 's ' + m2); mode = m2; modeT = 0; } };
+  const setMode = (m2) => { if (m2 !== mode) { log.push((ep.frame / HZ).toFixed(1) + 's ' + m2 + (ctx.debug ? '@' + (face - Math.max(world.px[P.footLeft], world.px[P.footRight])).toFixed(2) : '')); mode = m2; modeT = 0; } };
   ep.updateGrip = ((orig) => function () {
     const m = this.measure;
     modeT += 1 / HZ;

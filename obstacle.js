@@ -72,7 +72,7 @@ function episode(seed, record) {
   const S = ep.terrain.surface;
   const face = S[1][0]; // the rock's foot
   const edgeX = S[S.length - 2][0];
-  const OR = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag, H, speed: () => speed, stopAt, vswitch: +(process.env.VSWITCH || 1.3), params: { runP, walkP, slowP, stopP, stopK: st, cragP, getup } });
+  const OR = installObstacleRunner(ep, world, { debug: !!process.env.DEBUG_OB, config, pose, Box2D, ElmanNetwork, crag, H, speed: () => speed, stopAt, vswitch: +(process.env.VSWITCH || 1.3), decel: +(process.env.DECEL || 8), params: { runP, walkP, slowP, stopP, stopK: st, cragP, getup } });
   const log = OR.log;
   const frames = record ? [] : null;
   let fell = false, done = false;
