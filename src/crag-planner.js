@@ -77,7 +77,7 @@ export function installCragPlanner(ep, world, p, ctx) {
       // BELLY MANTLE (p.belly): press up on the arms, tip the chest over the edge and crawl onto the top
       // on the hands (stepping a foot up onto the top from a knob below the edge never worked)
       const footHi = Math.max(ry(lim.foot[0].rung), ry(lim.foot[1].rung));
-      if (p.belly && (footHi >= wallH - p.mantleH || retry >= 3)) return { kind: 'mantle' };
+      if ((p.belly || p.stepMantle) && (footHi >= wallH - p.mantleH || retry >= 3)) return { kind: 'mantle' };
       if (feetTop() === 1) { const k2 = lim.foot[0].rung === TOP ? 1 : 0; return { kind: 'foot', k: k2, to: TOP }; }
       if (fTo <= N) return { kind: 'foot', k: fk, to: fTo };
       if (fTo === TOP || Math.max(lim.foot[0].rung, lim.foot[1].rung) >= N) { const k1 = lim.foot[0].rung >= lim.foot[1].rung ? 0 : 1; if (lim.foot[k1].rung !== TOP) return { kind: 'foot', k: k1, to: TOP }; }
@@ -148,6 +148,63 @@ export function installCragPlanner(ep, world, p, ctx) {
       feet = [0, 1].map((k) => (over < 0.35 ? { x: Math.min(pv.x - 0.1, wallX - 0.06), y: pv.y - 0.72 + 0.08 * k, angle: 0.4 }
         : pv.x - 0.45 < wallX ? { x: wallX - 0.08, y: wallH - 0.35, angle: 0.4 } : { x: Math.max(wallX + 0.06, pv.x - 0.75 - 0.08 * k), y: wallH + 0.06, angle: 0 }));
     };
+    if (p.stepMantle > 0 && ['press', 'stepup', 'rise', 'step2', 'stand'].includes(mt.phase)) {
+      // PRESS-OUT MANTLE: straight arms push the hips up above the edge (trunk leaning over the hands),
+      // a foot steps up onto the top, the body rises over it, the other foot follows, the hands let go
+      const top = { x: wallX + p.psFoot, y: wallH + 0.05 };
+      if (mt.phase === 'press') {
+        const q = smooth(Math.min(1, mt.t / p.tPress));
+        pel = lerp(mt.from, { x: wallX - p.psOff, y: wallH + p.psUp }, q);
+        lean = mt.lean0 + (p.psLean - mt.lean0) * q;
+        if (mt.t >= p.tPress + 0.2) { mt.phase = 'stepup'; mt.t = 0; mt.from = { ...pel }; mt.k = lim.foot[0].pos.y >= lim.foot[1].pos.y ? 0 : 1; mt.footFrom = { ...lim.foot[mt.k].pos }; }
+      } else if (mt.phase === 'stepup') {
+        pel = { ...mt.from }; lean = p.psLean;
+        const q = Math.min(1, mt.t / p.tFoot), a = mt.footFrom;
+        const wp1 = { x: Math.min(a.x, wallX - 0.15), y: wallH + p.psClear }, wp2 = { x: top.x, y: wallH + p.psClear };
+        const pts = [a, wp1, wp2, top], cuts = [0, 0.45, 0.8, 1];
+        let si = 0; while (si < 2 && q > cuts[si + 1]) si++;
+        const e2 = smooth(Math.min(1, (q - cuts[si]) / (cuts[si + 1] - cuts[si])));
+        feet[mt.k] = { x: pts[si].x + (pts[si + 1].x - pts[si].x) * e2, y: pts[si].y + (pts[si + 1].y - pts[si].y) * e2, angle: 0 };
+        planted[mt.k] = false;
+        if (q >= 1) {
+          const so = pose.soleOf(world, mt.k === 0 ? P.footLeft : P.footRight);
+          if (Math.abs(so.y - top.y) < 0.08 && Math.abs(so.x - top.x) < 0.15) { lim.foot[mt.k] = { rung: TOP, pos: { x: so.x, y: wallH + 0.05 } }; mt.phase = 'rise'; mt.t = 0; mt.from = { ...pel }; }
+          else if (mt.t > p.tFoot + 0.6) { mt.phase = 'press'; mt.t = 0; mt.from = { ...pel }; mt.tries = (mt.tries || 0) + 1; }
+        }
+      } else if (mt.phase === 'rise') {
+        const q = smooth(Math.min(1, mt.t / p.tRise2));
+        const f = lim.foot[mt.k].pos;
+        pel = lerp(mt.from, { x: f.x + 0.02, y: wallH + p.riseH }, q);
+        lean = p.psLean + (p.riseLean - p.psLean) * q;
+        // the other leg hangs out of the way, knee bent, until the hips are over the top
+        planted[1 - mt.k] = false;
+        feet[1 - mt.k] = { x: wallX - 0.12, y: pel.y - 0.6, angle: 0 };
+        if (q > 0.7) for (let k = 0; k < 2; k++) { lim.hand[k].grip = false; }
+        if (mt.t >= p.tRise2 + 0.3) { mt.phase = 'step2'; mt.t = 0; mt.from = { ...pel }; mt.footFrom = pose.soleOf(world, mt.k === 1 ? P.footLeft : P.footRight); }
+      } else if (mt.phase === 'step2') {
+        const k2 = 1 - mt.k, f = lim.foot[mt.k].pos;
+        pel = { x: f.x + 0.02, y: wallH + p.riseH }; lean = p.riseLean;
+        const q = Math.min(1, mt.t / p.tFoot), a = mt.footFrom, b = { x: f.x + 0.22, y: wallH + 0.05 };
+        const wp = { x: Math.max(a.x, wallX + 0.05), y: wallH + p.psClear };
+        feet[k2] = q < 0.5 ? lerp(a, wp, smooth(q * 2)) : lerp(wp, b, smooth(q * 2 - 1));
+        feet[k2].angle = 0; planted[k2] = false;
+        if (q >= 1 && mt.t > p.tFoot + 0.3) { lim.foot[k2] = { rung: TOP, pos: { x: b.x, y: b.y } }; mt.phase = 'stand'; mt.t = 0; }
+      } else {
+        const f0 = lim.foot[0].pos, f1 = lim.foot[1].pos;
+        pel = { x: (f0.x + f1.x) / 2, y: wallH + 0.93 }; lean = 0;
+        stood = true; mantled = true;
+      }
+      const handsFree = mt.phase === 'step2' || mt.phase === 'stand' || (mt.phase === 'rise' && !lim.hand[0].grip);
+      for (let k = 0; k < 2; k++) if (handsFree) { hands[k] = null; gripping[k] = false; }
+      pelvisGoal = pel; leanNow = lean;
+      const goal = { pelvis: pel, torso: lean, feet, hands, gripping, planted, torsoGain: p.torsoGain };
+      const onTwo = planted[0] && planted[1];
+      const jt = handsFree ? pose.balancedTargets(goal, e.measure, { planted, support: onTwo ? undefined : lim.foot[mt.k].pos.x, kHip: 0.3, kAnkle: 0.8, kAnkleVel: 0.4, kHipVel: 0.2 }, pose.actualOf(world)) : pose.jointTargets(goal, pose.actualOf(world));
+      pose.commandsFor(world, jt, tmp);
+      for (let j = 0; j < J; j++) e.action[j] = tmp[j];
+      for (let k = 0; k < 2; k++) e.action[J + k] = gripping[k] ? 1 : -1;
+      return;
+    }
     if (mt.phase === 'press') {
       const q = smooth(Math.min(1, mt.t / p.tPress));
       pel = lerp(mt.from, { x: wallX - p.pressOff, y: wallH + p.pressUp }, q);
@@ -193,8 +250,9 @@ export function installCragPlanner(ep, world, p, ctx) {
       // (the episode's own), both told the floor is the summit (groundOffset)
       const t = mt.t;
       const hand = (ctx.nets.handover && ctx.nets.handover[mt.side]) || 3;
-      const src = mt.phase === 'getup' && t < hand ? mt.getup.action : e.network.action;
-      for (let j = 0; j < OUT; j++) e.action[j] = src[j];
+      // as the expert was trained: it is the episode's network until the handover, then the stand net
+      const src = mt.phase === 'getup' && t < hand ? e.network.action : mt.stand.action;
+      if (src !== e.network.action) for (let j = 0; j < OUT; j++) e.network.action[j] = src[j];
       for (let k = 0; k < 2; k++) e.action[J + k] = -1;
       const up = e.measure.headHeight - wallH > 1.35 && e.measure.torsoCos > 0.8;
       if (mt.phase === 'getup' && t > hand + 1 && up) { mt.phase = 'stand'; e.options.getup = false; e.options.startTime = 0; stood = true; }
@@ -216,7 +274,9 @@ export function installCragPlanner(ep, world, p, ctx) {
       if (ctx.nets && ((mt.t > 0.8 && still) || mt.t > 3)) {
         mt.phase = 'getup'; mt.t = 0;
         mt.side = Math.atan2(world.s[0], world.c[0]) > 0 ? 'up' : 'down';
+        mt.stand = e.network; // the stand net keeps reading the inputs (decide hook)
         mt.getup = new ctx.nets.ElmanNetwork(Float32Array.from(ctx.nets.getupW));
+        e.network = mt.getup;
         e.groundOffset = wallH;
         if (!e.options.targets || e.options.targets.length !== config.targets.length) e.options.targets = config.targets.map((t) => Object.assign({}, t));
         e.options.getup = true;
@@ -260,7 +320,7 @@ export function installCragPlanner(ep, world, p, ctx) {
         }
       }
       origDecide();
-      if (mt && mt.getup) mt.getup.forward(this.input);
+      if (mt && mt.stand) mt.stand.forward(this.input);
     };
   }
   ep.updateGrip = ((orig) => function () {

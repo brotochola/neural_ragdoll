@@ -51,7 +51,7 @@ export function makeCrag(r, H = 2.6, x0 = 0.6, opts = {}) {
     y += h;
     x += lean + (y < H - 1e-6 ? -0.02 + r() * 0.06 : 0);
   }
-  const end = x + 4;
+  const end = x + (opts.plateau || 9);
   const surface = [[-4, 0]];
   for (let i = 0; i < tiers.length; i++) {
     const t = tiers[i];

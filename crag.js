@@ -79,13 +79,18 @@ const SPEC = [
   ['mantleH', 0.6, 0.12], // starts with both hands on top and a foot within this of it
   ['tPress', 1.2, 0.3], ['pressOff', 0.25, 0.08], ['pressUp', 0.05, 0.08], ['pressLean', -0.9, 0.2],
   ['tOver', 1.2, 0.3], ['overX', 0.0, 0.08],
+  // press-out mantle (--step-mantle): hips up over straight arms, a foot onto the top, rise, other foot
+  ['psOff', 0.12, 0.06], ['psUp', 0.25, 0.08], ['psLean', -0.9, 0.2], ['psFoot', 0.25, 0.06], ['psClear', 0.15, 0.06],
+  ['tRise2', 1.2, 0.3], ['riseH', 0.85, 0.06], ['riseLean', -0.3, 0.15],
   ['crawlReach', 0.5, 0.08], ['crawlLean', -1.1, 0.15], ['hangHip', 1.3, 0.3], ['hangKnee', -1.2, 0.3], ['foldHip', 0.0, 0.2], ['tPull', 0.8, 0.2], ['pullStep', 0.25, 0.06], ['doneX', 1.6, 0.08],
 ];
 const decode = (v) => {
   const p = {};
   SPEC.forEach(([k, b], i) => (p[k] = b + (v[i] || 0)));
   for (const k of ['tHand', 'tFoot', 'tRise', 'tPress', 'tOver', 'tPull']) p[k] = Math.max(0.2, p[k]);
-  p.belly = 1;
+  p.belly = args.includes('--step-mantle') ? 0 : 1;
+  p.stepMantle = args.includes('--step-mantle') ? 1 : 0;
+  p.tRise2 = Math.max(0.3, p.tRise2);
   for (const k of Object.keys(process.env)) if (k.startsWith('P_')) p[k.slice(2)] = +process.env[k];
   return p;
 };
@@ -128,8 +133,22 @@ function episode(p, seed, record) {
     // while hanging from the top edge)
     const ryOf = (i) => (i <= 0 ? 0 : i > rungs.length ? wallH : rungs[i - 1].y);
     best = Math.max(best, Math.min(ryOf(lim.foot[0].rung), ryOf(lim.foot[1].rung)));
-    const onTopLying = PL.phase && ['over', 'hand', 'pull', 'lie', 'getup', 'stand'].includes(PL.phase);
+    const onTopLying = PL.phase && ['over', 'hand', 'pull', 'lie', 'getup', 'stand', 'press', 'stepup', 'rise', 'step2'].includes(PL.phase);
     if ((!onTopLying && m.headHeight < world.py[0]) || (!gripped && !onTopLying && footLow < best - 0.6 && best > 0.3) || (onTopLying && world.py[0] < wallH - 0.6)) { fell = true; break; }
+    if (PL.mantled && process.env.DUMP_LIE && !ep.lieDumped && PL.phase === 'lie') {
+      // the body lying on the summit, still: saved (relative to the summit floor) to test or tune getting up
+      let still = true;
+      for (let q = 0; q < world.parts.length; q++) if (Math.abs(world.vx[q]) > 0.1 || Math.abs(world.vy[q]) > 0.1) still = false;
+      if (still) {
+        ep.lieDumped = true;
+        const poseNow = [], vel = [];
+        for (let q = 0; q < world.parts.length; q++) { poseNow.push(world.px[q] - world.px[0], world.py[q] - wallH, Math.atan2(world.s[q], world.c[q])); vel.push(0, 0, 0); }
+        const fpath = process.env.DUMP_LIE;
+        const all = fs.existsSync(fpath) ? JSON.parse(fs.readFileSync(fpath, 'utf8')) : [];
+        all.push({ pose: poseNow, vel });
+        fs.writeFileSync(fpath, JSON.stringify(all));
+      }
+    }
     if (PL.mantled && !args.includes('--getup')) { upTop += 1 / HZ; if (upTop > 1.0) { topped = true; break; } continue; }
     if (PL.stood) { topped = true; upTop += 1 / HZ; if (upTop > 3) break; continue; }
     if (PL.mantled) continue;
