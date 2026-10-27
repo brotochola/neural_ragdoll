@@ -29,6 +29,8 @@ export const SPEC = [
   ['poseHold', 1, 0], // > 0: steady with the pose executor instead of the stand network
   ['holdH', 0.75, 0.08], ['holdLean', -0.35, 0.15], // its crouch height and trunk lean at the start
   ['relLand', 0.5, 0.2], // let go when a free flight from here lands this far past the far edge
+  ['ropeLandLean', -0.2, 0.15], ['ropeLandKnee', 0, 0.2], ['ropeLandPlace', 0, 0.2], // the landing stride after the rope
+  ['landArm', 1.5, 0.5], // arms (world angle) in the air after letting go
 ];
 
 export function installRopeRunner(ep, world, p, ctx) {
@@ -37,6 +39,9 @@ export function installRopeRunner(ep, world, p, ctx) {
   const runner = makeController(world);
   const walker = makeWalker(world);
   const rp = Object.assign({}, ctx.runnerP);
+  // the landing stride after the rope: its own changes to the runner's landing (a rope landing comes in
+  // leaning back, not as a jump does)
+  const rpLand = Object.assign({}, rp, { landLean: (rp.landLean || 0) + (p.ropeLandLean || 0), landKnee: (rp.landKnee || 0) + (p.ropeLandKnee || 0), landPlace: (rp.landPlace || 0) + (p.ropeLandPlace || 0) });
   const tmp = new Float64Array(J + config.net.gripOutputs);
   const hole = ctx.hole, rope = ctx.rope;
   const getPos = ctx.Box2D.b2Body_GetPosition;
@@ -66,7 +71,7 @@ export function installRopeRunner(ep, world, p, ctx) {
     const held = [0, 1].map((k) => !!(this.grips[k] && this.grips[k].joint));
     if ((S.phase === 'run' || S.phase === 'reach') && (held[0] || held[1])) { S.phase = 'swing'; S.t = 0; }
     if (S.phase === 'run' || S.phase === 'reach' || S.phase === 'land' || S.phase === 'run2') {
-      runner(rp, this, tmp);
+      runner(S.phase === 'land' || (S.phase === 'run2' && S.t < 0.6) ? rpLand : rp, this, tmp);
       const st = this.runner;
       // the jump: on the stride whose ordinary landing would fall near or past the edge
       if (S.phase === 'run' && st && st.t === 1 / HZ) {
@@ -84,6 +89,12 @@ export function installRopeRunner(ep, world, p, ctx) {
       if (S.phase === 'run' && st && st.jumping && st.flight) { S.phase = 'reach'; S.t = 0; }
       for (let j = 0; j < tmp.length; j++) this.action[j] = j < J ? tmp[j] : -1;
       if (S.phase === 'land' && S.t > 0.3 && (m.touch[P.footLeft] || m.touch[P.footRight]) && S.t > 1.2) { S.phase = 'run2'; S.t = 0; }
+      if (S.phase === 'land' && !(m.touch[P.footLeft] || m.touch[P.footRight])) {
+        // in the air after letting go: arms forward and the trunk folded forward at the waist, to land over the feet
+        const torso = angleOf(0);
+        for (const [sh, el] of [[2, 3], [8, 9]]) { tmp[sh] = command(sh, p.landArm - torso); tmp[el] = command(el, 0.4); }
+        tmp[0] = command(0, -0.2);
+      }
       if (S.phase === 'reach') {
         // arms up and forward; a hand near the rope closes
         // each hand aims at the rope: the point of it nearest to up-and-forward of the shoulder (IK)
