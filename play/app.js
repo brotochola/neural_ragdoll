@@ -15,6 +15,7 @@ import standNet from '../trained/stand-and-walk.json';
 import params from './params.json';
 import { makeController as makeWalker } from '../src/simbicon.js';
 import { installRunner } from '../src/run-selector.js';
+import { makeDashNet } from '../src/dash-net.js';
 import { installWallPlanner } from '../src/wall-planner.js';
 import { installCragPlanner } from '../src/crag-planner.js';
 import { installRopeRunner } from '../src/rope-swing.js';
@@ -168,7 +169,7 @@ function reset() {
       // its own speed (vRun, tuned with the rest) and jumps scaled by each box's or ball's height
       const obstacles = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }))
         .concat(ep.terrain.balls.map((b) => ({ live: () => { const q = Box2D.b2Body_GetPosition(b.id); return { x0: q.x - b.r, x1: q.x + b.r, top: q.y + b.r }; } })));
-      installRunner(ep, world, params.dash, { config, obstacles });
+      installRunner(ep, world, params.dash, { config, obstacles, net: params.dashNet ? { correct: makeDashNet(world, config, Box2D), theta: params.dashNet } : null });
     } else installRunner(ep, world, params.runner, { config, speed: () => state.speed.run, obstacles: terrain.holes || [] });
     ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   } else if (state.mode === 'climb') {
@@ -179,7 +180,7 @@ function reset() {
   // stand: the stand-and-walk network drives (nothing to install)
   $('modeNote').textContent = (state.mode === 'run' && state.scene === 'rope' ? 'Corre, salta en el borde, agarra la soga en el aire, cruza el agujero, cae y sigue corriendo. En la simulación cruza y sigue corriendo cerca de la mitad de las veces. Si se cae, vuelve a empezar solo con otro agujero; si cruza, cuenta el cruce y prueba con otro.' : state.mode === 'run' && state.scene === 'dash' ? DASH_NOTE : state.mode === 'run' && state.scene === 'obstacle' ? 'Corre, frena antes de la roca de 2 m, trepa, se arrastra sobre el borde, se levanta arriba y vuelve a correr. Tarda casi un minuto y en la simulación sale 4 de cada 10 veces (a veces se traba trepando).' : MODE_NOTE[state.mode]) + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
 }
-const DASH_NOTE = 'Corre a la derecha lo más rápido que puede sobre cajas y bolas al azar, saltándolas. Las bolas están sueltas: si las patea, ruedan. Si se cae, vuelve a empezar con otro recorrido.';
+const DASH_NOTE = 'Corre a la derecha lo más rápido que puede sobre cajas y bolas al azar, saltándolas. Las bolas están sueltas: si las patea, ruedan. El corredor (números ajustados por búsqueda) lleva encima una red neuronal chica, entrenada con estrategias evolutivas en miles de recorridos al azar, que corrige caderas, rodillas, tobillos y cintura según cómo viene el cuerpo y qué tiene adelante. Si se cae, vuelve a empezar con otro recorrido.';
 const MODE_NOTE = {
   manual: 'Vos sos el planificador: arrastrá las marcas.',
   stand: 'La red neuronal de pararse mantiene el equilibrio.',

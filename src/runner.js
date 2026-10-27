@@ -96,12 +96,15 @@ export function makeController(world) {
     const d = (m.centerX || 0) - world.px[stance.foot];
     const v = (m.centerVelocityX || 0) - (m.walkSpeed || 0);
     const L2 = !!st.landing && !J2;
-    const lean = p.lean + js * p.jumpLean + (L2 ? p.landLean || 0 : 0);
+    // the landing changes grow with the jump that came before (landGainH; 0 = as tuned)
+    const ls = L2 ? 1 + (p.landGainH || 0) * ((st.jumpScale != null ? st.jumpScale : 1) - 1) : 0;
+    const dh = st.dropH || 0; // stepping down off a box (set by the selector), metres
+    const lean = p.lean + js * p.jumpLean + ls * (p.landLean || 0) + (p.dropLean || 0) * dh;
     if (!st.flight) {
       const push = d > p.pushD;
       const stanceHip = angleOf(stance.thigh) - torso;
       action[stance.hip] = command(stance.hip, stanceHip + (torso - lean) - (push ? p.hipPush + js * p.jumpHipPush : 0));
-      action[stance.knee] = command(stance.knee, push ? p.pushKnee + js * p.jumpKnee : p.kneeLoad + (L2 ? p.landKnee || 0 : 0));
+      action[stance.knee] = command(stance.knee, push ? p.pushKnee + js * p.jumpKnee : p.kneeLoad + ls * (p.landKnee || 0));
       action[stance.ankle] = command(stance.ankle, (push ? p.pushAnkle + js * p.jumpAnkle : 0) - angleOf(stance.shin));
       action[swing.hip] = command(swing.hip, p.swingHip + js * p.jumpHip - torso);
       action[swing.knee] = command(swing.knee, p.tuck + js * p.jumpTuck);
@@ -109,7 +112,7 @@ export function makeController(world) {
     } else {
       // flight: the leg that pushed trails, the other reaches for the landing
       // st.placeAdj: set by the caller to lengthen (+) or shorten (-) this step (hitting a take-off spot)
-      const placeW = p.place + js * p.jumpPlace + (L2 ? p.landPlace || 0 : 0) + p.cd * d + p.cv * v + (st.placeAdj || 0);
+      const placeW = p.place + js * p.jumpPlace + ls * (p.landPlace || 0) + (p.dropPlace || 0) * dh + p.cd * d + p.cv * v + (st.placeAdj || 0);
       action[swing.hip] = command(swing.hip, placeW - torso);
       // in a jump the landing knee stays tucked while rising, extends as the body comes down
       const falling = (m.centerVelocityY || 0) < 0;

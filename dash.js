@@ -48,7 +48,7 @@ const runStates = JSON.parse(fs.readFileSync(path.join(root, 'trained/run-states
 export const SPEC = RSPEC.concat([
   ['jumpWin', 0.9, 0.3], ['takeoff', 0.3, 0.15], ['kStride', 1.0, 0.5], ['jumpMargin', 0.2, 0.15], ['jumpTrail', 0, 0.4],
   ['landLean', 0, 0.15], ['landKnee', 0, 0.3], ['landPlace', 0, 0.25],
-  ['vRun', 2.7, 0.3], ['jumpGainH', 0.5, 0.4], ['winH', 0, 0.5], ['takeoffH', 0, 0.3],
+  ['vRun', 2.7, 0.3], ['jumpGainH', 0.5, 0.4], ['winH', 0, 0.5], ['takeoffH', 0, 0.3], ['landGainH', 0, 0.5], ['dropPlace', 0, 0.8], ['dropLean', 0, 0.8],
 ]);
 const decode = (v) => {
   const p = {};
@@ -85,7 +85,9 @@ function episode(p, seed, log) {
   }
   const T = frames / HZ, dist = world.px[0] - x0;
   const passed = obstacles.filter((o) => (o.live ? o.live() : o).x1 < world.px[0] - 0.3).length;
-  const score = 2 * Math.max(0, dist) / seconds + (fell ? 0 : 4) + (fell ? 0 : 0.3 * Math.min(1, frames / (seconds * HZ)));
+  // dense: average speed over the whole time, plus the share of the time it stayed up (a binary 'never fell'
+  // bonus was rare on full courses and drowned the search in noise), plus a little for finishing
+  const score = 2 * Math.max(0, dist) / seconds + 4 * Math.min(1, frames / (seconds * HZ)) + (fell ? 0 : 1);
   let where = '';
   if (fell) {
     // where it fell, against the obstacle nearest the hips: before its front edge (tripped), over it, or after it (landing)
@@ -97,14 +99,15 @@ function episode(p, seed, log) {
     if (log) failLog.push(rel + ' ' + (o.ball ? 'ball' : 'box'));
   }
   if (log) console.log('seed', seed, (fell ? 'FELL ' + T.toFixed(1) + 's' + where : 'ok'), 'dist', dist.toFixed(1), 'm', 'avg', (dist / T).toFixed(2), 'm/s', 'passed', passed, 'of', course.statics.length + course.balls.length);
-  return { score, pass: fell ? 0 : 1, dist, T };
+  return { score, pass: fell ? 0 : 1, dist, T, passed, fell };
 }
 
 function evaluate(v, base, n, log) {
   const p = decode(v);
-  let s = 0, pass = 0, d = 0;
-  for (let i = 0; i < n; i++) { const e = episode(p, base + i, log); s += e.score; pass += e.pass; d += e.dist / e.T; }
-  return { score: s / n, pass, speed: d / n };
+  let s = 0, pass = 0, d = 0, ob = 0, falls = 0, dist = 0;
+  for (let i = 0; i < n; i++) { const e = episode(p, base + i, log); s += e.score; pass += e.pass; d += e.dist / e.T; ob += e.passed; falls += e.fell ? 1 : 0; dist += e.dist; }
+  // per obstacle: the share of obstacles reached that were got over (a fall is one not got over)
+  return { score: s / n, pass, speed: d / n, perObstacle: ob / Math.max(1, ob + falls), dist: dist / n };
 }
 
 const failLog = [];
@@ -112,7 +115,7 @@ const initP = init ? JSON.parse(fs.readFileSync(init, 'utf8')).params : {};
 if (args.includes('--show')) {
   const e = evaluate(encode(initP), +arg('--base', 100), seeds, true);
   const tally = {}; for (const f of failLog) tally[f] = (tally[f] || 0) + 1; console.log('falls by place', JSON.stringify(tally));
-  console.log('pass', e.pass + '/' + seeds, 'mean speed', e.speed.toFixed(2), 'score', e.score.toFixed(3));
+  console.log('pass', e.pass + '/' + seeds, 'mean speed', e.speed.toFixed(2), 'mean dist', e.dist.toFixed(1), 'per obstacle', (100 * e.perObstacle).toFixed(1) + '%', 'score', e.score.toFixed(3));
   process.exit(0);
 }
 
