@@ -95,6 +95,8 @@ function episode(p, seed, record) {
     if (['land', 'run2', 'drop', 'steady', 'walk', 'plant'].includes(RS.phase)) {
       if (landedX == null && (m.touch[P.footLeft] || m.touch[P.footRight]) && pelX > hole.x1) landedX = pelX;
       if (landedX != null && m.headHeight - LIFT > 1.3 && m.torsoCos > 0.7) upAfter++;
+      // running on 4 m past the hole: done (it ran 30 m to the end of the floor and fell off it)
+      if (landedX != null && pelX > hole.x1 + 4 && m.headHeight - LIFT > 1.3) break;
     }
   }
   const T = frames / HZ;
