@@ -144,7 +144,9 @@ export function installCragPlanner(ep, world, p, ctx) {
     const trail = () => {
       planted = [false, false];
       const over = pv.x - wallX;
-      feet = [0, 1].map((k) => (over < 0.35 ? { x: Math.min(pv.x - 0.1, wallX - 0.06), y: pv.y - 0.72 + 0.08 * k, angle: 0.4 } : { x: pv.x - 0.75 - 0.08 * k, y: wallH + 0.06, angle: 0 }));
+      // while the knees are still off the edge the shins hang down the face (knees bent over the edge)
+      feet = [0, 1].map((k) => (over < 0.35 ? { x: Math.min(pv.x - 0.1, wallX - 0.06), y: pv.y - 0.72 + 0.08 * k, angle: 0.4 }
+        : pv.x - 0.45 < wallX ? { x: wallX - 0.08, y: wallH - 0.35, angle: 0.4 } : { x: Math.max(wallX + 0.06, pv.x - 0.75 - 0.08 * k), y: wallH + 0.06, angle: 0 }));
     };
     if (mt.phase === 'press') {
       const q = smooth(Math.min(1, mt.t / p.tPress));
@@ -166,7 +168,7 @@ export function installCragPlanner(ep, world, p, ctx) {
       const k = mt.k;
       if (mt.phase === 'hand') {
         pel = { ...mt.from };
-        if (!mt.hand) { const other = lim.hand[1 - k].pos; mt.hand = { from: { ...lim.hand[k].pos }, to: { x: Math.max(pv.x + p.crawlReach, other.x + 0.1), y: wallH + 0.03 } }; lim.hand[k].grip = false; }
+        if (!mt.hand) { const other = lim.hand[1 - k].pos; mt.hand = { from: { ...lim.hand[k].pos }, to: { x: pv.x + p.crawlReach, y: wallH + 0.03 } }; lim.hand[k].grip = false; }
         const q = Math.min(1, mt.t / p.tHand);
         const a = mt.hand.from, b = mt.hand.to, mid = { x: (a.x + b.x) / 2, y: wallH + 0.15 };
         const pt = q < 0.5 ? lerp(a, mid, smooth(q * 2)) : lerp(mid, b, smooth(q * 2 - 1));
@@ -186,23 +188,81 @@ export function installCragPlanner(ep, world, p, ctx) {
       }
       if (pv.x > wallX + p.doneX) { mt.phase = 'lie'; mt.t = 0; }
     }
+    if (mt.phase === 'getup' || mt.phase === 'stand') {
+      // the get-up expert network (as trained: from rest, with its get-up clock), then the stand network
+      // (the episode's own), both told the floor is the summit (groundOffset)
+      const t = mt.t;
+      const hand = (ctx.nets.handover && ctx.nets.handover[mt.side]) || 3;
+      const src = mt.phase === 'getup' && t < hand ? mt.getup.action : e.network.action;
+      for (let j = 0; j < OUT; j++) e.action[j] = src[j];
+      for (let k = 0; k < 2; k++) e.action[J + k] = -1;
+      const up = e.measure.headHeight - wallH > 1.35 && e.measure.torsoCos > 0.8;
+      if (mt.phase === 'getup' && t > hand + 1 && up) { mt.phase = 'stand'; e.options.getup = false; e.options.startTime = 0; stood = true; }
+      else if (mt.phase === 'getup' && t > hand + 6) { mt.phase = 'lie'; mt.t = 0; e.options.getup = false; e.options.startTime = 0; }
+      return;
+    }
     if (mt.phase === 'lie') {
       // on the top: let go, lie flat (legs along the top)
-      for (let k = 0; k < 2; k++) { lim.hand[k].grip = false; hands[k] = null; gripping[k] = false; }
+      // the hands stay where they are, open (dropped to the default pose at once, the arms swept along the
+      // rock and threw the body back off the edge)
+      for (let k = 0; k < 2; k++) { lim.hand[k].grip = false; const hp = pose.handOf(world, k === 0 ? P.handLeft : P.handRight); if (!mt.restHands) mt.restHands = []; if (!mt.restHands[k]) mt.restHands[k] = { x: hp.x, y: hp.y }; hands[k] = mt.restHands[k]; gripping[k] = false; }
       planted = [false, false];
-      feet = [0, 1].map((k) => ({ x: pv.x - 0.85, y: wallH + 0.06, angle: 0 }));
+      feet = [0, 1].map((k) => ({ x: Math.max(wallX + 0.06, pv.x - 0.85), y: wallH + 0.06, angle: 0 }));
       pel = { x: pv.x, y: wallH + 0.13 }; lean = -1.5;
       mantled = true;
+      // still for a moment: get up (when the caller gave the networks)
+      let still = true;
+      for (let q = 0; q < world.parts.length; q++) if (Math.abs(world.vx[q]) > 0.15 || Math.abs(world.vy[q]) > 0.15) still = false;
+      if (ctx.nets && ((mt.t > 0.8 && still) || mt.t > 3)) {
+        mt.phase = 'getup'; mt.t = 0;
+        mt.side = Math.atan2(world.s[0], world.c[0]) > 0 ? 'up' : 'down';
+        mt.getup = new ctx.nets.ElmanNetwork(Float32Array.from(ctx.nets.getupW));
+        e.groundOffset = wallH;
+        if (!e.options.targets || e.options.targets.length !== config.targets.length) e.options.targets = config.targets.map((t) => Object.assign({}, t));
+        e.options.getup = true;
+        e.options.startTime = -e.frame / HZ;
+        return;
+      }
     }
     pelvisGoal = pel;
     leanNow = lean;
     const goal = { pelvis: pel, torso: lean, feet, hands, gripping, planted, torsoGain: p.torsoGain };
     const jt = pose.jointTargets(goal, pose.actualOf(world));
+    // lying over the edge the leg IK (made for an upright body) asked the knees to bend the wrong way and
+    // the legs stuck out straight into the air: set them directly instead, hanging down the face with
+    // the knees bent while the knees are off the edge, then straight along the top
+    if (['hand', 'pull', 'lie'].includes(mt.phase) || (mt.phase === 'over' && pv.x > wallX - 0.05)) {
+      const kneesOver = pv.x - 0.45 > wallX;
+      // hips still near the edge: thighs along the body, heels folded up toward the seat (compact, nothing
+      // hanging off the edge to drag the body back); once the knees are over the top, legs out along it
+      const hipsOver = pv.x > wallX + 0.05;
+      const flat = mt.phase === 'lie';
+      for (const [h, kn, an] of [[5, 6, 7], [11, 12, 13]]) { jt[h] = flat ? 0.1 : hipsOver ? p.foldHip : p.hangHip; jt[kn] = flat ? -0.2 : hipsOver ? -2.2 : p.hangKnee; jt[an] = 0.3; }
+    }
     pose.commandsFor(world, jt, tmp);
     for (let j = 0; j < J; j++) e.action[j] = tmp[j];
     for (let k = 0; k < 2; k++) if (!(mt.phase === 'hand' && mt.k === k)) e.action[J + k] = gripping[k] ? 1 : -1;
   }
-  let mantled = false;
+  let mantled = false, stood = false;
+  if (ctx.nets) {
+    // the get-up network reads the same inputs as the episode's own (stand) network
+    const origDecide = ep.decide.bind(ep);
+    ep.decide = function () {
+      // on the summit the networks' marks sit on the summit floor (they were at y = 0, 2.6 m below, and
+      // the get-up threw the body off the edge reaching for them)
+      if (mt && (mt.phase === 'getup' || mt.phase === 'stand') && this.options.targets) {
+        const t = this.options.targets, px = world.px[0];
+        for (let i = 0; i < config.targets.length; i++) {
+          const spec = config.targets[i], mk = t[i];
+          if (!mk) continue;
+          if (spec.ride) { mk.x = px + (spec.x || 0); mk.y = wallH + (spec.y || 0); if (mk.walkBase != null) mk.walkBase = mk.x - (this.walkOffset ? this.walkOffset() : 0); }
+          else { mk.x = world.px[spec.id === 'footR' ? P.footRight : P.footLeft]; mk.y = wallH + config.skill.footGroundMeters; }
+        }
+      }
+      origDecide();
+      if (mt && mt.getup) mt.getup.forward(this.input);
+    };
+  }
   ep.updateGrip = ((orig) => function () {
     const m = this.measure;
     if (mt) { runMantle(this); orig(); return; }
@@ -299,5 +359,5 @@ export function installCragPlanner(ep, world, p, ctx) {
     }
     orig();
   })(ep.updateGrip.bind(ep));
-  return { lim, feetTop, handsTop, rungs, wallX, wallH, N, TOP, faceAt, get mantled() { return mantled; }, get phase() { return mt ? mt.phase : null; } };
+  return { lim, feetTop, handsTop, rungs, wallX, wallH, N, TOP, faceAt, get mantled() { return mantled; }, get stood() { return stood; }, get phase() { return mt ? mt.phase : null; } };
 }

@@ -63,6 +63,7 @@ function groundAt(x) {
 }
 
 function reset() {
+  planner = null; summitShown = false;
   const r = makeSeededRandom(state.seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   start.tilt = 0;
@@ -138,7 +139,7 @@ function reset() {
     ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   } else if (state.mode === 'climb') {
     if (state.scene === 'wall') installWallPlanner(ep, world, params.wall, Object.assign({ wallH: 3.3 }, pctx));
-    else if (state.scene === 'mountain') installCragPlanner(ep, world, params.crag, Object.assign({ crag }, pctx));
+    else if (state.scene === 'mountain') planner = installCragPlanner(ep, world, params.crag, Object.assign({ crag }, pctx));
     else ep.updateGrip = ((orig) => function () { drive(this); orig(); })(ep.updateGrip.bind(ep));
   }
   // stand: the stand-and-walk network drives (nothing to install)
@@ -353,6 +354,7 @@ window.addEventListener('resize', resize);
 
 // ---------- loop ----------
 let last = performance.now(), acc = 0, downFor = 0, falls = 0;
+let planner = null, summitShown = false;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (!state.paused) {
@@ -365,6 +367,9 @@ function loop(now) {
   // in the automatic modes a fall (head near the ground for 2 s) restarts the run
   const headUp = ep.measure.headHeight - groundAt(world.px[2]);
   downFor = headUp < 0.45 ? downFor + dt : 0;
+  // crawling over the summit edge the head is low on purpose: not a fall
+  if (planner && planner.phase) downFor = 0;
+  if (planner && planner.mantled && !summitShown) { summitShown = true; $('modeNote').textContent = '¡Llegó a la cima! Se arrastró sobre el borde y quedó acostado arriba. "Otra montaña" para probar con otra pared.'; }
   if (state.mode !== 'manual' && downFor > 2) { downFor = 0; falls++; reset(); }
   $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '');
   requestAnimationFrame(loop);
