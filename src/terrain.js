@@ -84,3 +84,25 @@ export function makeRopeCourse(r, opts = {}) {
   };
 }
 
+
+// DASH course, relative to the feet: flat floor, then random obstacles every gapMin-gapMax metres from
+// `start` on, out to `length`: boxes (static, hMin-hMax tall, wMin-wMax wide) or balls (loose, rMin-rMax
+// radius) with probability ballP. Returns { statics: [{dx, w, h}], balls: [{dx, r, density}] }.
+export function makeDashCourse(r, opts = {}) {
+  const o = Object.assign({ start: 4, length: 70, ballP: 0.35, hMin: 0.08, hMax: 0.35, wMin: 0.2, wMax: 1.0, rMin: 0.08, rMax: 0.18, gapMin: 2.5, gapMax: 5, density: 150 }, opts);
+  const statics = [], balls = [];
+  let x = o.start + r() * 1.5;
+  while (x < o.length) {
+    if (r() < o.ballP) {
+      const rad = o.rMin + r() * (o.rMax - o.rMin);
+      balls.push({ dx: +(x + rad).toFixed(3), r: +rad.toFixed(3), density: o.density });
+      x += 2 * rad;
+    } else {
+      const w = o.wMin + r() * (o.wMax - o.wMin), h = o.hMin + r() * (o.hMax - o.hMin);
+      statics.push({ dx: +x.toFixed(3), w: +w.toFixed(3), h: +h.toFixed(3) });
+      x += w;
+    }
+    x += o.gapMin + r() * (o.gapMax - o.gapMin);
+  }
+  return { statics, balls };
+}

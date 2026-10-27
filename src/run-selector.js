@@ -1,8 +1,22 @@
 // The running controller (src/runner.js) with the jump selector of parkour.js: at each touchdown, jump on the
 // stride whose ordinary landing would fall within jumpMargin of the next obstacle's front edge, and before
 // that stretch or shorten the steps toward a take-off spot. Installs itself on an episode (wraps
-// ep.updateGrip). Used by the playground; parkour.js keeps its own copy for training.
+// ep.updateGrip). Used by the playground and by dash.js (random boxes and balls).
+//
+// ctx.obstacles: [{x0, x1, top?}] in world metres (a hole has no top), or {live: () => ({x0, x1, top})}
+// for something that moves (a ball read from its body each time). With a top, the jump is scaled by its
+// height: jumpScale = 1 + jumpGainH * (top - 0.2) / 0.2 (all of the runner's jump changes), and the
+// take-off window grows by winH * (top - 0.2). Both 0 (or missing) = the old selector exactly.
+// ctx.speed(): the commanded speed; without it, p.vRun.
 import { makeController } from './runner.js';
+
+export const HREF = 0.2; // the obstacle height the jump parameters are tuned at
+
+export function obstaclesNow(obstacles) {
+  const out = obstacles.map((o) => (o.live ? o.live() : o));
+  out.sort((a, b) => a.x0 - b.x0);
+  return out;
+}
 
 export function installRunner(ep, world, p, ctx) {
   const { config } = ctx;
@@ -12,9 +26,10 @@ export function installRunner(ep, world, p, ctx) {
   const runner = makeController(world);
   const tmp = new Float64Array(J + config.net.gripOutputs);
   const obstacles = ctx.obstacles || [];
+  const speed = ctx.speed || (() => p.vRun || 2.7);
   ep.updateGrip = ((orig) => function () {
     const m = this.measure;
-    m.walkSpeed = ctx.speed();
+    m.walkSpeed = speed();
     this.speedCap = config.body.maxJointSpeed;
     runner(p, this, tmp);
     const st = this.runner;
@@ -22,12 +37,15 @@ export function installRunner(ep, world, p, ctx) {
       const fx = world.px[st.stance ? P.footRight : P.footLeft];
       if (st.lastX != null) { const L = fx - st.lastX; if (L > 0.2 && L < 2.5) st.avgL = st.avgL ? 0.7 * st.avgL + 0.3 * L : L; }
       st.lastX = fx;
-      const next = obstacles.find((o) => o.x1 > fx);
+      const next = obstaclesNow(obstacles).find((o) => o.x1 > fx);
       st.placeAdj = 0;
-      const win = st.avgL ? st.avgL + p.jumpMargin : p.jumpWin;
-      if (next && next.x0 - fx > 0.03 && next.x0 - fx < win) st.jumping = true;
-      else if (next && st.avgL && p.kStride) {
-        const D = next.x0 - fx - p.takeoff;
+      const dh = next && next.top != null ? next.top - HREF : 0;
+      const win = (st.avgL ? st.avgL + p.jumpMargin : p.jumpWin) + (p.winH || 0) * dh;
+      if (next && next.x0 - fx > 0.03 && next.x0 - fx < win) {
+        st.jumping = true;
+        st.jumpScale = Math.max(0.3, Math.min(3, 1 + (p.jumpGainH || 0) * dh / HREF));
+      } else if (next && st.avgL && p.kStride) {
+        const D = next.x0 - fx - p.takeoff - (p.takeoffH || 0) * dh;
         if (D > 0 && D < 5) {
           const n = Math.max(1, Math.round(D / st.avgL));
           st.placeAdj = Math.max(-0.35, Math.min(0.35, p.kStride * (D / n - st.avgL)));

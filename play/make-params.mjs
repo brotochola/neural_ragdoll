@@ -46,5 +46,8 @@ try { ropeBest = rd(process.env.ROPE || 'trained/rope-a.json').best; } catch (e)
 const rope = decodeWith(ropeSpec, ropeBest);
 const states = rd('trained/run-states.json');
 const runStates = states.filter((_, i) => i % 6 === 0).slice(0, 36);
-fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates, slow, stop, stopK, getup, cragObstacle, rope, walkFast }));
+// the dash runner (random boxes and balls, dash.js): DASH env, its decoded params
+let dash = null;
+try { dash = rd(process.env.DASH || 'trained/dash.json').params; } catch (e) { dash = runner; }
+fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates, slow, stop, stopK, getup, cragObstacle, rope, walkFast, dash }));
 console.log('params: walk', Object.keys(walk).length, 'runner', Object.keys(runner).length, 'wall', Object.keys(wall).length, 'mountain', Object.keys(mountain).length, 'crag', Object.keys(crag).length, 'run states', runStates.length);

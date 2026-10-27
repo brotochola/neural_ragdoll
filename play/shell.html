@@ -5,16 +5,16 @@
 /* Layout: one live stage (you are the planner), the five marks dragged on it, the switches in a strip below. */
 :root {
   --bg: #eef0ec; --stage: #f8f9f6; --ink: #1d2320; --muted: #5d6862; --rule: #c9cfc9;
-  --rock: #b7a17a; --rock-edge: #8a7552; --rope: #7a5a2e; --ok: #2f8a4f; --accent: #d9481c;
+  --rock: #b7a17a; --rock-edge: #8a7552; --rope: #7a5a2e; --ball: #4f8fbf; --ok: #2f8a4f; --accent: #d9481c;
   --mark-hips: #7b4fd1; --mark-hand: #d9481c; --mark-foot: #2a7fb8;
   --shirt: #c94a3d; --shirt-back: #9c3a30; --jean: #3f6f9f; --jean-back: #2c4f72; --skin: #e9b35a;
   --display: "Archivo", "Helvetica Neue", Arial, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --rope: #c9a46a; --ok: #5cc27d; --accent: #ff7a4d;
+  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --rope: #c9a46a; --ball: #6aa6d6; --ok: #5cc27d; --accent: #ff7a4d;
   --mark-hips: #a98bf0; --mark-hand: #ff7a4d; --mark-foot: #5fb1e8; --shirt: #e0604f; --shirt-back: #a8463a; --jean: #5b8fc4; --jean-back: #3d6690; --skin: #f0c070; color-scheme: dark; } }
 :root[data-theme="dark"] {
-  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --rope: #c9a46a; --ok: #5cc27d; --accent: #ff7a4d;
+  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --rope: #c9a46a; --ball: #6aa6d6; --ok: #5cc27d; --accent: #ff7a4d;
   --mark-hips: #a98bf0; --mark-hand: #ff7a4d; --mark-foot: #5fb1e8; --shirt: #e0604f; --shirt-back: #a8463a; --jean: #5b8fc4; --jean-back: #3d6690; --skin: #f0c070; color-scheme: dark; }
 body { background: var(--bg); color: var(--ink); font-family: var(--display); }
 .wrap { max-width: 980px; margin: 0 auto; padding-block: 18px 36px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 14px; }
@@ -62,6 +62,7 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
     <button data-scene="mountain" id="sc-mountain">Montaña</button>
     <button data-scene="rope" id="sc-rope">Soga sobre un agujero</button>
     <button data-scene="obstacle" id="sc-obstacle">Obstáculo de 2 m</button>
+    <button data-scene="dash" id="sc-dash">Cajas y bolas</button>
     <button id="newMountain">Otra montaña</button>
   </div>
   <div class="stagebox">

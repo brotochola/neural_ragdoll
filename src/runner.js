@@ -90,37 +90,39 @@ export function makeController(world) {
       [stance, swing] = [swing, stance];
     }
     const J2 = st.jumping;
+    // st.jumpScale (set by the selector from the obstacle's height): multiplies every jump change; 1 = as tuned
+    const js = J2 ? (st.jumpScale != null ? st.jumpScale : 1) : 0;
     const torso = angleOf(0);
     const d = (m.centerX || 0) - world.px[stance.foot];
     const v = (m.centerVelocityX || 0) - (m.walkSpeed || 0);
     const L2 = !!st.landing && !J2;
-    const lean = p.lean + (J2 ? p.jumpLean : 0) + (L2 ? p.landLean || 0 : 0);
+    const lean = p.lean + js * p.jumpLean + (L2 ? p.landLean || 0 : 0);
     if (!st.flight) {
       const push = d > p.pushD;
       const stanceHip = angleOf(stance.thigh) - torso;
-      action[stance.hip] = command(stance.hip, stanceHip + (torso - lean) - (push ? p.hipPush + (J2 ? p.jumpHipPush : 0) : 0));
-      action[stance.knee] = command(stance.knee, push ? p.pushKnee + (J2 ? p.jumpKnee : 0) : p.kneeLoad + (L2 ? p.landKnee || 0 : 0));
-      action[stance.ankle] = command(stance.ankle, (push ? p.pushAnkle + (J2 ? p.jumpAnkle : 0) : 0) - angleOf(stance.shin));
-      action[swing.hip] = command(swing.hip, p.swingHip + (J2 ? p.jumpHip : 0) - torso);
-      action[swing.knee] = command(swing.knee, p.tuck + (J2 ? p.jumpTuck : 0));
+      action[stance.hip] = command(stance.hip, stanceHip + (torso - lean) - (push ? p.hipPush + js * p.jumpHipPush : 0));
+      action[stance.knee] = command(stance.knee, push ? p.pushKnee + js * p.jumpKnee : p.kneeLoad + (L2 ? p.landKnee || 0 : 0));
+      action[stance.ankle] = command(stance.ankle, (push ? p.pushAnkle + js * p.jumpAnkle : 0) - angleOf(stance.shin));
+      action[swing.hip] = command(swing.hip, p.swingHip + js * p.jumpHip - torso);
+      action[swing.knee] = command(swing.knee, p.tuck + js * p.jumpTuck);
       action[swing.ankle] = command(swing.ankle, 0.1 - angleOf(swing.shin));
     } else {
       // flight: the leg that pushed trails, the other reaches for the landing
       // st.placeAdj: set by the caller to lengthen (+) or shorten (-) this step (hitting a take-off spot)
-      const placeW = p.place + (J2 ? p.jumpPlace : 0) + (L2 ? p.landPlace || 0 : 0) + p.cd * d + p.cv * v + (st.placeAdj || 0);
+      const placeW = p.place + js * p.jumpPlace + (L2 ? p.landPlace || 0 : 0) + p.cd * d + p.cv * v + (st.placeAdj || 0);
       action[swing.hip] = command(swing.hip, placeW - torso);
       // in a jump the landing knee stays tucked while rising, extends as the body comes down
       const falling = (m.centerVelocityY || 0) < 0;
-      action[swing.knee] = command(swing.knee, p.reachKnee + (J2 && !falling ? p.jumpTuck : 0));
+      action[swing.knee] = command(swing.knee, p.reachKnee + (J2 && !falling ? js * p.jumpTuck : 0));
       action[swing.ankle] = command(swing.ankle, 0.0 - angleOf(swing.shin));
-      action[stance.hip] = command(stance.hip, p.trailHip + (J2 ? p.jumpTrail || 0 : 0) - torso);
-      action[stance.knee] = command(stance.knee, p.trailKnee + (J2 ? p.jumpTuck : 0));
+      action[stance.hip] = command(stance.hip, p.trailHip + js * (p.jumpTrail || 0) - torso);
+      action[stance.knee] = command(stance.knee, p.trailKnee + js * p.jumpTuck);
       action[stance.ankle] = command(stance.ankle, 0.1 - angleOf(stance.shin));
     }
     action[0] = 0;
     action[1] = 0;
     // arms against the legs; thrown up at a jump
-    const arm = p.arm + (J2 ? p.jumpArm : 0);
+    const arm = p.arm + js * p.jumpArm;
     action[swing.shoulder] = command(swing.shoulder, -arm - torso);
     action[stance.shoulder] = command(stance.shoulder, arm - torso);
     action[swing.elbow] = command(swing.elbow, p.elbow);

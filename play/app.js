@@ -10,7 +10,7 @@ import { ElmanNetwork } from '../src/net.js';
 import { makeSeededRandom } from '../src/utils.js';
 import { evalMode } from '../src/training.js';
 import * as pose from '../src/pose.js';
-import { makeCrag, makeWall, makeRopeCourse } from '../src/terrain.js';
+import { makeCrag, makeWall, makeRopeCourse, makeDashCourse } from '../src/terrain.js';
 import standNet from '../trained/stand-and-walk.json';
 import params from './params.json';
 import { makeController as makeWalker } from '../src/simbicon.js';
@@ -83,6 +83,10 @@ function reset() {
     ropeCourse = makeRopeCourse(r, { gapMin: 1.4, gapMax: 2.2, lift: 2.0, low: 1.25 });
     lift = ropeCourse.lift;
     start.terrain = { statics: ropeCourse.statics, ropes: ropeCourse.ropes };
+  } else if (state.scene === 'dash') {
+    // random boxes and balls all the way (the course dash.js trains on, 200 m long)
+    const dc = makeDashCourse(r, { length: 200 });
+    start.terrain = { statics: dc.statics, balls: dc.balls };
   } else if (state.scene === 'obstacle') {
     // a 2 m rock 9-12 m ahead, a long top to run on
     crag = makeCrag(r, 2.0, 9 + r() * 3, { plateau: 14 });
@@ -104,7 +108,8 @@ function reset() {
     const pz = rs.pose.slice();
     for (let k = 0; k < world.parts.length; k++) pz[k * 3 + 1] += lift;
     start.startPose = pz;
-    start.startVel = rs.vel.map((v, i) => (i % 3 === 0 ? v * state.speed.run / rs.speed : v));
+    const v0 = state.scene === 'dash' ? params.dash.vRun || state.speed.run : state.speed.run;
+    start.startVel = rs.vel.map((v, i) => (i % 3 === 0 ? v * v0 / rs.speed : v));
     start.settle = 0; start.drop = 0;
   } else if (lift) {
     // standing on the raised floor: the standing pose lifted
@@ -116,6 +121,7 @@ function reset() {
   }
   world.rebuild();
   ep = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, start));
+  if (state.scene === 'dash') terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
   if (state.scene === 'rope') terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
   if (state.scene === 'holes') {
     terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
@@ -158,6 +164,11 @@ function reset() {
       chain = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift, walkP: params.walkFast }); // 2.4 m/s: the speed it crosses best at
     } else if (state.scene === 'obstacle') {
       chain = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag, H: 2.0, speed: () => state.speed.run, stopAt: 0.6, vswitch: 1.3, params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragObstacle, getup: params.getup } });
+    } else if (state.scene === 'dash') {
+      // its own speed (vRun, tuned with the rest) and jumps scaled by each box's or ball's height
+      const obstacles = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }))
+        .concat(ep.terrain.balls.map((b) => ({ live: () => { const q = Box2D.b2Body_GetPosition(b.id); return { x0: q.x - b.r, x1: q.x + b.r, top: q.y + b.r }; } })));
+      installRunner(ep, world, params.dash, { config, obstacles });
     } else installRunner(ep, world, params.runner, { config, speed: () => state.speed.run, obstacles: terrain.holes || [] });
     ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   } else if (state.mode === 'climb') {
@@ -166,8 +177,9 @@ function reset() {
     else ep.updateGrip = ((orig) => function () { drive(this); orig(); })(ep.updateGrip.bind(ep));
   }
   // stand: the stand-and-walk network drives (nothing to install)
-  $('modeNote').textContent = (state.mode === 'run' && state.scene === 'rope' ? 'Corre, salta en el borde, agarra la soga en el aire, cruza el agujero, cae y sigue corriendo. En la simulación cruza y sigue corriendo cerca de la mitad de las veces. Si se cae, vuelve a empezar solo con otro agujero; si cruza, cuenta el cruce y prueba con otro.' : state.mode === 'run' && state.scene === 'obstacle' ? 'Corre, frena antes de la roca de 2 m, trepa, se arrastra sobre el borde, se levanta arriba y vuelve a correr. Tarda casi un minuto y en la simulación sale 4 de cada 10 veces (a veces se traba trepando).' : MODE_NOTE[state.mode]) + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
+  $('modeNote').textContent = (state.mode === 'run' && state.scene === 'rope' ? 'Corre, salta en el borde, agarra la soga en el aire, cruza el agujero, cae y sigue corriendo. En la simulación cruza y sigue corriendo cerca de la mitad de las veces. Si se cae, vuelve a empezar solo con otro agujero; si cruza, cuenta el cruce y prueba con otro.' : state.mode === 'run' && state.scene === 'dash' ? DASH_NOTE : state.mode === 'run' && state.scene === 'obstacle' ? 'Corre, frena antes de la roca de 2 m, trepa, se arrastra sobre el borde, se levanta arriba y vuelve a correr. Tarda casi un minuto y en la simulación sale 4 de cada 10 veces (a veces se traba trepando).' : MODE_NOTE[state.mode]) + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
 }
+const DASH_NOTE = 'Corre a la derecha lo más rápido que puede sobre cajas y bolas al azar, saltándolas. Las bolas están sueltas: si las patea, ruedan. Si se cae, vuelve a empezar con otro recorrido.';
 const MODE_NOTE = {
   manual: 'Vos sos el planificador: arrastrá las marcas.',
   stand: 'La red neuronal de pararse mantiene el equilibrio.',
@@ -306,6 +318,15 @@ function draw() {
       const a = toScreen(rp.x - 0.15, rp.top + 0.06); ctx.fillStyle = css('--rock-edge'); ctx.fillRect(a.x, a.y, 0.3 * scale, 0.06 * scale);
     }
   }
+  if (ep && ep.terrain && ep.terrain.balls && ep.terrain.balls.length) {
+    // the loose balls
+    ctx.fillStyle = css('--ball'); ctx.strokeStyle = css('--rock-edge'); ctx.lineWidth = 2;
+    for (const b of ep.terrain.balls) {
+      const q = Box2D.b2Body_GetPosition(b.id), rot = Box2D.b2Body_GetRotation(b.id), s = toScreen(q.x, q.y);
+      ctx.beginPath(); ctx.arc(s.x, s.y, b.r * scale, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(s.x + rot.c * b.r * scale, s.y - rot.s * b.r * scale); ctx.stroke();
+    }
+  }
   const showMarks = state.mode === 'manual' || (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene));
   // lines from each limb to its mark
   ctx.setLineDash([5, 5]); ctx.lineWidth = 1.5;
@@ -368,16 +389,16 @@ $('dropHands').onclick = () => { targets.hands = [null, null]; state.grip = [fal
 $('newMountain').onclick = () => { state.seed++; state.scene = 'mountain'; reset(); };
 $('lean').oninput = (ev) => { state.lean = -(+ev.target.value) * Math.PI / 180; $('leanVal').textContent = (+ev.target.value) + '°'; };
 for (const b of document.querySelectorAll('[data-scene]')) b.onclick = () => {
-  state.scene = b.dataset.scene; falls = 0; crossed = 0;
+  state.scene = b.dataset.scene; falls = 0; crossed = 0; bestDash = 0;
   // the rope and the 2 m rock are run courses: they only make sense with the runner driving
-  if (['rope', 'obstacle'].includes(state.scene) && state.mode !== 'run') { state.mode = 'run'; falls = 0; }
+  if (['rope', 'obstacle', 'dash'].includes(state.scene) && state.mode !== 'run') { state.mode = 'run'; falls = 0; }
   reset();
 };
 for (const b of document.querySelectorAll('[data-mode]')) b.onclick = () => {
   state.mode = b.dataset.mode;
   falls = 0;
   // the natural scene for each skill
-  if (state.mode === 'run' && !['floor', 'holes', 'rope', 'obstacle'].includes(state.scene)) state.scene = 'holes';
+  if (state.mode === 'run' && !['floor', 'holes', 'rope', 'obstacle', 'dash'].includes(state.scene)) state.scene = 'holes';
   if (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene)) state.scene = 'mountain';
   if (state.mode === 'walk' && state.scene !== 'floor') state.scene = 'floor';
   reset();
@@ -394,7 +415,7 @@ window.addEventListener('resize', resize);
 
 // ---------- loop ----------
 let last = performance.now(), acc = 0, downFor = 0, holeFor = 0, falls = 0;
-let planner = null, summitShown = false, ropeCourse = null, chain = null, ropeHole = null, crossed = 0;
+let planner = null, summitShown = false, ropeCourse = null, chain = null, ropeHole = null, crossed = 0, bestDash = 0;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (!state.paused) {
@@ -406,7 +427,9 @@ function loop(now) {
   draw();
   // in the automatic modes a fall (head near the ground for 2 s) restarts the run
   const headUp = ep.measure.headHeight - groundAt(world.px[2]);
-  downFor = headUp < 0.45 ? downFor + dt : 0;
+  // on the dash course sitting or crawling counts too (as dash.js scores it: head under 0.95 m or the trunk past ~70°)
+  const down = state.scene === 'dash' ? headUp < 0.95 || (ep.measure.torsoCos || 0) < 0.3 : headUp < 0.45;
+  downFor = down ? downFor + dt : 0;
   // crawling over the summit edge the head is low on purpose: not a fall
   if (planner && planner.phase) downFor = 0;
   if (chain && chain.planner && chain.planner.phase) downFor = 0;
@@ -419,8 +442,10 @@ function loop(now) {
   // across and running on 6 m past the hole: one more crossing, then a new hole (the floor ends at 30 m)
   if (ropeHole && chain && chain.phase === 'run2' && world.px[0] > ropeHole.x1 + 6) { crossed++; holeFor = 0; downFor = 0; state.seed++; reset(); }
   // a new course each restart (the same seed replayed the same fall exactly)
+  if (state.scene === 'dash' && downFor > 1.2) downFor = 2.01;
+  if (state.scene === 'dash' && (downFor > 2 || stuck)) bestDash = Math.max(bestDash, world.px[0] - startX);
   if (state.mode !== 'manual' && (downFor > 2 || stuck)) { downFor = 0; holeFor = 0; falls++; state.seed++; reset(); }
-  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '') + (state.scene === 'rope' && crossed ? ` · cruces ${crossed}` : '');
+  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '') + (state.scene === 'rope' && crossed ? ` · cruces ${crossed}` : '') + (state.scene === 'dash' ? ` · ${((world.px[0] - startX) / Math.max(0.1, ep.frame / HZ)).toFixed(1)} m/s · récord ${Math.max(bestDash, world.px[0] - startX).toFixed(0)} m` : '');
   requestAnimationFrame(loop);
 }
 resize();

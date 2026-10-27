@@ -2011,6 +2011,20 @@ export function createSim(box) {
           this.objects.push(id);
           this.terrain.dynamics.push(id);
         }
+        // BALLS: loose dynamic balls resting on the floor (terrain.balls: [{dx, r, density, y}], dx the
+        // centre relative to the feet). They roll when kicked; the rays see them like thrown objects.
+        this.terrain.balls = [];
+        for (const b of terrain.balls || []) {
+          const id = CreateCircle({
+            worldId: world.worldId, type: dynamicBody,
+            position: vector(mid + b.dx, (b.y || 0) + b.r), radius: b.r,
+            density: b.density || 150, friction: 0.8, restitution: 0.1,
+          }).bodyId;
+          world.thrownIds.push(id);
+          world.thrownShapes.push(world.shapeOf(id));
+          this.objects.push(id);
+          this.terrain.balls.push({ id, r: b.r });
+        }
       }
       this.stairs = null;
       const stairs = this.options.stairs;
