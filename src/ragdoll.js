@@ -377,6 +377,10 @@ export class RagDoll2D {
     const seen = new Set();
     for (let i = 0; i < thrown.length; i++) { if (seen.has(thrown[i])) continue; seen.add(thrown[i]); this.b2DestroyBody(thrown[i]); }
     thrown.length = 0;
+    // bodies the episode added that the rays do not see (rope segments, rope anchors)
+    const extra = this.extraIds || [];
+    for (let i = 0; i < extra.length; i++) this.b2DestroyBody(extra[i]);
+    this.extraIds = [];
     const parts = this.parts || [];
     for (let i = 0; i < parts.length; i++)
       if (parts[i].id) this.b2DestroyBody(parts[i].id);

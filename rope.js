@@ -114,7 +114,8 @@ if (args.includes('--show')) {
   const v = init ? JSON.parse(fs.readFileSync(init, 'utf8')).best : [];
   const p = decode(v);
   let pass = 0;
-  for (let i = 0; i < seeds; i++) { const e = episode(p, 100 + i); pass += e.pass; console.log('seed', i, e.why); }
+  const base = +arg('--base', 100);
+  for (let i = 0; i < seeds; i++) { const e = episode(p, base + i); pass += e.pass; console.log('seed', i, e.why); }
   console.log('pass', pass + '/' + seeds);
   const rec = arg('--record', null);
   if (rec) {

@@ -1975,6 +1975,7 @@ export function createSim(box) {
           const ax = mid + rp.dx, seg = rp.seg || 0.2, n = Math.max(1, Math.round(rp.length / seg));
           const anchor = CreateBoxPolygon({ worldId: world.worldId, type: staticBody, position: vector(ax, rp.top + 0.03), size: vector(0.06, 0.03), friction: 1, categoryBits: 0x80, maskBits: 0 }).bodyId;
           this.objects.push(anchor);
+          (world.extraIds || (world.extraIds = [])).push(anchor);
           const ids = [];
           let prev = anchor, prevAnchorY = -0.03;
           for (let i = 0; i < n; i++) {
@@ -1982,6 +1983,7 @@ export function createSim(box) {
             const id = CreateBoxPolygon({ worldId: world.worldId, type: dynamicBody, position: vector(ax, cy), size: vector(rp.half || 0.025, seg / 2), density: rp.density || 30, friction: 2, categoryBits: 0x40, maskBits: 8 }).bodyId;
             world.CreateRevoluteJoint({ worldId: world.worldId, bodyIdA: prev, bodyIdB: id, anchorA: vector(0, prevAnchorY), anchorB: vector(0, seg / 2) });
             this.objects.push(id);
+            world.extraIds.push(id);
             this.grippable.push({ id, cx: ax, cy, dynamic: true });
             ids.push(id);
             prev = id; prevAnchorY = -seg / 2;
@@ -3403,6 +3405,7 @@ export function createSim(box) {
       world.thrownIds.splice(index, 1);
       world.thrownShapes.splice(index, 1);
     }
+    if (world.extraIds) { const k = world.extraIds.indexOf(id); if (k >= 0) world.extraIds.splice(k, 1); }
     b2DestroyBody(id);
   }
 
