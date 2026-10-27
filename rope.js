@@ -34,6 +34,7 @@ const { makeSeededRandom, randomNormalSample } = await import('./src/utils.js');
 const { evalMode } = await import('./src/training.js');
 const pose = await import('./src/pose.js');
 const { installRopeRunner, SPEC } = await import('./src/rope-swing.js');
+const { makeRopeCourse } = await import('./src/terrain.js');
 
 setSkill(6);
 const sim = createSim(Box2D);
@@ -51,20 +52,6 @@ const decode = (v) => {
   return p;
 };
 
-// the course, relative to the feet: floor, a hole W wide 3-4 m ahead, a rope over its middle (the
-// anchor ropeTop above the floor, the rope hanging to ropeLow above it), floor on after it
-export function makeRopeCourse(r, opts = {}) {
-  const gmin = opts.gapMin || 1.6, gmax = opts.gapMax || 2.4;
-  const x0 = 3 + r() * 1.0, w = gmin + r() * (gmax - gmin);
-  const top = 4.2 + r() * 0.3, low = (opts.low || 2.0) + r() * 0.15;
-  return {
-    statics: [{ dx: -4, w: 4 + x0, h: LIFT }, { dx: x0 + w, w: 30, h: LIFT }],
-    hole: { x0, x1: x0 + w },
-    ropes: [{ dx: x0 + w * (opts.ropeAt || 0.5), top: LIFT + top, length: top - low, seg: 0.2 }],
-    lift: LIFT,
-  };
-}
-
 function episode(p, seed, record) {
   const r = makeSeededRandom(12000 + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
@@ -81,7 +68,7 @@ function episode(p, seed, record) {
   const x0 = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
   ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   const hole = { x0: x0 + course.hole.x0, x1: x0 + course.hole.x1 };
-  const RS = installRopeRunner(ep, world, p, { config, pose, Box2D, runnerP, speed: () => speed, hole, rope: ep.terrain.ropes[0], lift: LIFT });
+  const RS = installRopeRunner(ep, world, p, { config, pose, Box2D, runnerP, speed: () => speed, hole, rope: ep.terrain.ropes[0], lift: LIFT, debug: !!process.env.DEBUG_ROPE });
   let fell = false, frames = 0, caught = false, landedX = null, upAfter = 0, maxX = -1e9;
   const recFrames = record ? [] : null;
   while (!ep.advanceOneFrame()) {

@@ -10,13 +10,16 @@ import { ElmanNetwork } from '../src/net.js';
 import { makeSeededRandom } from '../src/utils.js';
 import { evalMode } from '../src/training.js';
 import * as pose from '../src/pose.js';
-import { makeCrag, makeWall } from '../src/terrain.js';
+import { makeCrag, makeWall, makeRopeCourse } from '../src/terrain.js';
 import standNet from '../trained/stand-and-walk.json';
 import params from './params.json';
 import { makeController as makeWalker } from '../src/simbicon.js';
 import { installRunner } from '../src/run-selector.js';
 import { installWallPlanner } from '../src/wall-planner.js';
 import { installCragPlanner } from '../src/crag-planner.js';
+import { installRopeRunner } from '../src/rope-swing.js';
+import { installObstacleRunner } from '../src/obstacle-runner.js';
+import * as simbMod from '../src/simbicon.js';
 
 setSkill(6);
 const sim = createSim(Box2D);
@@ -63,7 +66,7 @@ function groundAt(x) {
 }
 
 function reset() {
-  planner = null; summitShown = false;
+  planner = null; summitShown = false; chain = null;
   const r = makeSeededRandom(state.seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   start.tilt = 0;
@@ -72,8 +75,19 @@ function reset() {
   start.shiftX = 0;
   terrain = { kind: state.scene };
   let crag = null, lift = 0, holesRel = [];
+  ropeCourse = null;
   if (state.scene === 'wall') start.terrain = makeWall();
   else if (state.scene === 'mountain') { crag = makeCrag(r, 2.6, 0.55 + r() * 0.08); start.terrain = { statics: [], polys: crag.polys, surface: crag.surface }; }
+  else if (state.scene === 'rope') {
+    // a hole with a rope over it, the floor raised 0.6 m so the hole is a real drop
+    ropeCourse = makeRopeCourse(r, { gapMin: 1.4, gapMax: 2.2 });
+    lift = ropeCourse.lift;
+    start.terrain = { statics: ropeCourse.statics, ropes: ropeCourse.ropes };
+  } else if (state.scene === 'obstacle') {
+    // a 2 m rock 9-12 m ahead, a long top to run on
+    crag = makeCrag(r, 2.0, 9 + r() * 3, { plateau: 14 });
+    start.terrain = { statics: [], polys: crag.polys, surface: crag.surface };
+  }
   else if (state.scene === 'holes') {
     // a floor 0.6 m up with holes 0.5-0.9 m wide every 3-5 m, as in parkour.js
     lift = 0.6;
@@ -135,7 +149,14 @@ function reset() {
       orig();
     })(ep.updateGrip.bind(ep));
   } else if (state.mode === 'run') {
-    installRunner(ep, world, params.runner, { config, speed: () => state.speed.run, obstacles: terrain.holes || [] });
+    const mid0 = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
+    if (state.scene === 'rope') {
+      const hole = { x0: mid0 + ropeCourse.hole.x0, x1: mid0 + ropeCourse.hole.x1 };
+      terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
+      chain = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => state.speed.run, hole, rope: ep.terrain.ropes[0], lift });
+    } else if (state.scene === 'obstacle') {
+      chain = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag, H: 2.0, speed: () => state.speed.run, stopAt: 0.6, vswitch: 1.3, params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragObstacle, getup: params.getup } });
+    } else installRunner(ep, world, params.runner, { config, speed: () => state.speed.run, obstacles: terrain.holes || [] });
     ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   } else if (state.mode === 'climb') {
     if (state.scene === 'wall') installWallPlanner(ep, world, params.wall, Object.assign({ wallH: 3.3 }, pctx));
@@ -271,6 +292,18 @@ function draw() {
       }
     }
   }
+  if (ep && ep.terrain && ep.terrain.ropes && ep.terrain.ropes.length) {
+    // the rope: anchor, then the segment centres
+    for (const rp of ep.terrain.ropes) {
+      ctx.strokeStyle = css('--rope'); ctx.lineWidth = Math.max(2, 0.04 * scale); ctx.lineCap = 'round';
+      ctx.beginPath(); let q = toScreen(rp.x, rp.top); ctx.moveTo(q.x, q.y);
+      for (const id of rp.ids) { const v = Box2D.b2Body_GetPosition(id); q = toScreen(v.x, v.y); ctx.lineTo(q.x, q.y); }
+      const last = Box2D.b2Body_GetPosition(rp.ids[rp.ids.length - 1]), rot = Box2D.b2Body_GetRotation ? Box2D.b2Body_GetRotation(rp.ids[rp.ids.length - 1]) : null;
+      if (rot) { q = toScreen(last.x + rot.s * rp.seg / 2, last.y - rot.c * rp.seg / 2); ctx.lineTo(q.x, q.y); }
+      ctx.stroke();
+      const a = toScreen(rp.x - 0.15, rp.top + 0.06); ctx.fillStyle = css('--rock-edge'); ctx.fillRect(a.x, a.y, 0.3 * scale, 0.06 * scale);
+    }
+  }
   const showMarks = state.mode === 'manual' || (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene));
   // lines from each limb to its mark
   ctx.setLineDash([5, 5]); ctx.lineWidth = 1.5;
@@ -337,7 +370,7 @@ for (const b of document.querySelectorAll('[data-mode]')) b.onclick = () => {
   state.mode = b.dataset.mode;
   falls = 0;
   // the natural scene for each skill
-  if (state.mode === 'run' && !['floor', 'holes'].includes(state.scene)) state.scene = 'holes';
+  if (state.mode === 'run' && !['floor', 'holes', 'rope', 'obstacle'].includes(state.scene)) state.scene = 'holes';
   if (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene)) state.scene = 'mountain';
   if (state.mode === 'walk' && state.scene !== 'floor') state.scene = 'floor';
   reset();
@@ -354,7 +387,7 @@ window.addEventListener('resize', resize);
 
 // ---------- loop ----------
 let last = performance.now(), acc = 0, downFor = 0, falls = 0;
-let planner = null, summitShown = false;
+let planner = null, summitShown = false, ropeCourse = null, chain = null;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (!state.paused) {
@@ -369,6 +402,7 @@ function loop(now) {
   downFor = headUp < 0.45 ? downFor + dt : 0;
   // crawling over the summit edge the head is low on purpose: not a fall
   if (planner && planner.phase) downFor = 0;
+  if (chain && chain.planner && chain.planner.phase) downFor = 0;
   if (planner && planner.mantled && !summitShown) { summitShown = true; $('modeNote').textContent = '¡Llegó a la cima! Se arrastró sobre el borde y quedó acostado arriba. "Otra montaña" para probar con otra pared.'; }
   if (state.mode !== 'manual' && downFor > 2) { downFor = 0; falls++; reset(); }
   $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '');

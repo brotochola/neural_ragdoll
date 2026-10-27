@@ -24,8 +24,23 @@ const cragSpec = specOf('crag.js');
 let cragBest = [];
 try { cragBest = rd(process.env.CRAG || 'trained/crag-c.json').best; } catch (e) {}
 const crag = decodeWith(cragSpec, cragBest);
-for (const k of ['tHand', 'tFoot', 'tRise']) crag[k] = Math.max(0.2, crag[k]);
+for (const k of ['tHand', 'tFoot', 'tRise', 'tPress', 'tOver', 'tPull']) crag[k] = Math.max(0.2, crag[k]);
+crag.belly = 1;
+// the slow walker, the stop controller and the get-up expert (the obstacle chain), the rope swing
+const fastSaved = rd('trained/walk-fast-controller.json');
+const walkFast = Object.assign(simb.decode(fastSaved.best), { track: !!fastSaved.track });
+const slowSaved = rd('trained/walk-controller.json');
+const slow = Object.assign(simb.decode(slowSaved.best), { track: !!slowSaved.track });
+const stopK = rd('trained/stop-controller.json').params;
+const stop = Object.assign({}, slow, stopK, { track: true });
+const g = rd('trained/getup-expert-19.json');
+const getup = { theta: g.theta.map((x) => +x.toFixed(5)), handover: g.handover };
+const cragObstacle = Object.assign({}, crag, { belly: 1, doneX: 3.0 });
+const ropeSpec = (await import('../src/rope-swing.js')).SPEC;
+let ropeBest = [];
+try { ropeBest = rd(process.env.ROPE || 'trained/rope-a.json').best; } catch (e) {}
+const rope = decodeWith(ropeSpec, ropeBest);
 const states = rd('trained/run-states.json');
 const runStates = states.filter((_, i) => i % 6 === 0).slice(0, 36);
-fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates }));
+fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates, slow, stop, stopK, getup, cragObstacle, rope, walkFast }));
 console.log('params: walk', Object.keys(walk).length, 'runner', Object.keys(runner).length, 'wall', Object.keys(wall).length, 'mountain', Object.keys(mountain).length, 'crag', Object.keys(crag).length, 'run states', runStates.length);

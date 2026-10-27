@@ -68,3 +68,19 @@ export function makeCrag(r, H = 2.6, x0 = 0.6, opts = {}) {
   const last = tiers[tiers.length - 1];
   return { surface: surface.map(([a, b]) => [+a.toFixed(3), +b.toFixed(3)]), polys, knobs, edgeX: last.xt, H, summitX: last.xt };
 }
+
+// the course, relative to the feet: floor, a hole W wide 3-4 m ahead, a rope over its middle (the
+// anchor ropeTop above the floor, the rope hanging to ropeLow above it), floor on after it
+export function makeRopeCourse(r, opts = {}) {
+  const LIFT = opts.lift || 0.6;
+  const gmin = opts.gapMin || 1.6, gmax = opts.gapMax || 2.4;
+  const x0 = 3 + r() * 1.0, w = gmin + r() * (gmax - gmin);
+  const top = 4.2 + r() * 0.3, low = (opts.low || 1.65) + r() * 0.15;
+  return {
+    statics: [{ dx: -4, w: 4 + x0, h: LIFT }, { dx: x0 + w, w: 30, h: LIFT }],
+    hole: { x0, x1: x0 + w },
+    ropes: [{ dx: x0 + w * (opts.ropeAt || 0.5), top: LIFT + top, length: top - low, seg: 0.2 }],
+    lift: LIFT,
+  };
+}
+
