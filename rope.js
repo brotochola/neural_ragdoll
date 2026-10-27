@@ -43,6 +43,10 @@ const HZ = config.physics.hz;
 const P = config.partIndex;
 const weights = ElmanNetwork.copy(JSON.parse(fs.readFileSync(path.join(root, 'trained/stand-and-walk.json'), 'utf8')).theta);
 const runStates = JSON.parse(fs.readFileSync(path.join(root, 'trained/run-states.json'), 'utf8'));
+const simbMod = await import('./src/simbicon.js');
+const wf = JSON.parse(fs.readFileSync(path.join(root, 'trained/walk-fast-controller.json'), 'utf8'));
+const walkP = Object.assign(simbMod.decode(wf.best), { track: !!wf.track });
+config.walk.maxStandSpeed = Math.max(config.walk.maxStandSpeed, 3);
 const runnerP = JSON.parse(fs.readFileSync(path.join(root, arg('--runner', 'trained/runner-gap-12c.json')), 'utf8')).params;
 
 const decode = (v) => {
@@ -68,7 +72,7 @@ function episode(p, seed, record) {
   const x0 = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
   ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   const hole = { x0: x0 + course.hole.x0, x1: x0 + course.hole.x1 };
-  const RS = installRopeRunner(ep, world, p, { config, pose, Box2D, runnerP, speed: () => speed, hole, rope: ep.terrain.ropes[0], lift: LIFT, debug: !!process.env.DEBUG_ROPE });
+  const RS = installRopeRunner(ep, world, p, { config, pose, Box2D, runnerP, speed: () => speed, hole, rope: ep.terrain.ropes[0], lift: LIFT, walkP, debug: !!process.env.DEBUG_ROPE });
   let fell = false, frames = 0, caught = false, landedX = null, upAfter = 0, maxX = -1e9;
   const recFrames = record ? [] : null;
   while (!ep.advanceOneFrame()) {
@@ -88,7 +92,7 @@ function episode(p, seed, record) {
     const feetLow = Math.min(world.py[P.footLeft], world.py[P.footRight]);
     if ((world.py[0] < LIFT - 0.1 || feetLow < LIFT - 0.25) && !(ep.grips[0].joint || ep.grips[1].joint)) { fell = true; break; }
     if (overFloor && m.headHeight - LIFT < 0.5) { fell = true; break; }
-    if (RS.phase === 'land' || RS.phase === 'run2') {
+    if (['land', 'run2', 'drop', 'steady', 'walk'].includes(RS.phase)) {
       if (landedX == null && (m.touch[P.footLeft] || m.touch[P.footRight]) && pelX > hole.x1) landedX = pelX;
       if (landedX != null && m.headHeight - LIFT > 1.3 && m.torsoCos > 0.7) upAfter++;
     }

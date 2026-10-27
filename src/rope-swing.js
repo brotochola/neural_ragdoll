@@ -4,6 +4,7 @@
 // edge the hands open, the runner takes the landing as the end of a jump and runs on.
 //   phases: run -> reach (jumped) -> swing (a hand holds) -> land (let go) -> run2 (back on the ground)
 import { makeController } from './runner.js';
+import { makeController as makeWalker } from './simbicon.js';
 
 // [name, start, search spread]
 export const SPEC = [
@@ -20,13 +21,17 @@ export const SPEC = [
   ['takeoff', 0.0, 0.15], // nudge to the jump stride selection margin (m)
   ['landSpeed', 0.0, 0.5], // the runner's target speed after landing, relative to before
   ['lean', 0.0, 0.3], // trunk (waist) while swinging
-  ['relV', 0.5, 0.3], // or near the forward end of the swing, slower than this (m/s)
+  ['relV', 0.5, 0.3], // let go over the far floor moving faster than this (or nearly still at the end of the swing)
+  ['landV', 1.3, 0.3], // let go faster than this: land running; slower: drop, steady, walk off, run
+  ['dropHip', 0.3, 0.2], ['dropKnee', -0.4, 0.2], // legs while dropping onto the far floor (thigh world angle, knee)
+  ['steadyT', 1.2, 0.4], // seconds the stand network steadies the body after the drop
 ];
 
 export function installRopeRunner(ep, world, p, ctx) {
   const { config } = ctx;
   const HZ = config.physics.hz, J = config.net.jointCount, P = config.partIndex;
   const runner = makeController(world);
+  const walker = makeWalker(world);
   const rp = Object.assign({}, ctx.runnerP);
   const tmp = new Float64Array(J + config.net.gripOutputs);
   const hole = ctx.hole, rope = ctx.rope;
@@ -52,7 +57,7 @@ export function installRopeRunner(ep, world, p, ctx) {
   ep.updateGrip = ((orig) => function () {
     const m = this.measure;
     S.t += 1 / HZ;
-    m.walkSpeed = ctx.speed() * (S.phase === 'land' || S.phase === 'run2' ? 1 + p.landSpeed * 0.3 : 1);
+    m.walkSpeed = S.phase === 'run2' ? Math.min(ctx.speed(), 1.2 + S.t * 0.6) : ctx.speed() * (S.phase === 'land' ? 1 + p.landSpeed * 0.3 : 1);
     this.speedCap = config.body.maxJointSpeed;
     const held = [0, 1].map((k) => !!(this.grips[k] && this.grips[k].joint));
     if ((S.phase === 'run' || S.phase === 'reach') && (held[0] || held[1])) { S.phase = 'swing'; S.t = 0; }
@@ -93,6 +98,28 @@ export function installRopeRunner(ep, world, p, ctx) {
         for (const [sh, el] of [[2, 3], [8, 9]]) { this.action[sh] = command(sh, ik.upper - ca); this.action[el] = command(el, ik.middle); }
         for (let k = 0; k < 2; k++) { const hx = world.px[HAND[k]], hy = world.py[HAND[k]]; const d = ropeDist(hx, hy); this.action[J + k] = d < p.catchR ? 1 : -1; if (ctx.debug && k === 0 && this.frame % 3 === 0) { const b = getPos(rope.ids[rope.ids.length - 1]); console.log('  reach t', S.t.toFixed(2), 'hand', hx.toFixed(2), hy.toFixed(2), 'rope d', d.toFixed(2), 'want', best ? best.x.toFixed(2) + ',' + best.y.toFixed(2) : '-', 'rope end', b.x.toFixed(2), b.y.toFixed(2), 'pelvis', world.px[0].toFixed(2), world.py[0].toFixed(2)); } }
       }
+    } else if (S.phase === 'drop' || S.phase === 'steady' || S.phase === 'walk') {
+      // slow landing: legs under the body until the feet are down, the stand network steadies it, then the
+      // walker walks off and the runner takes over at a touchdown
+      this.speedCap = 0;
+      if (S.phase === 'drop') {
+        const torso = angleOf(0);
+        for (const [h, kn, an] of [[5, 6, 7], [11, 12, 13]]) { this.action[h] = command(h, p.dropHip - torso); this.action[kn] = command(kn, p.dropKnee); this.action[an] = command(an, 0); }
+        for (const [sh, el] of [[2, 3], [8, 9]]) { this.action[sh] = command(sh, 0.5 - torso); this.action[el] = command(el, 0.5); }
+        this.action[0] = 0; this.action[1] = 0; this.action[J] = this.action[J + 1] = -1;
+        if (m.touch[P.footLeft] && m.touch[P.footRight] || S.t > 1.5) { S.phase = 'steady'; S.t = 0; }
+      } else if (S.phase === 'steady') {
+        this.groundOffset = ctx.lift || 0;
+        for (let j = 0; j < J; j++) this.action[j] = this.network.action[j];
+        this.action[J] = this.action[J + 1] = -1;
+        if (S.t > p.steadyT) { S.phase = 'walk'; S.t = 0; this.simbicon = { stance: 0, t: 0 }; }
+      } else {
+        m.walkSpeed = Math.min(1.2, 0.3 + S.t * 0.6); m.walkDir = 1;
+        walker(ctx.walkP, this, tmp);
+        for (let j = 0; j < tmp.length; j++) this.action[j] = j < J ? tmp[j] : -1;
+        const sb = this.simbicon;
+        if (S.t > 2.5 && sb && sb.t < 1.5 / HZ) { S.phase = 'run2'; S.t = 0; this.runner = { stance: sb.stance, t: 0, flight: false, jumping: false, jumpNext: false, strides: 0 }; }
+      }
     } else if (S.phase === 'swing') {
       // hanging on: the arms keep the angle of the holding arm, the other hand closes when it gets to the
       // rope; the legs tuck, then reach forward; past the far edge the hands open
@@ -123,12 +150,16 @@ export function installRopeRunner(ep, world, p, ctx) {
       }
       const vx = m.centerVelocityX || 0;
       // past the far edge (relDx), or near the forward end of the swing (slower than relV) and past the rope
-      if ((px > hole.x1 + p.relDx && vx > 0) || (px > rope.x + 0.2 && vx > 0 && vx < p.relV && S.t > 0.4)) {
-        // let go: the runner takes over in the air, the front foot reaching for the landing
-        S.phase = 'land'; S.t = 0;
+      // let go over the far floor: moving on (or at the end of the swing, nearly still)
+      const overFar = px > hole.x1 + p.relDx;
+      if (overFar && (vx > p.relV || (vx < 0.3 && S.t > 0.4))) {
         this.action[J] = this.action[J + 1] = -1;
-        const rear = world.px[P.footLeft] < world.px[P.footRight] ? 0 : 1;
-        this.runner = { stance: rear, t: 0.2, flight: true, jumping: false, landing: true, jumpNext: false, strides: 0 };
+        if (vx > p.landV || !ctx.walkP) {
+          // fast: the runner takes over in the air, the front foot reaching for the landing
+          S.phase = 'land'; S.t = 0;
+          const rear = world.px[P.footLeft] < world.px[P.footRight] ? 0 : 1;
+          this.runner = { stance: rear, t: 0.2, flight: true, jumping: false, landing: true, jumpNext: false, strides: 0 };
+        } else { S.phase = 'drop'; S.t = 0; }
       }
     }
     orig();
