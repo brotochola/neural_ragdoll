@@ -1156,6 +1156,7 @@ export function createSim(box) {
     b2Body_GetContactData,
     b2Shape_GetBody,
     b2Body_GetPosition: Box2D_GetPosition,
+    b2Body_GetLocalPoint,
   } = box;
   const dynamicBody = b2BodyType.b2_dynamicBody;
   const staticBody = b2BodyType.b2_staticBody;
@@ -1963,6 +1964,27 @@ export function createSim(box) {
           this.grippable.push({ id, cx: 0, cy: 0 });
           this.terrain.surface = (terrain.surface || []).map(([x, y]) => [mid + x, y]);
         }
+        // ROPES: a chain of thin segments hanging from a fixed point (terrain.ropes: [{dx, top, length,
+        // seg}], top the anchor height, dx relative to the feet). Segments collide with the hands only
+        // (category 0x40, mask = the body's REST category), are grippable anywhere, and swing freely.
+        this.terrain.ropes = [];
+        for (const rp of terrain.ropes || []) {
+          const ax = mid + rp.dx, seg = rp.seg || 0.2, n = Math.max(1, Math.round(rp.length / seg));
+          const anchor = CreateBoxPolygon({ worldId: world.worldId, type: staticBody, position: vector(ax, rp.top + 0.03), size: vector(0.06, 0.03), friction: 1, categoryBits: 0x80, maskBits: 0 }).bodyId;
+          this.objects.push(anchor);
+          const ids = [];
+          let prev = anchor, prevAnchorY = -0.03;
+          for (let i = 0; i < n; i++) {
+            const cy = rp.top - seg * (i + 0.5);
+            const id = CreateBoxPolygon({ worldId: world.worldId, type: dynamicBody, position: vector(ax, cy), size: vector(rp.half || 0.025, seg / 2), density: rp.density || 30, friction: 2, categoryBits: 0x40, maskBits: 8 }).bodyId;
+            world.CreateRevoluteJoint({ worldId: world.worldId, bodyIdA: prev, bodyIdB: id, anchorA: vector(0, prevAnchorY), anchorB: vector(0, seg / 2) });
+            this.objects.push(id);
+            this.grippable.push({ id, cx: ax, cy, dynamic: true });
+            ids.push(id);
+            prev = id; prevAnchorY = -seg / 2;
+          }
+          this.terrain.ropes.push({ x: ax, top: rp.top, seg, ids });
+        }
         // HOLDS: small grippable boxes in the air (climbing rungs on a wall face): [{dx, y, w, h}], y the
         // hold's centre height. terrain.holds keeps their absolute positions.
         this.terrain.holds = [];
@@ -2384,7 +2406,8 @@ export function createSim(box) {
         const hy = this.measure.partY[handPart] || 0;
         grip.joint = world.CreateRevoluteJoint({
           worldId: world.worldId, bodyIdA: hand.id, bodyIdB: target.id,
-          anchorA: vector(0, 0), anchorB: vector(hx - target.cx, hy - target.cy),
+          // a moving grippable (a rope segment): the hold point in its own frame as it is now
+          anchorA: vector(0, 0), anchorB: target.dynamic && b2Body_GetLocalPoint ? b2Body_GetLocalPoint(target.id, vector(hx, hy)) : vector(hx - target.cx, hy - target.cy),
           enableLimit: false, enableMotor: false, collideConnected: false,
         }).jointId;
         this.gripCount = (this.gripCount || 0) + 1;

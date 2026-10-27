@@ -45,3 +45,4 @@ trained/stepper-*.json
 *.log
 trained/crag-*.json
 trained/simb-*.json
+trained/rope-*.json

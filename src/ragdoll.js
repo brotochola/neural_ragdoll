@@ -435,6 +435,9 @@ export class RagDoll2D {
       const bodyId = parts[i].id;
       if (i === id.chest) apply(bodyId, CHEST, GROUND | THIGH, 0);
       else if (i === id.thighLeft || i === id.thighRight) apply(bodyId, THIGH, GROUND | CHEST, 0);
+      // hands also meet ROPE (0x40): a rope collides with the hands alone, so it can be grabbed but never
+      // catches on the chest or the legs
+      else if (i === id.handLeft || i === id.handRight) apply(bodyId, REST, GROUND | 0x40, -1);
       else apply(bodyId, REST, GROUND, -1);
     }
   }

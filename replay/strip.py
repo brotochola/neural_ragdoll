@@ -88,6 +88,11 @@ for ax, fi in zip(axes, picks):
             ax.plot([w["x"] + side * r, px + c * side * r], [w["barY"], py + sn * side * r], color="#8a7552", lw=1)
         pts = [(-w["half"], -w["thick"]), (w["half"], -w["thick"]), (w["half"], w["thick"]), (-w["half"], w["thick"])]
         ax.add_patch(Polygon([(px + c * x - sn * y, py + sn * x + c * y) for x, y in pts], color="#b7a17a"))
+    if f.get("rope"):
+        rp = ep.get("rope") or {}
+        xs = [rp.get("x", f["rope"][0][0])] + [q[0] for q in f["rope"]]
+        ys = [rp.get("top", f["rope"][0][1] + 0.1)] + [q[1] for q in f["rope"]]
+        ax.plot(xs, ys, color="#8a6a3a", lw=2)
     if f.get("mx") is not None:
         ax.add_patch(Circle((f["mx"], f["my"]), 0.12, fill=False, ls="--", color="#2a7fb8"))
     ax.axhline(0, color="#888", lw=1)
