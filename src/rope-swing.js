@@ -7,12 +7,12 @@ import { makeController } from './runner.js';
 
 // [name, start, search spread]
 export const SPEC = [
-  ['armUp', 2.5, 0.3], // upper-arm world angle reaching for the rope (0 hanging, + forward and up)
-  ['armElbow', 0.15, 0.15], // elbows while reaching
+  ['catchFwd', 0.25, 0.12], // the hands aim at the rope point nearest to this far ahead of the shoulder
+  ['catchUp', 0.45, 0.12], // and this far above it
   ['catchR', 0.18, 0.06], // a hand closes when it is this close to the rope
-  ['tuckHip', 1.3, 0.3], // hips while swinging (thighs up, + = flexed)
-  ['tuckKnee', -1.6, 0.3], // knees while swinging
-  ['extDx', 0.2, 0.2], // past the rope by this much the legs reach forward for the landing
+  ['tuckHip', 1.8, 0.3], // hips while swinging (thighs up, + = flexed)
+  ['tuckKnee', -2.0, 0.3], // knees while swinging
+  ['extDx', 0.0, 0.2], // the legs reach forward for the landing with the hips this far from 0.3 m before the far edge
   ['preHip', 0.9, 0.3], // hips then
   ['preKnee', -0.3, 0.2], // knees then
   ['relDx', 0.1, 0.2], // the hands open with the hips this far past the far edge
@@ -77,19 +77,43 @@ export function installRopeRunner(ep, world, p, ctx) {
       if (S.phase === 'land' && S.t > 0.3 && (m.touch[P.footLeft] || m.touch[P.footRight]) && S.t > 1.2) { S.phase = 'run2'; S.t = 0; }
       if (S.phase === 'reach') {
         // arms up and forward; a hand near the rope closes
-        const torso = angleOf(0);
-        for (const [sh, el] of [[2, 3], [8, 9]]) { this.action[sh] = command(sh, p.armUp - torso); this.action[el] = command(el, p.armElbow); }
-        for (let k = 0; k < 2; k++) { const hx = world.px[HAND[k]], hy = world.py[HAND[k]]; this.action[J + k] = ropeDist(hx, hy) < p.catchR ? 1 : -1; }
+        // each hand aims at the rope: the point of it nearest to up-and-forward of the shoulder (IK)
+        const ca = angleOf(1);
+        const shW = { x: world.px[1] - Math.sin(ca) * 0.10, y: world.py[1] + Math.cos(ca) * 0.10 };
+        const want = { x: shW.x + p.catchFwd, y: shW.y + p.catchUp };
+        let best = null, prev = { x: rope.x, y: rope.top };
+        for (const id of rope.ids) {
+          const v = getPos(id); const dx = v.x - prev.x, dy = v.y - prev.y, L2 = dx * dx + dy * dy || 1e-9;
+          const t = Math.max(0, Math.min(1, ((want.x - prev.x) * dx + (want.y - prev.y) * dy) / L2));
+          const q = { x: prev.x + t * dx, y: prev.y + t * dy }, d = Math.hypot(q.x - want.x, q.y - want.y);
+          if (!best || d < best.d) best = { x: q.x, y: q.y, d };
+          prev = { x: v.x, y: v.y };
+        }
+        const ik = ctx.pose.twoLink(shW, best || want, 0.28, 0.29, 1);
+        for (const [sh, el] of [[2, 3], [8, 9]]) { this.action[sh] = command(sh, ik.upper - ca); this.action[el] = command(el, ik.middle); }
+        for (let k = 0; k < 2; k++) { const hx = world.px[HAND[k]], hy = world.py[HAND[k]]; const d = ropeDist(hx, hy); this.action[J + k] = d < p.catchR ? 1 : -1; if (ctx.debug && k === 0 && this.frame % 3 === 0) { const b = getPos(rope.ids[rope.ids.length - 1]); console.log('  reach t', S.t.toFixed(2), 'hand', hx.toFixed(2), hy.toFixed(2), 'rope d', d.toFixed(2), 'want', best ? best.x.toFixed(2) + ',' + best.y.toFixed(2) : '-', 'rope end', b.x.toFixed(2), b.y.toFixed(2), 'pelvis', world.px[0].toFixed(2), world.py[0].toFixed(2)); } }
       }
     } else if (S.phase === 'swing') {
       // hanging on: the arms keep the angle of the holding arm, the other hand closes when it gets to the
       // rope; the legs tuck, then reach forward; past the far edge the hands open
       const k0 = held[0] ? 0 : 1;
-      const shA = world.joints[k0 === 0 ? 2 : 8], elA = world.joints[k0 === 0 ? 3 : 9];
+      const shA = world.joints[k0 === 0 ? 2 : 8];
       const a = ctx.Box2D.b2RevoluteJoint_GetAngle(shA.id);
-      for (const [sh, el] of [[2, 3], [8, 9]]) { this.action[sh] = command(sh, a); this.action[el] = command(el, p.holdElbow); }
+      // the holding arm keeps its angle and bends its elbow (pulling the body up); the free hand reaches
+      // for the rope just under the holding one (IK) and closes there
+      const ca = angleOf(1);
+      const shW = { x: world.px[1] - Math.sin(ca) * 0.10, y: world.py[1] + Math.cos(ca) * 0.10 };
+      for (let k = 0; k < 2; k++) {
+        const sh = k === 0 ? 2 : 8, el = k === 0 ? 3 : 9;
+        if (held[k]) { this.action[sh] = command(sh, a); this.action[el] = command(el, p.holdElbow); continue; }
+        const hk = HAND[k0];
+        const ik = ctx.pose.twoLink(shW, { x: world.px[hk], y: world.py[hk] - 0.06 }, 0.28, 0.29, 1);
+        this.action[sh] = command(sh, ik.upper - ca); this.action[el] = command(el, ik.middle);
+      }
       const px = world.px[0];
-      const ext = px > rope.x + p.extDx;
+      // the legs stay tucked up until the hips are over the far edge (reaching down earlier, the feet hit
+      // the far wall), then reach forward for the landing
+      const ext = px > hole.x1 + p.extDx - 0.3;
       for (const [h, kn, an] of [[5, 6, 7], [11, 12, 13]]) { this.action[h] = command(h, ext ? p.preHip : p.tuckHip); this.action[kn] = command(kn, ext ? p.preKnee : p.tuckKnee); this.action[an] = command(an, 0.2); }
       this.action[0] = command(0, p.lean); this.action[1] = 0; this.action[4] = 0; this.action[10] = 0;
       for (let k = 0; k < 2; k++) {

@@ -25,7 +25,7 @@ const seeds = +arg('--seeds', 4);
 const seconds = +arg('--seconds', 9);
 const gapMin = +arg('--gap-min', 1.4), gapMax = +arg('--gap-max', 2.2);
 const speedMin = +arg('--speed-min', 2.2), speedMax = +arg('--speed-max', 2.8);
-const LIFT = 0.6; // the floor is a raised block, so the hole is a real drop
+const LIFT = +arg('--lift', 2.0); // the floor is a raised block, so the hole is a deep drop (0.6: the body stood in it holding the rope)
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -56,7 +56,7 @@ function episode(p, seed, record) {
   const r = makeSeededRandom(12000 + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   const speed = speedMin + r() * (speedMax - speedMin);
-  const course = makeRopeCourse(r, { gapMin, gapMax });
+  const course = makeRopeCourse(r, { gapMin, gapMax, lift: LIFT, low: +arg('--rope-low', 1.25) });
   const rs = runStates[Math.floor(r() * runStates.length)];
   const pz = rs.pose.slice();
   for (let k = 0; k < world.parts.length; k++) pz[k * 3 + 1] += LIFT;
