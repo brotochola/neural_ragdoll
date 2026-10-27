@@ -5,6 +5,8 @@
 //   phases: run -> reach (jumped) -> swing (a hand holds) -> land (let go) -> run2 (back on the ground)
 import { makeController } from './runner.js';
 import { makeController as makeWalker } from './simbicon.js';
+// feet touching the far floor count by where the feet are (old rule: where the hips are). Off with ROPE_OLD_TOUCH=1.
+const FEET_TOUCH = !(globalThis.process && globalThis.process.env && globalThis.process.env.ROPE_OLD_TOUCH);
 
 // [name, start, search spread]
 export const SPEC = [
@@ -204,7 +206,10 @@ export function installRopeRunner(ep, world, p, ctx) {
       // the rope pulling the body back and it fell over backward); or if the feet already touch it
       const feetX = Math.min(world.px[P.footLeft], world.px[P.footRight]);
       const feetOver = feetX > hole.x1 + p.relDx;
-      const touching = (m.touch[P.footLeft] || m.touch[P.footRight]) && px > hole.x1;
+      // a foot down on the far floor (the hips can still be over the hole: hanging back, legs reaching on,
+      // nothing else let go and it hung there for good)
+      const footFar = (q) => m.touch[q] && world.px[q] > hole.x1;
+      const touching = FEET_TOUCH ? footFar(P.footLeft) || footFar(P.footRight) : (m.touch[P.footLeft] || m.touch[P.footRight]) && px > hole.x1;
       // BALLISTIC: let go as soon as the centre of mass, flying free from here, would come down (to standing
       // height over the far floor) at least relLand past the edge, the trunk upright enough
       const cy = m.centerY || world.py[0], vy = m.centerVelocityY || 0, yl = (ctx.lift || 0) + 0.85;

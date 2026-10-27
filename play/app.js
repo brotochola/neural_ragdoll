@@ -66,7 +66,7 @@ function groundAt(x) {
 }
 
 function reset() {
-  planner = null; summitShown = false; chain = null;
+  planner = null; summitShown = false; chain = null; ropeHole = null;
   const r = makeSeededRandom(state.seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   start.tilt = 0;
@@ -116,6 +116,7 @@ function reset() {
   }
   world.rebuild();
   ep = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, start));
+  if (state.scene === 'rope') terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
   if (state.scene === 'holes') {
     terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
     const mid = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
@@ -152,6 +153,7 @@ function reset() {
     const mid0 = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
     if (state.scene === 'rope') {
       const hole = { x0: mid0 + ropeCourse.hole.x0, x1: mid0 + ropeCourse.hole.x1 };
+      ropeHole = hole;
       terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
       chain = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift, walkP: params.walkFast }); // 2.4 m/s: the speed it crosses best at
     } else if (state.scene === 'obstacle') {
@@ -164,7 +166,7 @@ function reset() {
     else ep.updateGrip = ((orig) => function () { drive(this); orig(); })(ep.updateGrip.bind(ep));
   }
   // stand: the stand-and-walk network drives (nothing to install)
-  $('modeNote').textContent = (state.mode === 'run' && state.scene === 'rope' ? 'Corre, salta en el borde, agarra la soga en el aire, cruza el agujero, cae y sigue corriendo. En la simulación cruza bien casi 6 de cada 10 veces (si se cae, vuelve a empezar solo).' : state.mode === 'run' && state.scene === 'obstacle' ? 'Corre, frena antes de la roca de 2 m, trepa, se arrastra sobre el borde, se levanta arriba y vuelve a correr. Tarda casi un minuto y en la simulación sale 4 de cada 10 veces (a veces se traba trepando).' : MODE_NOTE[state.mode]) + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
+  $('modeNote').textContent = (state.mode === 'run' && state.scene === 'rope' ? 'Corre, salta en el borde, agarra la soga en el aire, cruza el agujero, cae y sigue corriendo. En la simulación cruza y sigue corriendo cerca de la mitad de las veces. Si se cae, vuelve a empezar solo con otro agujero; si cruza, cuenta el cruce y prueba con otro.' : state.mode === 'run' && state.scene === 'obstacle' ? 'Corre, frena antes de la roca de 2 m, trepa, se arrastra sobre el borde, se levanta arriba y vuelve a correr. Tarda casi un minuto y en la simulación sale 4 de cada 10 veces (a veces se traba trepando).' : MODE_NOTE[state.mode]) + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
 }
 const MODE_NOTE = {
   manual: 'Vos sos el planificador: arrastrá las marcas.',
@@ -365,7 +367,12 @@ $('reset').onclick = () => reset();
 $('dropHands').onclick = () => { targets.hands = [null, null]; state.grip = [false, false]; syncButtons(); };
 $('newMountain').onclick = () => { state.seed++; state.scene = 'mountain'; reset(); };
 $('lean').oninput = (ev) => { state.lean = -(+ev.target.value) * Math.PI / 180; $('leanVal').textContent = (+ev.target.value) + '°'; };
-for (const b of document.querySelectorAll('[data-scene]')) b.onclick = () => { state.scene = b.dataset.scene; reset(); };
+for (const b of document.querySelectorAll('[data-scene]')) b.onclick = () => {
+  state.scene = b.dataset.scene; falls = 0; crossed = 0;
+  // the rope and the 2 m rock are run courses: they only make sense with the runner driving
+  if (['rope', 'obstacle'].includes(state.scene) && state.mode !== 'run') { state.mode = 'run'; falls = 0; }
+  reset();
+};
 for (const b of document.querySelectorAll('[data-mode]')) b.onclick = () => {
   state.mode = b.dataset.mode;
   falls = 0;
@@ -386,8 +393,8 @@ function resize() {
 window.addEventListener('resize', resize);
 
 // ---------- loop ----------
-let last = performance.now(), acc = 0, downFor = 0, falls = 0;
-let planner = null, summitShown = false, ropeCourse = null, chain = null;
+let last = performance.now(), acc = 0, downFor = 0, holeFor = 0, falls = 0;
+let planner = null, summitShown = false, ropeCourse = null, chain = null, ropeHole = null, crossed = 0;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (!state.paused) {
@@ -404,8 +411,16 @@ function loop(now) {
   if (planner && planner.phase) downFor = 0;
   if (chain && chain.planner && chain.planner.phase) downFor = 0;
   if (planner && planner.mantled && !summitShown) { summitShown = true; $('modeNote').textContent = '¡Llegó a la cima! Se arrastró sobre el borde y quedó acostado arriba. "Otra montaña" para probar con otra pared.'; }
-  if (state.mode !== 'manual' && downFor > 2) { downFor = 0; falls++; reset(); }
-  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '');
+  // hanging on the rope for good (no rule let go): counts as a fall too
+  // or down in the hole (standing at the bottom is no fall by the head, but the run is over)
+  const inHole = state.scene === 'rope' && ropeCourse && world.py[0] < ropeCourse.lift - 0.4 && !(ep.grips[0].joint || ep.grips[1].joint);
+  holeFor = inHole ? holeFor + dt : 0;
+  const stuck = (chain && chain.phase === 'swing' && chain.t > 4) || holeFor > 1;
+  // across and running on 6 m past the hole: one more crossing, then a new hole (the floor ends at 30 m)
+  if (ropeHole && chain && chain.phase === 'run2' && world.px[0] > ropeHole.x1 + 6) { crossed++; holeFor = 0; downFor = 0; state.seed++; reset(); }
+  // a new course each restart (the same seed replayed the same fall exactly)
+  if (state.mode !== 'manual' && (downFor > 2 || stuck)) { downFor = 0; holeFor = 0; falls++; state.seed++; reset(); }
+  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '') + (state.scene === 'rope' && crossed ? ` · cruces ${crossed}` : '');
   requestAnimationFrame(loop);
 }
 resize();
