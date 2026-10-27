@@ -115,6 +115,16 @@ if (!isMainThread) {
     const n = rs.length, ob = rs.reduce((a, r) => a + r.passed, 0), falls = rs.reduce((a, r) => a + r.fell, 0);
     return { score: rs.reduce((a, r) => a + r.score, 0) / n, pass: n - falls, perObstacle: ob / Math.max(1, ob + falls), speed: rs.reduce((a, r) => a + r.dist / r.T, 0) / n, dist: rs.reduce((a, r) => a + r.dist, 0) / n };
   };
+  if (args.includes('--eval')) {
+    // only score a saved network on the 60 fresh courses (never used in training), against the runner alone
+    const th = Float64Array.from(JSON.parse(fs.readFileSync(arg('--eval', out), 'utf8')).theta);
+    const fs60 = Array.from({ length: +arg('--n', 60) }, (_, i) => +arg('--base', 300) + i);
+    const [a, b] = await runAll([{ theta: null, seeds: fs60 }, { theta: th, seeds: fs60 }]);
+    const fa = summarize(a), fb = summarize(b);
+    console.log('fresh', fs60.length + ': runner alone', (100 * fa.perObstacle).toFixed(1) + '%', 'pass', fa.pass, 'dist', fa.dist.toFixed(1), 'speed', fa.speed.toFixed(2), '| with net', (100 * fb.perObstacle).toFixed(1) + '%', 'pass', fb.pass, 'dist', fb.dist.toFixed(1), 'speed', fb.speed.toFixed(2));
+    for (const w of workers) w.terminate();
+    process.exit(0);
+  }
   const heldSeeds = Array.from({ length: held }, (_, i) => 500 + i);
   const base = summarize((await runAll([{ theta: null, seeds: heldSeeds }]))[0]);
   console.log('runner alone on held-out: score', base.score.toFixed(3), 'per obstacle', (100 * base.perObstacle).toFixed(1) + '%', 'pass', base.pass + '/' + held, 'speed', base.speed.toFixed(2));

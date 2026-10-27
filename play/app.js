@@ -444,9 +444,9 @@ function loop(now) {
   if (ropeHole && chain && chain.phase === 'run2' && world.px[0] > ropeHole.x1 + 6) { crossed++; holeFor = 0; downFor = 0; state.seed++; reset(); }
   // a new course each restart (the same seed replayed the same fall exactly)
   if (state.scene === 'dash' && downFor > 1.2) downFor = 2.01;
-  if (state.scene === 'dash' && (downFor > 2 || stuck)) bestDash = Math.max(bestDash, world.px[0] - startX);
+  if (state.scene === 'dash' && downFor === 0) bestDash = Math.max(bestDash, world.px[0] - startX); // the farthest it got while up
   if (state.mode !== 'manual' && (downFor > 2 || stuck)) { downFor = 0; holeFor = 0; falls++; state.seed++; reset(); }
-  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '') + (state.scene === 'rope' && crossed ? ` · cruces ${crossed}` : '') + (state.scene === 'dash' ? ` · ${((world.px[0] - startX) / Math.max(0.1, ep.frame / HZ)).toFixed(1)} m/s · récord ${Math.max(bestDash, world.px[0] - startX).toFixed(0)} m` : '');
+  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '') + (state.scene === 'rope' && crossed ? ` · cruces ${crossed}` : '') + (state.scene === 'dash' ? ` · ${((world.px[0] - startX) / Math.max(0.1, ep.frame / HZ)).toFixed(1)} m/s · récord ${bestDash.toFixed(0)} m` : '');
   requestAnimationFrame(loop);
 }
 resize();
