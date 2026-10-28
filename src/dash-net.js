@@ -48,7 +48,7 @@ export function makeDashNet(world, config, Box2D) {
     return k;
   }
   // adds the correction into action (normalized joint commands) in place
-  return function correct(theta, ep, st, now, vRun, action) {
+  const correct = function (theta, ep, st, now, vRun, action) {
     features(ep, st, now, vRun);
     let w = 0;
     for (let i = 0; i < DH; i++) { let s = theta[w++]; for (let j = 0; j < DIN; j++) s += theta[w++] * x[j]; h[i] = Math.tanh(s); }
@@ -59,6 +59,8 @@ export function makeDashNet(world, config, Box2D) {
     add(W.hip, y[3]); add(W.knee, y[4]); add(W.ankle, y[5]);
     add(0, y[6]);
   };
+  correct.last = { x, h, y }; // the last inputs, hidden units and outputs (the playground draws them)
+  return correct;
 }
 
 // small random first layer, zero output layer: starts as the runner exactly

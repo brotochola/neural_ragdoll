@@ -421,5 +421,5 @@ export function installCragPlanner(ep, world, p, ctx) {
     }
     orig();
   })(ep.updateGrip.bind(ep));
-  return { lim, feetTop, handsTop, rungs, wallX, wallH, N, TOP, faceAt, get mantled() { return mantled; }, get stood() { return stood; }, handOff() { handedOff = true; }, get phase() { return mt ? mt.phase : null; } };
+  return { lim, feetTop, handsTop, rungs, wallX, wallH, N, TOP, faceAt, get mantled() { return mantled; }, get stood() { return stood; }, handOff() { handedOff = true; }, get phase() { return mt ? mt.phase : null; }, get move() { return move; } };
 }

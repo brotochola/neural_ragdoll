@@ -28,6 +28,10 @@ export function installRunner(ep, world, p, ctx) {
   const tmp = new Float64Array(J + config.net.gripOutputs);
   const obstacles = ctx.obstacles || [];
   const speed = ctx.speed || (() => p.vRun || 2.7);
+  // ep.sel: what the selector sees and decides, for the playground's inspector (read only, changes nothing):
+  // the next obstacle, the take-off window, the last jump (frame, scale), the step adjustment, stepping down,
+  // and the runner's commands before (base) and the network's change to them (corr)
+  const sel = ep.sel = { next: null, fx: 0, win: 0, jumpAt: -1e9, jumpScale: 1, placeAdj: 0, dropH: 0, base: new Float64Array(J), corr: new Float64Array(J), net: !!ctx.net };
   ep.updateGrip = ((orig) => function () {
     const m = this.measure;
     m.walkSpeed = speed();
@@ -48,9 +52,11 @@ export function installRunner(ep, world, p, ctx) {
       st.dropH = on && st.avgL && on.x1 - fx < st.avgL ? on.top : 0;
       const dh = next && next.top != null ? next.top - HREF : 0;
       const win = (st.avgL ? st.avgL + p.jumpMargin : p.jumpWin) + (p.winH || 0) * dh;
+      sel.next = next || null; sel.fx = fx; sel.win = win; sel.dropH = st.dropH;
       if (next && next.x0 - fx > 0.03 && next.x0 - fx < win) {
         st.jumping = true;
         st.jumpScale = Math.max(0.3, Math.min(3, 1 + (p.jumpGainH || 0) * dh / HREF));
+        sel.jumpAt = this.frame; sel.jumpScale = st.jumpScale;
       } else if (next && st.avgL && p.kStride) {
         const D = next.x0 - fx - p.takeoff - (p.takeoffH || 0) * dh;
         if (D > 0 && D < 5) {
@@ -60,7 +66,10 @@ export function installRunner(ep, world, p, ctx) {
       }
     }
     // ctx.net = { correct, theta }: the dash corrective network (src/dash-net.js) adds to the commands each frame
+    if (st) sel.placeAdj = st.placeAdj || 0;
+    for (let j = 0; j < J; j++) sel.base[j] = tmp[j];
     if (ctx.net && st) ctx.net.correct(ctx.net.theta, this, st, obstaclesNow(obstacles), speed(), tmp);
+    for (let j = 0; j < J; j++) sel.corr[j] = tmp[j] - sel.base[j];
     for (let j = 0; j < tmp.length; j++) this.action[j] = j < J ? tmp[j] : -1;
     orig();
   })(ep.updateGrip.bind(ep));

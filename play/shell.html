@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Ragdoll en vivo</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -5,16 +6,17 @@
 /* Layout: one live stage (you are the planner), the five marks dragged on it, the switches in a strip below. */
 :root {
   --bg: #eef0ec; --stage: #f8f9f6; --ink: #1d2320; --muted: #5d6862; --rule: #c9cfc9;
-  --rock: #b7a17a; --rock-edge: #8a7552; --rope: #7a5a2e; --ball: #4f8fbf; --ok: #2f8a4f; --accent: #d9481c;
+  --rock: #b7a17a; --rock-edge: #8a7552; --rope: #7a5a2e; --ball: #4f8fbf;
+  --k-net: #d9481c; --k-tuned: #2a6fb0; --k-rules: #6b5bb8; --k-you: #2f8a4f; --k-mix: #b5578f; --k-none: #8b948f; --k-body: #5d6862; --card: #f8f9f6; --ok: #2f8a4f; --accent: #d9481c;
   --mark-hips: #7b4fd1; --mark-hand: #d9481c; --mark-foot: #2a7fb8;
   --shirt: #c94a3d; --shirt-back: #9c3a30; --jean: #3f6f9f; --jean-back: #2c4f72; --skin: #e9b35a;
   --display: "Archivo", "Helvetica Neue", Arial, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --rope: #c9a46a; --ball: #6aa6d6; --ok: #5cc27d; --accent: #ff7a4d;
+  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --rope: #c9a46a; --ball: #6aa6d6; --k-net: #ff7a4d; --k-tuned: #5fa8e8; --k-rules: #a597f0; --k-you: #5cc27d; --k-mix: #e588c0; --k-none: #7d8781; --k-body: #9aa59e; --card: #1d2220; --ok: #5cc27d; --accent: #ff7a4d;
   --mark-hips: #a98bf0; --mark-hand: #ff7a4d; --mark-foot: #5fb1e8; --shirt: #e0604f; --shirt-back: #a8463a; --jean: #5b8fc4; --jean-back: #3d6690; --skin: #f0c070; color-scheme: dark; } }
 :root[data-theme="dark"] {
-  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --rope: #c9a46a; --ball: #6aa6d6; --ok: #5cc27d; --accent: #ff7a4d;
+  --bg: #151917; --stage: #1d2220; --ink: #e8ece8; --muted: #9aa59e; --rule: #333b37; --rock: #6e5f45; --rock-edge: #a8916a; --rope: #c9a46a; --ball: #6aa6d6; --k-net: #ff7a4d; --k-tuned: #5fa8e8; --k-rules: #a597f0; --k-you: #5cc27d; --k-mix: #e588c0; --k-none: #7d8781; --k-body: #9aa59e; --card: #1d2220; --ok: #5cc27d; --accent: #ff7a4d;
   --mark-hips: #a98bf0; --mark-hand: #ff7a4d; --mark-foot: #5fb1e8; --shirt: #e0604f; --shirt-back: #a8463a; --jean: #5b8fc4; --jean-back: #3d6690; --skin: #f0c070; color-scheme: dark; }
 body { background: var(--bg); color: var(--ink); font-family: var(--display); }
 .wrap { max-width: 980px; margin: 0 auto; padding-block: 18px 36px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 14px; }
@@ -39,6 +41,43 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
 .manual-only[hidden] { display: none; }
 .how { display: grid; gap: 6px; font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 70ch; }
 .how b { color: var(--ink); }
+/* inspector: what goes on inside */
+.inspect { display: grid; gap: 12px; border-top: 1px solid var(--rule); padding-top: 14px; }
+.inspect-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; justify-content: space-between; }
+.inspect h2 { margin: 0; font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em; }
+.inspect h3 { margin: 0 0 8px; font: 700 0.72rem var(--display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.inspect .small, .inspect-lede { font: 0.82rem/1.5 var(--mono); color: var(--muted); margin: 0; }
+.pipe { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.stage { position: relative; display: grid; align-content: start; gap: 4px; padding: 10px 10px 12px; border: 1px solid var(--rule); border-top: 4px solid var(--kc); border-radius: 10px; background: var(--card); min-width: 0; }
+.stage-n { font: 700 0.7rem var(--mono); color: var(--muted); }
+.stage-t { font: 700 0.72rem var(--display); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.stage-who { font-size: 0.98rem; line-height: 1.25; }
+.stage .badge { justify-self: start; font: 600 0.68rem var(--mono); color: var(--kc); border: 1px solid var(--kc); border-radius: 999px; padding: 1px 7px; }
+.stage-d { font: 0.76rem/1.45 var(--mono); color: var(--muted); }
+.k-net { --kc: var(--k-net); } .k-tuned { --kc: var(--k-tuned); } .k-rules { --kc: var(--k-rules); } .k-you { --kc: var(--k-you); } .k-mix { --kc: var(--k-mix); } .k-none { --kc: var(--k-none); } .k-body { --kc: var(--k-body); }
+.inspect-grid { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 10px; }
+.card { border: 1px solid var(--rule); border-radius: 10px; background: var(--card); padding: 12px; min-width: 0; display: grid; align-content: start; gap: 8px; }
+.card.idle canvas, .card.idle .netlegend { display: none; }
+.pieces { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
+.piece { display: grid; gap: 2px; padding: 7px 9px; border: 1px solid var(--rule); border-left: 4px solid var(--kc); border-radius: 8px; font-size: 0.85rem; opacity: 0.55; }
+.piece span { font: 0.74rem/1.35 var(--mono); color: var(--muted); }
+.piece.on { opacity: 1; background: var(--card); box-shadow: inset 0 0 0 1px var(--kc); }
+.kinds { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 0.76rem var(--mono); color: var(--muted); }
+.kinds i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; background: var(--kc); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { font: 600 0.78rem var(--display); padding: 4px 9px; border-radius: 999px; border: 1px solid var(--rule); color: var(--muted); }
+.chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chips .arrow { color: var(--muted); font-size: 0.8rem; }
+#facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font: 0.8rem/1.45 var(--mono); }
+#facts dt { color: var(--muted); }
+#facts dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+#facts dd.hot { color: var(--accent); font-weight: 600; }
+#motors, #netCanvas { width: 100%; height: auto; display: block; cursor: default; touch-action: auto; }
+.mlegend { display: flex; flex-wrap: wrap; gap: 10px; font: 0.74rem var(--mono); color: var(--muted); }
+.mlegend i { display: inline-block; width: 14px; height: 6px; vertical-align: 1px; margin-right: 5px; }
+.mlegend i.ring { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--ink); background: transparent; }
+@media (max-width: 860px) { .pipe { grid-template-columns: 1fr 1fr; } .inspect-grid { grid-template-columns: 1fr; } }
+@media (max-width: 480px) { .pipe { grid-template-columns: 1fr; } }
 </style>
 <div class="wrap">
   <header>
@@ -93,8 +132,50 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
     <button id="pause">Pausa</button>
     <button id="reset">Reiniciar (R)</button>
   </div>
+  <section class="inspect" aria-label="Qué pasa adentro">
+    <div class="inspect-head">
+      <h2>Qué pasa adentro</h2>
+      <div class="bar" role="group" aria-label="Velocidad y ayudas">
+        <span class="label">Velocidad</span>
+        <button data-speed="1">1×</button>
+        <button data-speed="0.5">½×</button>
+        <button data-speed="0.25">¼×</button>
+        <button data-speed="0.1">⅒×</button>
+        <button id="step">Avanzar un cuadro</button>
+        <button id="helpers">Ayudas en la escena</button>
+      </div>
+    </div>
+    <p class="inspect-lede">Nada empuja al muñeco desde afuera: solo se mueve con los 14 motores de sus articulaciones. Abajo ves, en este momento, quién hace cada trabajo y de qué tipo es: una red neuronal entrenada, código con números ajustados por búsqueda automática, código con reglas fijas, o vos.</p>
+    <ol class="pipe" id="pipe"></ol>
+    <div class="card">
+      <h3>Todas las piezas del muñeco</h3>
+      <p class="small">No hay una red por tarea ni una red que elija qué hacer: tres partes son redes neuronales y el resto es código. Qué habilidad usar lo decide código (o vos, con los botones). Se resaltan las piezas que están trabajando ahora.</p>
+      <div class="kinds"><span class="k-net"><i></i>red neuronal entrenada</span><span class="k-tuned"><i></i>código con números ajustados por búsqueda automática</span><span class="k-rules"><i></i>código con reglas fijas</span></div>
+      <ul class="pieces" id="pieces"></ul>
+    </div>
+    <div class="inspect-grid">
+      <div class="card">
+        <h3>Fases de la habilidad</h3>
+        <div class="chips" id="phases"></div>
+        <h3>Lo que está decidiendo</h3>
+        <dl id="facts"></dl>
+      </div>
+      <div class="card">
+        <h3>Motores (14 articulaciones)</h3>
+        <div class="mlegend"><span><i class="ring"></i>dónde está la articulación</span><span><i style="background:var(--k-tuned)"></i>objetivo pedido (el color es el tipo de quien lo pide)</span><span id="legNet"><i style="background:var(--k-net)"></i>lo que suma la red correctora</span></div>
+        <p class="small">Cada línea es el rango de la articulación; la marquita del medio es el ángulo recto. La barra sale de ahí hasta el ángulo que pide el controlador, y el motor gira hacia ella.</p>
+        <canvas id="motors" aria-label="Objetivo y ángulo real de cada articulación"></canvas>
+      </div>
+      <div class="card" id="netCard">
+        <h3 id="netTitle">Red neuronal</h3>
+        <p class="small" id="netNote"></p>
+        <canvas id="netCanvas" aria-label="Activación de las neuronas de la red que maneja ahora"></canvas>
+        <p class="small netlegend">Cada cuadrito es una neurona: naranja si está activa en positivo, azul en negativo, más intenso cuanto más fuerte.</p>
+      </div>
+    </div>
+  </section>
   <div class="how">
-    <div><b>Quién lo mueve.</b> "Vos" usa el ejecutor de poses con tus marcas. "Pararse" es una red neuronal. "Caminar" y "Correr y saltar" son controladores en código con números ajustados por búsqueda automática (la carrera usa las articulaciones a 20 rad/s). "Trepar" es un planificador que elige manos y pies en la pared o la montaña. La montaña es una pared de roca irregular con salientes a distintas alturas y distancias (cada "Otra montaña" es distinta): elige en qué saliente va cada mano y cada pie, con tres apoyos siempre en la roca. Todavía no pasa por encima del borde de la cima, y a veces los pies se le quedan atrás; sus números se siguen ajustando.</div>
+    <div><b>Quién lo mueve.</b> "Vos" usa el ejecutor de poses con tus marcas. "Pararse" es una red neuronal. "Caminar" y "Correr y saltar" son controladores en código con números ajustados por búsqueda automática (la carrera usa las articulaciones a 20 rad/s). "Trepar" es un planificador que elige manos y pies en la pared o la montaña. La montaña es una pared de roca irregular con salientes a distintas alturas y distancias (cada "Otra montaña" es distinta): elige en qué saliente va cada mano y cada pie, con tres apoyos siempre en la roca. A veces llega arriba: se arrastra sobre el borde de la cima y se levanta con la red "levantarse". Abajo, en "Qué pasa adentro", se ve en cada momento qué saliente busca cada mano y cada pie.</div>
     <div><b>Cómo funcionan las marcas.</b> Cada marca es un objetivo: dónde querés la cadera, cada mano y cada pie. El ejecutor de poses calcula los ángulos de cadera, rodilla, tobillo, hombro y codo con geometría de dos segmentos (cinemática inversa) y los motores giran hacia esos ángulos con fuerza limitada.</div>
     <div><b>Pies.</b> Un pie cuya marca está sobre el suelo cuenta como apoyado, y el equilibrio (cadera y tobillos) mantiene el peso sobre los pies apoyados. Para dar un paso, arrastrá un pie por el aire y soltalo más adelante.</div>
     <div><b>Manos.</b> Con "agarra", la mano se cierra cuando llega a su marca y toca algo (piso, peldaño, pared o roca), y queda sujeta hasta que apagues el botón. Con las manos agarradas podés subir la cadera y colgarte. Las manos sin marca cuelgan.</div>
