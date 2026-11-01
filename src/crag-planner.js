@@ -106,6 +106,11 @@ export function installCragPlanner(ep, world, p, ctx) {
       const fo = 1 - fk;
       if (lim.foot[fo].rung < fTo && (fails['foot' + fo + ':' + fTo] || 0) < 4) return { kind: 'foot', k: fo, to: fTo };
       if (hTo < TOP && ry(hTo) - feetY <= p.spanMax + 0.35 && (fails['hand' + hk + ':' + hTo] || 0) < 4) return { kind: 'hand', k: hk, to: hTo };
+      // the same foot to a higher knob, still under the hands
+      for (let i = fTo + 1; i <= N; i++) if (handsY - ry(i) >= p.spanLow - 0.1 && (fails['foot' + fk + ':' + i] || 0) < 4) return { kind: 'foot', k: fk, to: i };
+      // hands on the last knob: try the edge from the higher foot
+      const feetHi = Math.max(ry(lim.foot[0].rung), ry(lim.foot[1].rung));
+      if (hTo === TOP && wallH - feetHi <= p.spanTop + 0.2 && (fails['hand' + hk + ':' + TOP] || 0) < 4) return { kind: 'hand', k: hk, to: TOP };
       for (const key in fails) delete fails[key];
     }
     if (fTo <= rungs.length && handsY - ry(fTo) >= p.spanMin) return { kind: 'foot', k: fk, to: fTo };

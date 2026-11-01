@@ -193,9 +193,10 @@ export function makePopLevel(r, opts = {}) {
   }
   features.push({ type: 'down', x0: downX, x1: downX + 0.02, top: lvD, from: lvD, to: 0 });
   const wallX0 = downX + 7.5 + r() * 2; // the zone of the rock starts 4 m before it: the drop is the trail runner's
-  const crag = makeCrag(r, o.wallH, wallX0, { plateau: 5 });
+  // a 10 m top: crawling over the edge and getting up can take several metres (5 m left a 2 m pit in reach)
+  const crag = makeCrag(r, o.wallH, wallX0, { plateau: 10 });
   levels.push([downX, wallX0, 0]);
-  const summit = crag.summitX, plateauEnd = summit + 5;
+  const summit = crag.summitX, plateauEnd = summit + 10;
   // the rock as a floor piece for the level's floor line: its top from the summit edge on
   levels.push([summit, plateauEnd, o.wallH]);
   // trail B on the top, a rope over a wide hole, trail C

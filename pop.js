@@ -50,6 +50,7 @@ function episode(seed) {
   let stage = 0, down = 0, stallX = -1e9, stallT = 0, why = 'time';
   while (!ep.advanceOneFrame()) {
     const px = world.px[0], z = D.zone();
+    if (process.env.DEBUG_POP && ep.frame % 300 === 0) { const pl = D.chain.planner; console.log('   t', (ep.frame / HZ).toFixed(0), 'zone', z, 'chain', D.chain.mode, pl ? 'move ' + (pl.move ? pl.move.kind + (pl.move.k != null ? pl.move.k : '') + '->' + (pl.move.to != null ? pl.move.to : '') : '-') + ' hands ' + pl.lim.hand.map((h) => h.rung + (h.grip ? 'g' : '')).join(',') + ' feet ' + pl.lim.foot.map((f) => f.rung).join(',') + ' phase ' + pl.phase : '', 'pelvis', px.toFixed(2), world.py[0].toFixed(2), 'leap', JSON.stringify({ aim: D.chain.leap.aimI, hold: D.chain.leap.holdI, missed: D.chain.leap.missed })); }
     if (stage < 1 && z === 'wall') stage = 1;
     if (stage < 2 && D.chain.leap.caughtY != null) stage = 2;
     if (stage < 3 && D.wallDone) stage = 3;
