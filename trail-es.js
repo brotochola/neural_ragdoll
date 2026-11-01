@@ -13,7 +13,7 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 const root = path.dirname(fileURLToPath(import.meta.url));
 const file = fileURLToPath(import.meta.url);
 
-async function makeEnv(runnerFile, seconds, course) {
+async function makeEnv(runnerFile, seconds, course, v2) {
   const { config, setSkill } = await import('./config.js');
   const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
   const { createSim } = await import('./src/sim.js');
@@ -24,6 +24,7 @@ async function makeEnv(runnerFile, seconds, course) {
   const { makeTrailCourse } = await import('./src/terrain.js');
   const { installTrail } = await import('./src/trail.js');
   const { makeTrailNet } = await import('./src/trail-net.js');
+  const { makeTrailNet2 } = await import('./src/trail-net2.js');
   setSkill(6);
   config.walk.maxStandSpeed = 20;
   const sim = createSim(Box2D);
@@ -33,7 +34,7 @@ async function makeEnv(runnerFile, seconds, course) {
   const runStates = JSON.parse(fs.readFileSync(path.join(root, 'trained/run-states.json'), 'utf8'));
   const p = JSON.parse(fs.readFileSync(path.join(root, runnerFile), 'utf8')).params;
   for (const k of Object.keys(process.env)) if (k.startsWith('P_')) p[k.slice(2)] = +process.env[k]; // overrides to try
-  const correct = makeTrailNet(world, config, Box2D);
+  const correct = v2 ? makeTrailNet2(world, config, Box2D) : makeTrailNet(world, config, Box2D);
   return function episode(theta, seed, log, dump) {
     const r = makeSeededRandom(9100 + seed);
     const start = sim.fillTrainingStart({}, r, evalMode(6));
@@ -91,7 +92,7 @@ async function makeEnv(runnerFile, seconds, course) {
 }
 
 if (!isMainThread) {
-  const episode = await makeEnv(workerData.runner, workerData.seconds, workerData.course);
+  const episode = await makeEnv(workerData.runner, workerData.seconds, workerData.course, workerData.v2);
   parentPort.on('message', ({ id, theta, seeds }) => {
     const res = seeds.map((s) => episode(theta ? Float64Array.from(theta) : null, s));
     parentPort.postMessage({ id, res });
@@ -113,12 +114,16 @@ if (!isMainThread) {
   const init = arg('--init', null);
   const nW = +arg('--workers', Math.max(1, os.cpus().length));
   const { makeSeededRandom, randomNormalSample } = await import('./src/utils.js');
-  const { NW, initTheta, DIN, DH, DOUT } = await import('./src/trail-net.js');
+  // --v2: the v2 network (src/trail-net2.js: arms and step length too); a v1 --init is carried over (fromV1)
+  const V2 = args.includes('--v2');
+  const netMod = V2 ? await import('./src/trail-net2.js') : await import('./src/trail-net.js');
+  const { NW, initTheta, DIN, DH, DOUT } = netMod;
   const rand = makeSeededRandom(+arg('--rng', 5));
   const normal = () => randomNormalSample(rand);
   let theta = init ? Float64Array.from(JSON.parse(fs.readFileSync(init, 'utf8')).theta) : initTheta(rand);
+  if (V2 && theta.length !== NW) theta = netMod.fromV1(theta);
 
-  const workers = Array.from({ length: nW }, () => new Worker(file, { workerData: { runner, seconds, course } }));
+  const workers = Array.from({ length: nW }, () => new Worker(file, { workerData: { runner, seconds, course, v2: V2 } }));
   let nextId = 0;
   const pending = new Map();
   for (const w of workers) w.on('message', ({ id, res }) => { pending.get(id)(res); pending.delete(id); });
@@ -157,7 +162,8 @@ if (!isMainThread) {
   if (args.includes('--eval')) {
     // only score a saved network on the 60 fresh courses (never used in training), against the runner alone
     const ev = arg('--eval', out);
-    const th = ev === 'none' ? null : Float64Array.from(JSON.parse(fs.readFileSync(ev, 'utf8')).theta);
+    let th = ev === 'none' ? null : Float64Array.from(JSON.parse(fs.readFileSync(ev, 'utf8')).theta);
+    if (th && V2 && th.length !== NW) th = netMod.fromV1(th);
     const fs60 = Array.from({ length: +arg('--n', 60) }, (_, i) => +arg('--base', 300) + i);
     const [a, b] = await runAll([{ theta: null, seeds: fs60 }, { theta: th, seeds: fs60 }]);
     const fa = summarize(a), fb = summarize(b);
@@ -202,7 +208,7 @@ if (!isMainThread) {
     const genMean = f.reduce((a, x) => a + x, 0) / f.length;
     if (g % every === every - 1 || g === gens - 1) {
       const h = summarize((await runAll([{ theta, seeds: heldSeeds }]))[0]);
-      if (!best || h.score > best.score) { best = { ...h, theta: Float64Array.from(theta), gen: g }; fs.writeFileSync(out, JSON.stringify({ runner, DIN, DH, DOUT, gen: g, theta: Array.from(best.theta), held: { n: held, ...h }, base })); }
+      if (!best || h.score > best.score) { best = { ...h, theta: Float64Array.from(theta), gen: g }; fs.writeFileSync(out, JSON.stringify({ runner, v2: V2, DIN, DH, DOUT, gen: g, theta: Array.from(best.theta), held: { n: held, ...h }, base })); }
       console.log('gen', g, 'gen mean', genMean.toFixed(3), 'held-out score', h.score.toFixed(3), 'per obstacle', (100 * h.perObstacle).toFixed(1) + '%', 'pass', h.pass + '/' + held, 'speed', h.speed.toFixed(2), '| best gen', best.gen, (100 * best.perObstacle).toFixed(1) + '%', ((Date.now() - t0) / 60000).toFixed(1) + ' min');
     }
   }
