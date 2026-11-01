@@ -55,8 +55,11 @@ try { const j = rd(process.env.DASH_NET || 'trained/dash-net.json'); dash = rd(j
 // the trail runner and its network (trail-es.js): TRAIL_NET env; without a network, the dash runner
 let trail = dash, trailNet = null;
 try { const j = rd(process.env.TRAIL_NET || 'trained/trail-net.json'); trail = rd(j.runner).params; trailNet = j.theta.map((x) => +x.toFixed(5)); } catch (e) {}
+// the rope's landing network (rope-es.js): ROPE_NET env
+let ropeNet = null;
+try { ropeNet = rd(process.env.ROPE_NET || 'trained/rope-net.json').theta.map((x) => +x.toFixed(5)); } catch (e) {}
 // the cat leap numbers (leap.js): LEAP env
 let leap = null;
 try { leap = rd(process.env.LEAP || 'trained/leap.json').params; } catch (e) {}
-fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates, slow, stop, stopK, getup, cragObstacle, rope, walkFast, dash, dashNet, trail, trailNet, leap }));
+fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates, slow, stop, stopK, getup, cragObstacle, rope, walkFast, dash, dashNet, trail, trailNet, leap, ropeNet }));
 console.log('params: walk', Object.keys(walk).length, 'runner', Object.keys(runner).length, 'wall', Object.keys(wall).length, 'mountain', Object.keys(mountain).length, 'crag', Object.keys(crag).length, 'run states', runStates.length);

@@ -190,7 +190,10 @@ function reset() {
       const hole = { x0: mid0 + ropeCourse.hole.x0, x1: mid0 + ropeCourse.hole.x1 };
       ropeHole = hole;
       terrain.blocks = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top }));
-      chain = installRopeRunner(ep, world, params.rope, { config, pose: tapPose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift, walkP: params.walkFast }); // 2.4 m/s: the speed it crosses best at
+      // the landing run after the rope gets the trail network trained for it (rope-es.js)
+      ep.floorAt = () => lift; ep.groundAt = (x) => (x > hole.x0 && x < hole.x1 ? 0 : lift);
+      dashCorrect = params.ropeNet ? makeTrailNet(world, config, Box2D) : null;
+      chain = installRopeRunner(ep, world, params.rope, { config, pose: tapPose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift, walkP: params.walkFast, net: dashCorrect ? { correct: dashCorrect, theta: params.ropeNet } : null }); // 2.4 m/s: the speed it crosses best at
     } else if (state.scene === 'obstacle') {
       chain = installObstacleRunner(ep, world, { config, pose: tapPose, Box2D, ElmanNetwork, crag, H: 2.0, speed: () => state.speed.run, stopAt: 0.6, vswitch: 1.3, params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragObstacle, getup: params.getup } });
     } else if (state.scene === 'pop') {
@@ -602,6 +605,11 @@ function describe() {
     st.decide = { who: 'Secuencia de la soga', kind: 'tuned', detail: 'Pasa de una fase a otra por contactos y distancias: salta en el borde, agarra cuando la mano llega, suelta cuando el vuelo libre caería del otro lado.' };
     st.limbs = ph === 'reach' || ph === 'swing' ? { who: 'Manos a la soga', kind: 'rules', detail: 'Las manos apuntan a la soga con geometría de dos segmentos y se cierran al tocarla.' } : ph === 'run' || ph === 'land' || ph === 'run2' ? RAIBERT : ph === 'walk' ? { who: 'Regla del paso (SIMBICON)', kind: 'tuned', detail: 'El pie que avanza apunta a un ángulo fijo más una corrección por velocidad.' } : { who: 'Pies donde apoyaron', kind: 'rules', detail: 'Los pies se quedan donde tocaron y la cadera sube encima de ellos.' };
     st.joints = ph === 'run' || ph === 'land' || ph === 'run2' ? RUNNER : ph === 'reach' ? { who: 'Corredor + brazos', kind: 'tuned', detail: 'Las piernas siguen al corredor; los brazos se estiran hacia la soga.' } : ph === 'swing' ? { who: 'Postura de balanceo', kind: 'tuned', detail: 'Brazo que agarra a un ángulo fijo, piernas recogidas y después estiradas para aterrizar. Números ajustados por búsqueda.' } : ph === 'walk' ? { who: 'Caminata SIMBICON', kind: 'tuned', detail: 'Unos pasos caminando antes de volver a correr.' } : POSE_EXEC();
+    if ((ph === 'land' || ph === 'run2') && params.ropeNet) {
+      st.joints = { who: 'Corredor + red de aterrizaje', kind: 'mix', detail: 'El corredor aterriza y retoma la carrera; una red entrenada para eso (la misma forma que la de terreno libre) le suma correcciones a piernas y cintura.' };
+      const ni = dashNetInfo(true);
+      if (ni) info.net = Object.assign(ni, { title: 'Red de aterrizaje de la soga', note: 'Corrige al corredor al aterrizar y retomar la carrera después de la soga. Mira el cuerpo y el perfil del piso (38 números). Entrenada con estrategias evolutivas en saltos con soga al azar.' });
+    }
     const rp = ep.terrain.ropes[0];
     info.facts.push(['Fase', (ROPE_PHASES.find((q) => q.id === ph) || { label: ph }).label + ' · ' + (ch.t || 0).toFixed(1) + ' s']);
     info.facts.push(['Soga', 'a ' + m1(Math.abs(rp.x - world.px[0])) + (rp.x > world.px[0] ? ' adelante' : ' atrás')]);

@@ -59,7 +59,8 @@ export function installPopDirector(ep, world, level, ctx) {
   const vt = params.trail.vRun || 2.6;
   const net = ctx.trailNet ? { correct: ctx.trailNet.correct, theta: ctx.trailNet.theta } : null;
   installRunner(ep, world, params.trail, { config, obstacles, floorAt, speed: () => vt, net, active: () => zone() === 'trail' });
-  const rope = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift: Z.rope.lift, walkP: params.walkFast, active: () => zone() === 'rope' });
+  const ropeNet = ctx.trailNet && params.ropeNet ? { correct: ctx.trailNet.correct, theta: params.ropeNet } : null;
+  const rope = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift: Z.rope.lift, walkP: params.walkFast, net: ropeNet, active: () => zone() === 'rope' });
   const chain = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag: level.crag, H: wall.H, speed: () => vt, stopAt: 0.6, vswitch: 1.3, leapP: params.leap, active: () => zone() === 'wall', params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragObstacle, getup: params.getup } });
   return { zone, chain, rope, floorAt, groundAt, features, obstacles, wall, hole, get wallDone() { return wallDone; }, get ropeDone() { return ropeDone; } };
 }

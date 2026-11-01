@@ -45,6 +45,7 @@ async function makeEnv(runnerFile, seconds, course) {
   const rv = load(runnerFile).best || [];
   const p = {}; RSPEC.forEach(([k, b], i) => (p[k] = b + (rv[i] || 0)));
   Object.assign(p, ropeP);
+  for (const k of Object.keys(process.env)) if (k.startsWith('P_')) p[k.slice(2)] = +process.env[k]; // overrides to try
   const correct = makeTrailNet(world, config, Box2D);
   return function episode(theta, seed, log) {
     const r = makeSeededRandom(12000 + seed);

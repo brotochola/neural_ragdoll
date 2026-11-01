@@ -34,6 +34,7 @@ const PIECES = [
   ['Red "levantarse"', 'net', 'Se levanta del piso'],
   ['Red correctora', 'net', 'Corrige al corredor en Cajas y bolas'],
   ['Red de terreno', 'net', 'Corrige al corredor en Terreno libre: ve el perfil del piso'],
+  ['Red de aterrizaje', 'net', 'Corrige el aterrizaje y la carrera después de la soga'],
   ['Corredor', 'tuned', 'Corre con fase de vuelo'],
   ['Selector de saltos', 'tuned', 'Cuándo saltar y cómo ajustar el paso'],
   ['Caminata SIMBICON', 'tuned', 'Camina'],
@@ -70,7 +71,7 @@ export function createInspector({ $, css, Box2D, world }) {
     const piecesEl = document.getElementById('pieces');
     if (piecesEl) piecesEl.innerHTML = PIECES.map(([name, kind, what]) => {
       const short = name.replace(/^Red /, '');
-      const on = whos.includes(name) || (kind === 'net' && whos.includes(short)) || (name === 'Red correctora' && whos.includes('red correctora')) || (name === 'Red de terreno' && whos.includes('red de terreno')) || (name === 'Caminata SIMBICON' && whos.includes('SIMBICON'));
+      const on = whos.includes(name) || (kind === 'net' && whos.includes(short)) || (name === 'Red correctora' && whos.includes('red correctora')) || (name === 'Red de terreno' && whos.includes('red de terreno')) || (name === 'Red de aterrizaje' && whos.includes('red de aterrizaje')) || (name === 'Caminata SIMBICON' && whos.includes('SIMBICON'));
       return `<li class="piece ${KINDS[kind].cls}${on ? ' on' : ''}"><b>${esc(name)}</b><span>${esc(what)}</span></li>`;
     }).join('');
     pipe.innerHTML = STAGES.map((s, i) => {
