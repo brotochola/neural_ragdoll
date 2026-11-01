@@ -206,7 +206,7 @@ function reset() {
       const vt = params.trail.vRun || 2.6;
       installRunner(ep, world, params.trail, { config, obstacles: trailInfo.obstacles, floorAt: trailInfo.floorAt, speed: () => vt, net: dashCorrect ? { correct: dashCorrect, theta: params.trailNet } : null });
     } else if (state.scene === 'leap') {
-      chain = installObstacleRunner(ep, world, { config, pose: tapPose, Box2D, ElmanNetwork, crag, H: 2.0, speed: () => state.speed.run, stopAt: 0.6, vswitch: 1.3, leapP: params.leap, params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragObstacle, getup: params.getup } });
+      chain = installObstacleRunner(ep, world, { config, pose: tapPose, Box2D, ElmanNetwork, crag, H: 2.0, speed: () => state.speed.run, stopAt: 0.6, vswitch: 1.3, leapP: params.leap, params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragLeap || params.cragObstacle, getup: params.getup } });
     } else if (state.scene === 'dash') {
       // its own speed (vRun, tuned with the rest) and jumps scaled by each box's or ball's height
       const obstacles = ep.terrain.statics.map((b) => ({ x0: b.x0, x1: b.x1, top: b.top, kind: 'caja' }))
@@ -226,7 +226,7 @@ function reset() {
 const DASH_NOTE = 'Corre a la derecha lo más rápido que puede sobre cajas y bolas al azar, saltándolas. Las bolas están sueltas: si las patea, ruedan. El corredor (números ajustados por búsqueda) lleva encima una red neuronal chica, entrenada con estrategias evolutivas en miles de recorridos al azar, que corrige caderas, rodillas, tobillos y cintura según cómo viene el cuerpo y qué tiene adelante. Si se cae, vuelve a empezar con otro recorrido.';
 const POP_NOTE = 'Nivel tipo Prince of Persia: terreno con escalones, agujeros, cajas y bolas; baja al piso, corre hacia una roca de 2 m, salta, se agarra y trepa; arriba sigue corriendo sobre más obstáculos (los agujeros acá son pozos de 2 m) y cruza un agujero grande colgado de una soga. Un director en código le pasa el control a cada habilidad según la zona. Cada intento es un nivel distinto.';
 const TRAIL_NOTE = 'Terreno libre: el piso sube y baja en escalones, tiene agujeros, cajas y bolas. Corre lo más rápido que puede sin caerse. El corredor lleva encima una red correctora que ve el perfil del terreno hasta casi 3 m adelante; en recorridos nuevos pasa el 87% de los obstáculos (el corredor solo, el 64%) y la mitad de las veces corre 12 s sin caerse. Si se cae, empieza otro recorrido.';
-const LEAP_NOTE = 'Corre hacia una roca de 2 m sin frenar, salta y se agarra en el aire del saliente más alto que alcanza, se cuelga, trepa con el planificador, pasa el borde, se levanta y sigue corriendo. Si no llega a agarrarse, vuelve al método lento: camina, frena y trepa desde parado.';
+const LEAP_NOTE = 'Corre hacia una roca de 2 m sin frenar, salta y se agarra en el aire del saliente más alto que alcanza, se cuelga, trepa con el planificador, pasa el borde, se levanta y sigue corriendo. Si no llega a agarrarse, vuelve al método lento: camina, frena y trepa desde parado. En rocas nuevas se agarra casi siempre y hace todo el recorrido unas 7 de cada 10 veces.';
 const MODE_NOTE = {
   manual: 'Vos sos el planificador: arrastrá las marcas.',
   stand: 'La red neuronal de pararse mantiene el equilibrio.',
