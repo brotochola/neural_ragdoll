@@ -1,5 +1,9 @@
 # Neural ragdoll
 
+**Live playground: https://brotochola.github.io/neural_ragdoll/play/ragdoll-live.html** (run, jump, climb, the rope, the Prince of Persia level, and what each network does as it moves)
+
+Trainer in the browser: https://brotochola.github.io/neural_ragdoll/
+
 A 2D ragdoll and one Elman network, trained in the browser or headless. The doll is scored
 part by part for standing, and for reaching marks on the floor.
 
