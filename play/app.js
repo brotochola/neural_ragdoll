@@ -566,8 +566,9 @@ function describe() {
   // in the level, describe whichever skill the director has on, as its own scene would
   const zn = popDir ? popDir.zone() : null;
   if (zn === 'recover') return describeRecover(popDir.rec);
-  const sc = zn ? (zn === 'trail' ? 'trail' : zn === 'wall' ? 'leap' : 'rope') : state.scene;
-  const ch = popDir ? (zn === 'rope' ? popDir.rope : popDir.chain) : chain;
+  // (a pit: the rock's chain on the pit's far wall: catch the top ledge, hang, climb out)
+  const sc = zn ? (zn === 'trail' ? 'trail' : zn === 'wall' || zn === 'pit' ? 'leap' : 'rope') : state.scene;
+  const ch = popDir ? (zn === 'rope' ? popDir.rope : zn === 'pit' && popDir.pit ? popDir.pit.OR : popDir.chain) : chain;
   const ropeHoleNow = popDir ? popDir.hole : ropeHole;
   const st = {};
   const info = { stages: st, phases: [], phase: null, sub: null, facts: [], net: null, sel: null, cyclic: false };
@@ -669,7 +670,7 @@ function describe() {
   }
   if (zn) {
     info.stages.decide = Object.assign({}, info.stages.decide, { who: 'Director del nivel → ' + info.stages.decide.who, detail: 'El director (código) elige la habilidad por zona: terreno, la roca o la soga. Ahora: ' + (zn === 'trail' ? 'terreno' : zn === 'wall' ? 'la roca' : 'la soga') + '. ' + info.stages.decide.detail });
-    info.facts.unshift(['Zona del nivel', zn === 'trail' ? 'terreno' : zn === 'wall' ? 'la roca de 2 m' : 'el agujero con soga', true]);
+    info.facts.unshift(['Zona del nivel', zn === 'trail' ? 'terreno' : zn === 'wall' ? 'la roca de 2 m' : zn === 'pit' ? 'cayó en un pozo: se agarra del borde de enfrente y sale trepando' : 'el agujero con soga', true]);
   }
   return info;
 }
@@ -734,7 +735,7 @@ function loop(now) {
   // in the automatic modes a fall (head near the ground for 2 s) restarts the run
   const headUp = ep.measure.headHeight - (trailInfo ? trailInfo.floorAt(world.px[2]) : groundAt(world.px[2]));
   // on the dash course sitting or crawling counts too (as dash.js scores it: head under 0.95 m or the trunk past ~70°)
-  const popBusy = popDir && (popDir.zone() === 'wall' && popDir.chain.mode !== 'run' && popDir.chain.mode !== 'run2' || (ep.grips[0].joint || ep.grips[1].joint) || (popDir.rec && popDir.rec.busy()));
+  const popBusy = popDir && ((popDir.zone() === 'pit' && popDir.pit && popDir.pit.OR.mode !== 'run2') || popDir.zone() === 'wall' && popDir.chain.mode !== 'run' && popDir.chain.mode !== 'run2' || (ep.grips[0].joint || ep.grips[1].joint) || (popDir.rec && popDir.rec.busy()));
   const down = state.scene === 'pop' ? !popBusy && (headUp < 0.95 || (ep.measure.torsoCos || 0) < 0.3 || world.py[0] < popDir.floorAt(world.px[0]) - 0.1) : state.scene === 'dash' || state.scene === 'trail' ? headUp < 0.95 || (ep.measure.torsoCos || 0) < 0.3 || (trailInfo && world.py[0] < trailInfo.floorAt(world.px[0]) - 0.1) : headUp < 0.45;
   downFor = down ? downFor + dt : 0;
   // crawling over the summit edge the head is low on purpose: not a fall

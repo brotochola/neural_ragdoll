@@ -35,12 +35,14 @@ const { SPEC: RSPEC } = await import('./src/runner.js');
 const { installRunner } = await import('./src/run-selector.js');
 const { makeDashCourse, makeTrailCourse } = await import('./src/terrain.js');
 const { installTrail } = await import('./src/trail.js');
+const NETF = arg('--net', null); // --trail --net file: the trail network on (trail-net.js), the runner's numbers tuned under it
 const TRAIL = args.includes('--trail'); // the trail course (steps, holes, boxes, balls on a raised floor) instead of the dash course
 
 setSkill(6);
 config.walk.maxStandSpeed = 20;
 const sim = createSim(Box2D);
 const world = sim.build();
+const NET = NETF ? { correct: (await import('./src/trail-net.js')).makeTrailNet(world, config, Box2D), theta: Float64Array.from(JSON.parse(fs.readFileSync(NETF, 'utf8')).theta) } : null;
 const HZ = config.physics.hz;
 const P = config.partIndex;
 const weights = ElmanNetwork.copy(JSON.parse(fs.readFileSync(path.join(root, 'trained/stand-and-walk.json'), 'utf8')).theta);
@@ -78,7 +80,7 @@ function trailEpisode(p, seed, log) {
   const ep = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, start));
   ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   const tr = installTrail(ep, c, Box2D);
-  installRunner(ep, world, p, { config, obstacles: tr.obstacles, floorAt: tr.floorAt, speed: () => v });
+  installRunner(ep, world, p, { config, obstacles: tr.obstacles, floorAt: tr.floorAt, speed: () => v, net: NET });
   const x0 = world.px[0];
   let frames = 0, fell = false, low = 0;
   while (!ep.advanceOneFrame()) {
