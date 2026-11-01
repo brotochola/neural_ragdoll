@@ -39,8 +39,8 @@ function ropeOnly(L) {
   const statics = L.statics.filter((b) => keep(b.dx + (b.w || 0))).map((b) => Object.assign({}, b, { dx: +(b.dx + d).toFixed(3) }));
   statics.unshift({ dx: -6, w: 9, h: H });
   return Object.assign({}, L, {
-    statics, balls: L.balls.map((b) => Object.assign({}, b, { dx: b.dx + d })), polys: L.polys.map((q) => q.map(([x, y]) => [x - 300, y])), surface: L.surface.map(([x, y]) => [x - 300, y]), crag: L.crag,
-    features: L.features.filter((f) => keep(f.x1)).map((f) => Object.assign({}, f, { x0: f.x0 + d, x1: f.x1 + d })),
+    statics, balls: L.balls.map((b) => Object.assign({}, b, { dx: b.dx + d })), polys: L.polys.map((q, i) => q.map(([x, y]) => [i < L.crag.polys.length ? x - 300 : x + d, y])), surface: L.surface.map(([x, y]) => [x - 300, y]), crag: L.crag,
+    features: L.features.filter((f) => keep(f.x1)).map((f) => Object.assign({}, f, { x0: f.x0 + d, x1: f.x1 + d }, f.knobs ? { knobs: f.knobs.map((k) => ({ lip: k.lip + d, back: k.back + d, y: k.y })) } : {})),
     levels: [[-6, 3, H]].concat(L.levels.filter((l) => l[0] + d > 2.9).map((l) => [l[0] + d, l[1] + d, l[2]])),
     ropes: L.ropes.map((q) => Object.assign({}, q, { dx: q.dx + d })), lift: H,
     zones: { wall: Object.assign({}, Z.wall, { x0: -100, summit: -99, plateauEnd: 3 }), rope: Object.assign({}, Z.rope, { x0: Z.rope.x0 + d, x1: Z.rope.x1 + d }), down: -100 },
@@ -49,7 +49,7 @@ function ropeOnly(L) {
 function episode(seed) {
   const r = makeSeededRandom(seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
-  let L = makePopLevel(r);
+  let L = makePopLevel(r, process.env.NO_KNOBS ? { knobs: false } : {});
   if (atRope) L = ropeOnly(L);
   const rs = params.runStates[Math.floor(r() * params.runStates.length)];
   const v0 = params.trail.vRun || 2.6;
@@ -69,6 +69,7 @@ function episode(seed) {
     const px = world.px[0], z = D.zone();
     if (process.env.DEBUG_POP && ep.frame % 300 === 0) { const pl = D.chain.planner; console.log('   t', (ep.frame / HZ).toFixed(0), 'zone', z, 'chain', D.chain.mode, pl ? 'move ' + (pl.move ? pl.move.kind + (pl.move.k != null ? pl.move.k : '') + '->' + (pl.move.to != null ? pl.move.to : '') : '-') + ' hands ' + pl.lim.hand.map((h) => h.rung + (h.grip ? 'g' : '')).join(',') + ' feet ' + pl.lim.foot.map((f) => f.rung).join(',') + ' phase ' + pl.phase : '', 'pelvis', px.toFixed(2), world.py[0].toFixed(2), 'leap', JSON.stringify({ aim: D.chain.leap.aimI, hold: D.chain.leap.holdI, missed: D.chain.leap.missed }), 'rec', D.rec ? D.rec.phase + '/' + D.rec.count : '-', 'log', D.chain.log.slice(-3).join(',')); }
     if (process.env.DEBUG_REC && D.rec && D.rec.phase !== lastRec) { lastRec = D.rec.phase; const nx = D.features.filter((f) => f.x1 > px - 0.2).sort((a, b) => a.x0 - b.x0)[0]; console.log('   rec', (ep.frame / HZ).toFixed(1) + 's', lastRec, '#' + D.rec.count, 'x', px.toFixed(2), 'floor', D.floorAt(px).toFixed(2), 'zone', z, 'next', nx ? nx.type + ' at ' + (nx.x0 - px).toFixed(2) + (nx.top != null ? ' top ' + nx.top.toFixed(2) : nx.to != null ? ' to ' + nx.to.toFixed(2) : '') : '-'); }
+    if (process.env.DEBUG_PIT && D.pit && ep.frame % 30 === 0) { const O = D.pit.OR, pl = O.planner; console.log('   pit', (ep.frame / HZ).toFixed(1), O.mode, 'pelvis', px.toFixed(2), world.py[0].toFixed(2), 'wall', D.pit.f.x1.toFixed(2), 'H', D.pit.f.to.toFixed(2), 'grips', ep.grips.map((g) => (g.joint ? 1 : 0)).join(''), 'hands', [P.handLeft, P.handRight].map((q) => world.px[q].toFixed(2) + ',' + world.py[q].toFixed(2)).join(' '), pl ? 'move ' + (pl.move ? pl.move.kind + (pl.move.k != null ? pl.move.k : '') + '->' + pl.move.to : '-') + ' hands ' + pl.lim.hand.map((h) => h.rung + (h.grip ? 'g' : '')).join(',') + ' feet ' + pl.lim.foot.map((f) => f.rung).join(',') + ' ph ' + pl.phase : '', O.log.slice(-2).join(',')); }
     if (stage < 1 && z === 'wall') stage = 1;
     if (stage < 2 && D.chain.leap.caughtY != null) stage = 2;
     if (stage < 3 && D.wallDone) stage = 3;
@@ -76,24 +77,24 @@ function episode(seed) {
     if (stage < 5 && D.ropeDone) stage = 5;
     if (px > endX) { stage = 6; why = 'end'; break; }
     // falls, as the playground counts them
-    const busy = (z === 'wall' && D.chain.mode !== 'run' && D.chain.mode !== 'run2') || ep.grips[0].joint || ep.grips[1].joint || (D.rec && D.rec.busy());
+    const busy = (z === 'pit' && D.pit && D.pit.OR.mode !== 'run2') || (z === 'wall' && D.chain.mode !== 'run' && D.chain.mode !== 'run2') || ep.grips[0].joint || ep.grips[1].joint || (D.rec && D.rec.busy());
     const fl = D.floorAt(world.px[2]);
     const isDown = !busy && (world.py[2] - fl < 0.95 + 0.0 && ep.measure.headHeight - fl < 0.95 || (ep.measure.torsoCos || 0) < 0.3 || world.py[0] < D.floorAt(px) - 0.1);
     down = isDown ? down + 1 : 0;
     if (down > (D.rec ? 3 : 1.2) * HZ) {
       const f = D.features.reduce((a, b) => (Math.abs((b.x0 + b.x1) / 2 - px) < Math.abs((a.x0 + a.x1) / 2 - px) ? b : a), D.features[0]);
-      why = 'fell in ' + z + (z === 'wall' ? '/' + D.chain.mode : z === 'rope' ? '/' + D.rope.phase : '') + ' at x ' + px.toFixed(1) + ' near ' + f.type + ' (' + (px - f.x0).toFixed(1) + ' m) floor ' + D.floorAt(px).toFixed(2) + ' rock at ' + D.wall.x0.toFixed(1);
+      why = 'fell in ' + z + (z === 'wall' ? '/' + D.chain.mode : z === 'rope' ? '/' + D.rope.phase : z === 'pit' && D.pit ? '/' + D.pit.OR.mode : '') + ' at x ' + px.toFixed(1) + ' near ' + f.type + ' (' + (px - f.x0).toFixed(1) + ' m) floor ' + D.floorAt(px).toFixed(2) + ' rock at ' + D.wall.x0.toFixed(1);
       break;
     }
     if (px > stallX + 0.5 || busy) { stallX = px; stallT = 0; } else if (++stallT > 25 * HZ) { why = 'stuck in ' + z; break; }
   }
-  return { stage, why, t: ep.frame / HZ, x: world.px[0], getups: D.rec ? D.rec.count : 0 };
+  return { stage, why, t: ep.frame / HZ, x: world.px[0], getups: D.rec ? D.rec.count : 0, pits: D.pitLog };
 }
 
 const count = new Array(STAGES.length).fill(0);
 for (let i = 0; i < seeds; i++) {
   const e = episode(base + i);
   for (let s = 0; s <= e.stage; s++) count[s]++;
-  console.log('seed', base + i, STAGES[e.stage].padEnd(18), '|', e.why, (e.t).toFixed(0) + 's', e.getups ? '(got up ' + e.getups + 'x)' : '');
+  console.log('seed', base + i, STAGES[e.stage].padEnd(18), '|', e.why, (e.t).toFixed(0) + 's', e.getups ? '(got up ' + e.getups + 'x)' : '', e.pits.length ? 'pits ' + JSON.stringify(e.pits) : '');
 }
 console.log(STAGES.map((s, i) => s + ' ' + count[i] + '/' + seeds).join(' · '));

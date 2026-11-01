@@ -124,7 +124,7 @@ export function makeTrailCourse(r, opts = {}) {
     pHole: 0.25, pUp: 0.2, pDown: 0.2, pBox: 0.2, pBall: 0.15,
     holeMin: 0.4, holeMax: 1.0, upMin: 0.12, upMax: 0.4, downMin: 0.15, downMax: 0.5,
     hMin: 0.08, hMax: 0.3, wMin: 0.2, wMax: 0.8, rMin: 0.08, rMax: 0.16, density: 150, tail: 40, from: -4 }, opts);
-  const statics = [], balls = [], features = [], levels = [];
+  const statics = [], balls = [], features = [], levels = [], polys = [];
   let lv = o.start, x = o.from, segStart = o.from;
   // a floor piece (none needed on the ground itself, level 0)
   const close = (xe) => { if (xe > segStart + 1e-3) { if (lv > 0.005) statics.push({ dx: +segStart.toFixed(3), w: +(xe - segStart).toFixed(3), h: +lv.toFixed(3) }); levels.push([segStart, xe, lv]); } };
@@ -138,7 +138,18 @@ export function makeTrailCourse(r, opts = {}) {
       const w = o.holeMin + r() * (o.holeMax - o.holeMin);
       close(x);
       const to = Math.max(o.minLevel, Math.min(o.maxLevel, lv + (r() * 2 - 1) * 0.15));
-      features.push({ type, x0: x, x1: x + w, from: lv, to });
+      const f = { type, x0: x, x1: x + w, from: lv, to };
+      // o.knobs: ledges on the pit's far wall every 0.3 m from its foot (a fall into the pit can catch one and
+      // climb out the way the rock is climbed); no random draws, so the course is the same either way
+      if (o.knobs) {
+        f.knobs = [];
+        const back = x + w;
+        for (let ky = 0.3; ky <= to - 0.2 + 1e-6; ky += 0.3) {
+          polys.push([[back - 0.1, ky], [back - 0.07, ky - 0.04], [back + 0.03, ky - 0.07], [back + 0.03, ky]]);
+          f.knobs.push({ lip: back - 0.1, back, y: +ky.toFixed(3) });
+        }
+      }
+      features.push(f);
       x += w; lv = to; segStart = x;
     } else if (type === 'up' || type === 'down') {
       const d = type === 'up' ? o.upMin + r() * (o.upMax - o.upMin) : -(o.downMin + r() * (o.downMax - o.downMin));
@@ -160,7 +171,7 @@ export function makeTrailCourse(r, opts = {}) {
     x += o.gapMin + r() * (o.gapMax - o.gapMin);
   }
   close(x + o.tail);
-  return { statics, balls, features, levels, lift: o.start, end: x + o.tail, endLevel: lv };
+  return { statics, balls, features, levels, polys, lift: o.start, end: x + o.tail, endLevel: lv };
 }
 
 // PRINCE OF PERSIA level, relative to the feet: trail A (raised floor, holes, steps, boxes, balls), a drop to
@@ -170,11 +181,12 @@ export function makeTrailCourse(r, opts = {}) {
 //   { statics, balls, polys, surface, ropes, crag, features, levels, zones: { wall: {x0, summit, plateauEnd},
 //     rope: {x0, x1, lift} }, lift }
 export function makePopLevel(r, opts = {}) {
-  const o = Object.assign({ lenA: 10, lenB: 10, lenC: 30, wallH: 2.0 }, opts);
+  const o = Object.assign({ lenA: 10, lenB: 10, lenC: 30, wallH: 2.0, knobs: true }, opts);
   const shift = (c, dx) => {
     c.statics.forEach((b) => (b.dx = +(b.dx + dx).toFixed(3)));
     c.balls.forEach((b) => (b.dx = +(b.dx + dx).toFixed(3)));
-    c.features.forEach((f) => { f.x0 += dx; f.x1 += dx; });
+    c.features.forEach((f) => { f.x0 += dx; f.x1 += dx; if (f.knobs) f.knobs.forEach((k) => { k.lip += dx; k.back += dx; }); });
+    c.polys.forEach((q) => q.forEach((pt) => (pt[0] += dx)));
     c.levels.forEach((l) => { l[0] += dx; l[1] += dx; });
     c.end += dx;
     return c;
@@ -201,17 +213,17 @@ export function makePopLevel(r, opts = {}) {
   levels.push([summit, plateauEnd, o.wallH]);
   // trail B on the top, a rope over a wide hole, trail C
   // B ends in 6 m of flat floor before the rope's hole: the rope runner's run-up (it knows no obstacles)
-  const B = shift(makeTrailCourse(r, { start: o.wallH, minLevel: o.wallH - 0.3, maxLevel: o.wallH + 0.5, lead: 2, length: o.lenB, tail: 6, pHole: 0.2, from: 0 }), plateauEnd);
+  const B = shift(makeTrailCourse(r, { start: o.wallH, minLevel: o.wallH - 0.3, maxLevel: o.wallH + 0.5, lead: 2, length: o.lenB, tail: 6, pHole: 0.2, from: 0, knobs: o.knobs }), plateauEnd);
   const holeW = 1.4 + r() * 0.8, hx0 = B.end, hx1 = hx0 + holeW, lvR = B.endLevel;
   const ropeTop = lvR + 4.2 + r() * 0.3, ropeLow = lvR + 1.25 + r() * 0.15;
-  const C = shift(makeTrailCourse(r, { start: lvR, minLevel: o.wallH - 0.3, maxLevel: o.wallH + 0.5, lead: 4, length: o.lenC, tail: 40, from: 0 }), hx1);
+  const C = shift(makeTrailCourse(r, { start: lvR, minLevel: o.wallH - 0.3, maxLevel: o.wallH + 0.5, lead: 4, length: o.lenC, tail: 40, from: 0, knobs: o.knobs }), hx1);
   for (const c of [B, C]) { statics.push(...c.statics); balls.push(...c.balls); features.push(...c.features); levels.push(...c.levels); }
   features.push({ type: 'ropehole', x0: hx0, x1: hx1, from: lvR, to: lvR });
   features.sort((a, b) => a.x0 - b.x0);
   levels.sort((a, b) => a[0] - b[0]);
   const ropes = [{ dx: hx0 + holeW / 2, top: ropeTop, length: ropeTop - ropeLow, seg: 0.3, density: 120 }];
   return {
-    statics, balls, polys: crag.polys, surface: crag.surface, ropes, crag, features, levels, lift: A.lift,
+    statics, balls, polys: crag.polys.concat(B.polys, C.polys), surface: crag.surface, ropes, crag, features, levels, lift: A.lift,
     zones: { wall: { x0: wallX0, summit, plateauEnd, H: o.wallH }, rope: { x0: hx0, x1: hx1, lift: lvR }, down: downX },
   };
 }

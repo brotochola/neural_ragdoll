@@ -11,7 +11,7 @@ export function installCragPlanner(ep, world, p, ctx) {
   const HZ = config.physics.hz, J = config.net.jointCount, OUT = J + config.net.gripOutputs, P = config.partIndex;
   // the face, from the absolute top line (rises are faces); the knobs from ctx.crag (relative to the start,
   // shifted like the terrain)
-  const S = ep.terrain.surface;
+  const S = ctx.surface || ep.terrain.surface;
   const dx = S[1][0] - ctx.crag.surface[1][0];
   const faces = [];
   for (let i = 0; i < S.length - 1; i++) { const [x1, y1] = S[i], [x2, y2] = S[i + 1]; if (y2 > y1 + 1e-6) faces.push({ x1, y1, x2, y2 }); }
@@ -104,7 +104,12 @@ export function installCragPlanner(ep, world, p, ctx) {
     const fk = lim.foot[0].rung <= lim.foot[1].rung ? 0 : 1;
     let fTo = lim.foot[fk].rung + 1;
     // hanging from a leap with a foot in the air: it goes to the highest knob far enough under the hands
-    if (started && lim.foot[fk].rung === 0) { for (let i = N; i >= 1; i--) if (handsY - ry(i) >= p.spanMin) { fTo = i; break; } }
+    if (started && lim.foot[fk].rung === 0) {
+      for (let i = N; i >= 1; i--) if (handsY - ry(i) >= p.spanMin) { fTo = i; break; }
+      // (wedged high in a narrow pit the feet hang above that knob: then the knob just under the foot)
+      const fy = pose.soleOf(world, fk === 0 ? P.footLeft : P.footRight).y;
+      for (let i = N; i > fTo; i--) if (ry(i) <= fy + 0.05 && handsY - ry(i) >= 0.5) { fTo = i; break; }
+    }
     // MANTLE: both hands on top; the feet walk up the last rungs, then step onto the top
     if (handsTop()) {
       // BELLY MANTLE (p.belly): press up on the arms, tip the chest over the edge and crawl onto the top

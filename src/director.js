@@ -64,11 +64,40 @@ export function installPopDirector(ep, world, level, ctx) {
       rec.start();
     }
   };
+  // PITS (holes with ledges on the far wall, terrain makeTrailCourse knobs): a body dropping into one reaches
+  // for the far wall's top ledge, hangs and climbs out the way the rock is climbed (an obstacle runner for that
+  // wall, installed when it is needed), crawls over the edge, stands, walks and runs on
+  const pits = features.filter((f) => f.type === 'hole' && f.knobs && f.knobs.length);
+  let pit = null;
+  const pitLog = [];
+  const pitCheck = () => {
+    if (pit || zoneNow !== 'trail' || (rec && rec.busy())) return;
+    const px = world.px[0], vy = ep.measure.centerVelocityY || 0;
+    for (const f of pits) {
+      if (px > f.x0 + 0.02 && px < f.x1 + 0.1 && world.py[0] < f.from + 0.15 && vy < -0.4) {
+        const x1 = f.x1, H = f.to;
+        const knobs = f.knobs.map((k) => ({ lip: X(k.lip), back: X(k.back), y: k.y }));
+        const surface = [[x1 - 4, 0], [x1, 0], [x1, H], [x1 + 8, H]];
+        const crag = { knobs, surface, H, edgeX: x1, summitX: x1 };
+        const P = params;
+        const OR = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag, H, surface, aimTop: true, speed: () => vt, stopAt: 0.3, vswitch: 1.3, leapP: P.leap, active: () => pit && pit.OR === OR && !pit.done, params: { runP: P.runner, walkP: P.walkFast, slowP: P.slow, stopP: P.stop, stopK: P.stopK, cragP: P.cragLeap || P.cragObstacle, getup: P.getup } });
+        pit = { f, OR, done: false, t0: ep.frame };
+        OR.leapNow();
+        pitLog.push({ x: +px.toFixed(2), t: +(ep.frame / config.physics.hz).toFixed(1) });
+        return;
+      }
+    }
+  };
   const zone = () => {
     if (zoneF === ep.frame) return zoneNow;
     zoneF = ep.frame;
     const px = world.px[0];
     if (rec && rec.busy()) { zoneNow = 'recover'; return zoneNow; }
+    if (pit && !pit.done) {
+      // out: running again 4 m past the pit (or given up after 60 s)
+      if ((pit.OR.mode === 'run2' && px > pit.f.x1 + 4) || ep.frame - pit.t0 > 60 * config.physics.hz) { pit.done = true; pitLog[pitLog.length - 1].out = pit.OR.mode === 'run2'; pit = null; resumeAt = ep.frame - 10 * config.physics.hz; }
+      else { zoneNow = 'pit'; return zoneNow; }
+    }
     if (rec && rec.phase === 'done') {
       rec.phase = null; resumeAt = ep.frame;
       // at the rock: walk up to it and climb from standing (a get-up leaves no room for a run-up)
@@ -83,6 +112,8 @@ export function installPopDirector(ep, world, level, ctx) {
     if (!wallDone && px > Math.max(X(Z.down) + 1, wall.x0 - 7)) wallOn = true;
     if (wallDone && !ropeDone && px > hole.x0 - 4) ropeOn = true;
     zoneNow = wallOn && !wallDone ? 'wall' : ropeOn && !ropeDone ? 'rope' : 'trail';
+    pitCheck();
+    if (pit) { zoneNow = 'pit'; return zoneNow; }
     fallCheck();
     if (rec && rec.busy()) zoneNow = 'recover';
     return zoneNow;
@@ -98,5 +129,5 @@ export function installPopDirector(ep, world, level, ctx) {
   const chain = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag: level.crag, H: wall.H, speed: () => vt, stopAt: 0.6, vswitch: 1.3, leapP: params.leap, active: () => zone() === 'wall', params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragLeap || params.cragObstacle, getup: params.getup } });
   // recovery last: its wrapper runs first, and the skills are off while it is busy
   const rec = params.getup && params.walkFast ? installRecovery(ep, world, { config, ElmanNetwork, getup: params.getupTrail || params.getup, walkP: params.walkFast, floorAt }) : null;
-  return { rec, zone, chain, rope, floorAt, groundAt, features, obstacles, wall, hole, get wallDone() { return wallDone; }, get ropeDone() { return ropeDone; } };
+  return { pitLog, get pit() { return pit; }, rec, zone, chain, rope, floorAt, groundAt, features, obstacles, wall, hole, get wallDone() { return wallDone; }, get ropeDone() { return ropeDone; } };
 }

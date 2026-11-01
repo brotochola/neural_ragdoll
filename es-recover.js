@@ -86,7 +86,12 @@ if (!isMainThread) {
   const handover = saved.handover;
   const theta = Float64Array.from(saved.theta);
   const NW = theta.length;
-  const nFalls = fallsFiles.split(',').reduce((a, f) => a + JSON.parse(fs.readFileSync(path.join(root, f), 'utf8')).length, 0);
+  const allFalls = fallsFiles.split(',').flatMap((f) => JSON.parse(fs.readFileSync(path.join(root, f), 'utf8')));
+  const nFalls = allFalls.length;
+  // --hard: training draws only falls with a block (over 10 cm) less than 3 m ahead (the get-up travels 2-3 m)
+  const hardOf = (f) => f.blocks.some((b) => b.x1 > f.pose[0] && b.x0 - f.pose[0] < 3 && b.top > 0.1);
+  const trainPool = Array.from({ length: nFalls - HELD }, (_, i) => HELD + i).filter((k) => !args.includes('--hard') || hardOf(allFalls[k]));
+  console.log('training falls', trainPool.length, 'of', nFalls - HELD);
   const nW = +arg('--workers', Math.max(1, os.cpus().length));
   const workers = Array.from({ length: nW }, () => new Worker(new URL(import.meta.url), { workerData: { files: fallsFiles } }));
   let nextId = 0;
@@ -118,7 +123,7 @@ if (!isMainThread) {
   const t0 = Date.now();
   for (let g = 0; g < gens; g++) {
     // this generation's starts: falls outside the held-out ones, one ordinary lying start in six
-    const ks = Array.from({ length: per }, (_, i) => (i === per - 1 && g % 2 === 0 ? -100 - g : HELD + Math.floor(rand() * (nFalls - HELD))));
+    const ks = Array.from({ length: per }, (_, i) => (i === per - 1 && g % 2 === 0 ? -100 - g : trainPool[Math.floor(rand() * trainPool.length)]));
     const eps = [], jobs = [];
     for (let p = 0; p < pairs; p++) {
       const e = new Float64Array(NW);

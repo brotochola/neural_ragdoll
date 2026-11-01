@@ -16,7 +16,8 @@ export function installObstacleRunner(ep, world, ctx) {
   const { runP, walkP, slowP, stopP, cragP, getup } = ctx.params;
   const st = ctx.params.stopK;
   const HZ = config.physics.hz, J = config.net.jointCount, P = config.partIndex;
-  const S = ep.terrain.surface;
+  // ctx.surface: this wall's own top line (absolute), when it is not the terrain's (a pit's far wall)
+  const S = ctx.surface || ep.terrain.surface;
   const face = S[1][0];
   const stopAt = ctx.stopAt != null ? ctx.stopAt : 0.6, DECEL = ctx.decel || 8, VWALK = ctx.vwalk || 1.1, VSWITCH = ctx.vswitch || 1.3;
   const speedOf = () => ctx.speed();
@@ -29,6 +30,7 @@ export function installObstacleRunner(ep, world, ctx) {
   const knobs = crag.knobs.map((k) => ({ lip: k.lip + kdx, back: k.back + kdx, y: k.y }));
   let aimI = 0;
   if (LP) for (let i = 0; i < knobs.length; i++) if (knobs[i].y <= LP.reachH) aimI = i + 1;
+  if (LP && ctx.aimTop) aimI = knobs.length; // falling into a pit: the highest ledge, just under the edge
   const aimAt = () => { const k = knobs[aimI - 1]; return { x: k.lip + 0.03 + LP.aimX, y: k.y + 0.03 + LP.aimY }; };
   const leap = { aimI, caughtY: null, caughtAt: null, missed: false, tookOff: null };
   const angleOf = (i) => Math.atan2(world.s[i], world.c[i]);
@@ -104,6 +106,7 @@ export function installObstacleRunner(ep, world, ctx) {
         // the knob the planner will count the hands on: the highest one at or under the hand that caught
         leap.holdI = 0; for (let i = 0; i < knobs.length; i++) if (knobs[i].y <= leap.caughtY + 0.05) leap.holdI = i + 1;
         if (!leap.holdI) leap.holdI = 1;
+        if (ctx.aimTop && leap.caughtY > H - 0.04) leap.holdI = knobs.length + 1; // caught the top edge itself
         setMode('hang');
       }
       else if (modeT > (LP.reachT || 0.6) && (m.touch[P.footLeft] || m.touch[P.footRight])) {
@@ -124,7 +127,7 @@ export function installObstacleRunner(ep, world, ctx) {
       else if (modeT > LP.hangT) {
         setMode('climb');
         const hp = HAND.map((q) => ({ x: world.px[q], y: world.py[q] }));
-        PL = installCragPlanner(ep, world, cragP, { config, pose, Box2D, crag, start: { hands: [leap.holdI, leap.holdI], handPos: hp }, nets: { ElmanNetwork, getupW: getup.theta, handover: getup.handover } });
+        PL = installCragPlanner(ep, world, cragP, { config, pose, Box2D, crag, surface: ctx.surface, start: { hands: [leap.holdI, leap.holdI], handPos: hp }, nets: { ElmanNetwork, getupW: getup.theta, handover: getup.handover } });
       }
     } else if (mode === 'walk') {
       const dist = face - front;
@@ -144,7 +147,7 @@ export function installObstacleRunner(ep, world, ctx) {
       if (modeT > 1.5) {
         setMode('climb');
         // the crag planner takes over (it wraps updateGrip from outside; this wrapper then only passes on)
-        PL = installCragPlanner(ep, world, cragP, { config, pose, Box2D, crag, nets: { ElmanNetwork, getupW: getup.theta, handover: getup.handover } });
+        PL = installCragPlanner(ep, world, cragP, { config, pose, Box2D, crag, surface: ctx.surface, nets: { ElmanNetwork, getupW: getup.theta, handover: getup.handover } });
       }
     } else if (mode === 'drop') {
       // gave up a climb from a leap: let go, legs under the body; once down, stand and climb from standing
@@ -185,5 +188,7 @@ export function installObstacleRunner(ep, world, ctx) {
   // back to the start of the approach (after a get-up, src/recover.js): run at the rock and leap again
   // walkUp: got up near the rock, too close for a run-up: walk up to it and climb from standing (the old way)
   const reset = (walkUp) => { mode = walkUp ? 'walk' : 'run'; modeT = 0; holdFeet = null; Object.assign(leap, { caughtY: null, caughtAt: null, missed: !!walkUp, tookOff: null, landed: false, minD: null }); };
-  return { get mode() { return mode; }, get planner() { return PL; }, log, leap, reset };
+  // falling into a pit (the director's call): straight into the leap's reach for the far wall's top ledge
+  const leapNow = () => { mode = 'leap'; modeT = 0; log.push((ep.frame / HZ).toFixed(1) + 's fall-catch'); Object.assign(leap, { tookOff: ep.frame, landed: false, missed: false, caughtY: null }); };
+  return { get mode() { return mode; }, get planner() { return PL; }, log, leap, reset, leapNow };
 }
