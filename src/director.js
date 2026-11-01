@@ -89,6 +89,6 @@ export function installPopDirector(ep, world, level, ctx) {
   const rope = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift: Z.rope.lift, walkP: params.walkFast, net: ropeNet, active: () => zone() === 'rope' });
   const chain = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag: level.crag, H: wall.H, speed: () => vt, stopAt: 0.6, vswitch: 1.3, leapP: params.leap, active: () => zone() === 'wall', params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragLeap || params.cragObstacle, getup: params.getup } });
   // recovery last: its wrapper runs first, and the skills are off while it is busy
-  const rec = params.getup && params.walkFast ? installRecovery(ep, world, { config, ElmanNetwork, getup: params.getup, walkP: params.walkFast, floorAt }) : null;
+  const rec = params.getup && params.walkFast ? installRecovery(ep, world, { config, ElmanNetwork, getup: params.getupTrail || params.getup, walkP: params.walkFast, floorAt }) : null;
   return { rec, zone, chain, rope, floorAt, groundAt, features, obstacles, wall, hole, get wallDone() { return wallDone; }, get ropeDone() { return ropeDone; } };
 }

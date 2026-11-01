@@ -34,7 +34,7 @@ async function makeEnv(runnerFile, seconds, course) {
   const p = JSON.parse(fs.readFileSync(path.join(root, runnerFile), 'utf8')).params;
   for (const k of Object.keys(process.env)) if (k.startsWith('P_')) p[k.slice(2)] = +process.env[k]; // overrides to try
   const correct = makeTrailNet(world, config, Box2D);
-  return function episode(theta, seed, log) {
+  return function episode(theta, seed, log, dump) {
     const r = makeSeededRandom(9100 + seed);
     const start = sim.fillTrainingStart({}, r, evalMode(6));
     // course.mix: every other course is like the level's first stretch (on the ground, boxes, balls, low steps, no holes)
@@ -65,6 +65,19 @@ async function makeEnv(runnerFile, seconds, course) {
     const dist = world.px[0] - x0;
     const feats = tr.features.filter((f) => f.type !== 'down');
     const passed = feats.filter((f) => f.x1 < world.px[0] - 0.3).length;
+    // --dump-falls: let the body come to rest (motors relaxed 1.5 s), then keep it lying as it fell, with the
+    // boxes and steps around it, heights from the floor it lies on (es-expert.js --falls trains the get-up on them)
+    if (fell && dump) {
+      for (let f = 0; f < 90; f++) { for (let j = 0; j < config.net.jointCount; j++) ep.action[j] = 0; ep.updateGrip = () => {}; if (ep.advanceOneFrame()) break; }
+      const fl = tr.floorAt(world.px[0]);
+      if (world.py[0] > fl - 0.1) {
+        const pose = [], vel = [];
+        for (let q = 0; q < world.parts.length; q++) { pose.push(+world.px[q].toFixed(4), +(world.py[q] - fl).toFixed(4), +Math.atan2(world.s[q], world.c[q]).toFixed(4)); vel.push(+world.vx[q].toFixed(3), +(world.vy[q]).toFixed(3), +world.spin[q].toFixed(3)); }
+        const blocks = [];
+        for (const b of ep.terrain.statics) if (b.x1 > world.px[0] - 3 && b.x0 < world.px[0] + 3 && b.top - fl > 0.03) blocks.push({ x0: +b.x0.toFixed(3), x1: +b.x1.toFixed(3), top: +(b.top - fl).toFixed(3) });
+        dump.push({ pose, vel, blocks });
+      }
+    }
     let where = '';
     if (fell) {
       const px = world.px[0];
@@ -130,6 +143,17 @@ if (!isMainThread) {
     const where = {}; for (const r of rs) if (r.where) where[r.where] = (where[r.where] || 0) + 1;
     return { where, score: rs.reduce((a, r) => a + r.score, 0) / n, pass: n - falls, perObstacle: ob / Math.max(1, ob + falls), speed: rs.reduce((a, r) => a + r.dist / r.T, 0) / n, dist: rs.reduce((a, r) => a + r.dist, 0) / n };
   };
+  if (args.includes('--dump-falls')) {
+    // in this thread: run courses with the network, keep the falls (lying, with the blocks around)
+    for (const w of workers) w.terminate();
+    const ep1 = await makeEnv(runner, seconds, course);
+    const th = Float64Array.from(JSON.parse(fs.readFileSync(arg('--net', out), 'utf8')).theta);
+    const dump = [];
+    for (let i = 0; i < +arg('--n', 200) && dump.length < +arg('--max', 120); i++) ep1(th, 20000 + i, false, dump);
+    fs.writeFileSync(arg('--dump-falls'), JSON.stringify(dump));
+    console.log('falls', dump.length, '->', arg('--dump-falls'));
+    process.exit(0);
+  }
   if (args.includes('--eval')) {
     // only score a saved network on the 60 fresh courses (never used in training), against the runner alone
     const ev = arg('--eval', out);

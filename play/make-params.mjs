@@ -35,6 +35,9 @@ const stopK = rd('trained/stop-controller.json').params;
 const stop = Object.assign({}, slow, stopK, { track: true });
 const g = rd('trained/getup-expert-19.json');
 const getup = { theta: g.theta.map((x) => +x.toFixed(5)), handover: g.handover };
+// the get-up fine-tuned on real falls from the trail (es-expert.js --falls trained/trail-falls.json), for getting up in the level
+let getupTrail = null;
+try { const gt = rd('trained/getup-expert-trail.json'); getupTrail = { theta: gt.theta.map((x) => +x.toFixed(5)), handover: gt.handover || g.handover }; } catch (e) {}
 // the obstacle chain uses the numbers tuned on 2 m rocks from varied start distances
 let obV = [];
 try { obV = rd(process.env.CRAG_OBSTACLE || 'trained/crag-2m-wide.json').best; } catch (e) {}
@@ -64,5 +67,5 @@ try { ropeNet = rd(process.env.ROPE_NET || 'trained/rope-net.json').theta.map((x
 let leap = null;
 try { leap = rd(process.env.LEAP || 'trained/leap.json').params; } catch (e) {}
 if (leap) { cragLeap = Object.assign({}, cragObstacle); for (const k of Object.keys(leap)) if (k.startsWith('c_')) cragLeap[k.slice(2)] = cragObstacle[k.slice(2)] + leap[k]; }
-fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates, slow, stop, stopK, getup, cragObstacle, rope, walkFast, dash, dashNet, trail, trailNet, leap, ropeNet, cragLeap }));
+fs.writeFileSync(new URL('./params.json', import.meta.url), JSON.stringify({ walk, runner, wall, mountain, crag, runStates, slow, stop, stopK, getup, cragObstacle, rope, walkFast, dash, dashNet, trail, trailNet, leap, ropeNet, cragLeap, getupTrail }));
 console.log('params: walk', Object.keys(walk).length, 'runner', Object.keys(runner).length, 'wall', Object.keys(wall).length, 'mountain', Object.keys(mountain).length, 'crag', Object.keys(crag).length, 'run states', runStates.length);
