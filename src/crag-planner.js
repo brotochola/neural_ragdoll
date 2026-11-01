@@ -54,7 +54,7 @@ export function installCragPlanner(ep, world, p, ctx) {
   if (!reach) reach = 1; // about shoulder height: an arm raised overhead next to the wall hit the rungs
   // the move list is generated as the climb goes
   let move = null;
-  let retry = 0, lastKey = '', topFails = 0;
+  let retry = 0, lastKey = '', topFails = 0, clears = 0;
   const fails = {}; // failed tries per move ('foot0:3'), to step around a move that keeps failing
   const pv0 = pose.pelvisOf(world);
   let pelvisGoal = { x: pv0.x, y: pv0.y };
@@ -79,11 +79,13 @@ export function installCragPlanner(ep, world, p, ctx) {
         if (!lim.hand[hk].grip && (fails['hand' + hk + ':' + lim.hand[hk].rung] || 0) < 4) return { kind: 'hand', k: hk, to: lim.hand[hk].rung };
         const ho = 1 - hk;
         if (lim.hand[ho].grip && lim.hand[ho].rung < hTo && (fails['hand' + ho + ':' + hTo] || 0) < 4) return { kind: 'hand', k: ho, to: hTo };
-        if (lim.hand[hk].grip) {
+        // (after a whole round of that failed, a foot goes up even with that hand off its knob: the other holds)
+        if (lim.hand[hk].grip || (clears >= 1 && lim.hand[ho].grip)) {
           const fk3 = lim.foot[0].rung <= lim.foot[1].rung ? 0 : 1;
           for (let i = N; i > lim.foot[fk3].rung; i--) if (handsY - ry(i) >= p.spanLow - 0.1 && (fails['foot' + fk3 + ':' + i] || 0) < 4) return { kind: 'foot', k: fk3, to: i };
         }
         for (const key in fails) delete fails[key];
+        clears++;
       }
       return { kind: 'hand', k: hk, to: hTo };
     }
@@ -409,6 +411,8 @@ export function installCragPlanner(ep, world, p, ctx) {
     const goalNow = pelvisFor();
     // a foot going up needs room under the hips for the knee: they hang at most footBelow above its target
     if (move.kind === 'foot' && p.footBelow && move.target && move.to !== TOP && !handsTop()) goalNow.y = Math.min(goalNow.y, move.target.y + p.footBelow);
+    // a hand that keeps missing its knob: the hips come in closer to the rock so the arm reaches further in
+    if (move.kind === 'hand' && retry > 0 && !handsTop()) goalNow.x += (p.retryHandPelX != null ? p.retryHandPelX : +(ENV.RHPX || 0.1)) * Math.min(3, retry);
     if (move.kind === 'foot' && retry > 0) { goalNow.y -= (p.retryPelY || 0.06) * Math.min(3, retry); goalNow.x += (p.retryPelX || 0.04) * Math.min(3, retry); }
     const pr = Math.min(1, move.t / p.tRise);
     pelvisGoal = { x: pelvisFrom.x + (goalNow.x - pelvisFrom.x) * smooth(pr), y: pelvisFrom.y + (goalNow.y - pelvisFrom.y) * smooth(pr) };
