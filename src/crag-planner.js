@@ -55,6 +55,7 @@ export function installCragPlanner(ep, world, p, ctx) {
   // the move list is generated as the climb goes
   let move = null;
   let retry = 0, lastKey = '', topFails = 0;
+  const fails = {}; // failed tries per move ('foot0:3'), to step around a move that keeps failing
   const pv0 = pose.pelvisOf(world);
   let pelvisGoal = { x: pv0.x, y: pv0.y };
   let pelvisFrom = { ...pelvisGoal };
@@ -98,6 +99,14 @@ export function installCragPlanner(ep, world, p, ctx) {
       if (fTo <= N) return { kind: 'foot', k: fk, to: fTo };
       if (fTo === TOP || Math.max(lim.foot[0].rung, lim.foot[1].rung) >= N) { const k1 = lim.foot[0].rung >= lim.foot[1].rung ? 0 : 1; if (lim.foot[k1].rung !== TOP) return { kind: 'foot', k: k1, to: TOP }; }
       return null;
+    }
+    // a foot move that failed 4 times: the other foot to that knob, else a hand up a little more stretched,
+    // else start counting again
+    if (fTo <= rungs.length && handsY - ry(fTo) >= p.spanLow && (fails['foot' + fk + ':' + fTo] || 0) >= 4) {
+      const fo = 1 - fk;
+      if (lim.foot[fo].rung < fTo && (fails['foot' + fo + ':' + fTo] || 0) < 4) return { kind: 'foot', k: fo, to: fTo };
+      if (hTo < TOP && ry(hTo) - feetY <= p.spanMax + 0.35 && (fails['hand' + hk + ':' + hTo] || 0) < 4) return { kind: 'hand', k: hk, to: hTo };
+      for (const key in fails) delete fails[key];
     }
     if (fTo <= rungs.length && handsY - ry(fTo) >= p.spanMin) return { kind: 'foot', k: fk, to: fTo };
     // stuck (a hand caught a lower rung than planned): a foot goes up anyway while there is room
@@ -423,7 +432,7 @@ export function installCragPlanner(ep, world, p, ctx) {
           lim.hand[move.k] = { rung: bi, pos: { x: hp.x, y: hp.y }, grip: true };
           move = null;
         }
-        else if ((move.wait += 1 / HZ) > 0.6) { if (move.to === TOP) topFails++; if (ENV.DEBUG_CW) { const hp = pose.handOf(world, move.k === 0 ? P.handLeft : P.handRight); console.log('  grip miss hand', move.k, 'at', hp.x.toFixed(2), hp.y.toFixed(2), 'target', move.target.x.toFixed(2), move.target.y.toFixed(2)); } move = null; retry++; } // retry the same move
+        else if ((move.wait += 1 / HZ) > 0.6) { if (move.to === TOP) topFails++; fails['hand' + move.k + ':' + move.to] = (fails['hand' + move.k + ':' + move.to] || 0) + 1; if (ENV.DEBUG_CW) { const hp = pose.handOf(world, move.k === 0 ? P.handLeft : P.handRight); console.log('  grip miss hand', move.k, 'at', hp.x.toFixed(2), hp.y.toFixed(2), 'target', move.target.x.toFixed(2), move.target.y.toFixed(2)); } move = null; retry++; } // retry the same move
       } else if (move.kind === 'foot') {
         // standing on the rung? (sole within 6 cm of its top and over it); else try again
         const so = pose.soleOf(world, move.k === 0 ? P.footLeft : P.footRight);
@@ -431,6 +440,7 @@ export function installCragPlanner(ep, world, p, ctx) {
         if (Math.abs(so.y - tgt.y) < 0.07 && Math.abs(so.x - tgt.x) < 0.12) { lim.foot[move.k] = { rung: move.to, pos: tgt }; move = null; }
         else if ((move.wait += 1 / HZ) > 0.5) {
           if (ENV.DEBUG_CW) console.log('  foot miss', move.k, 'at', so.x.toFixed(2), so.y.toFixed(2), 'target', tgt.x.toFixed(2), tgt.y.toFixed(2));
+          fails['foot' + move.k + ':' + move.to] = (fails['foot' + move.k + ':' + move.to] || 0) + 1;
           move = null; retry++;
         }
       }

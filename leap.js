@@ -78,7 +78,12 @@ export const SPEC = [
   ['kStride', 0.8, 0.3], ['preReach', 0.0, 0.3], // step adjustment to the take-off spot; arms up from this far
   ['reachT', 0.8, 0.3], ['toe', 0.4, 0.3], // keeps reaching this long (standing tall on the toes once down)
 ];
-const decode = (v) => { const q = {}; SPEC.forEach(([k, b], i) => (q[k] = process.env['P_' + k] != null ? +process.env['P_' + k] : b + (v[i] || 0))); q.catchR = Math.max(0.05, q.catchR); q.hangT = Math.max(0.2, q.hangT); return q; };
+// --tune-crag: also search some of the crag planner's numbers (changes to the crag file's values), judged on the
+// whole chain (they were tuned for climbing from standing, not from hanging after a leap)
+const CRAG_TUNE = args.includes('--tune-crag') ? [['c_pelvisOff', 0, 0.08], ['c_armDown', 0, 0.08], ['c_spanMin', 0, 0.1], ['c_spanTop', 0, 0.1], ['c_spanLow', 0, 0.1], ['c_pelvisOffTop', 0, 0.08], ['c_mantleH', 0, 0.1], ['c_topHand', 0, 0.03]] : [];
+SPEC.push(...CRAG_TUNE);
+const cragBase = Object.assign({}, cragP);
+const decode = (v) => { const q = {}; SPEC.forEach(([k, b], i) => (q[k] = process.env['P_' + k] != null ? +process.env['P_' + k] : b + (v[i] || 0))); q.catchR = Math.max(0.05, q.catchR); for (const [k] of CRAG_TUNE) cragP[k.slice(2)] = cragBase[k.slice(2)] + q[k]; q.hangT = Math.max(0.2, q.hangT); return q; };
 
 function episode(seed, leapP, log) {
   const r = makeSeededRandom(17000 + seed);
@@ -86,7 +91,7 @@ function episode(seed, leapP, log) {
   const crag = makeCrag(r, H, 7 + r() * 3, { plateau: 14 });
   const rs = runStates[Math.floor(r() * runStates.length)];
   const speed = leapP.vRun;
-  const T = stage === 'catch' ? 14 : seconds;
+  const T = stage === 'catch' ? 14 : +arg('--full-seconds', seconds);
   Object.assign(start, { startPose: rs.pose.slice(), startVel: rs.vel.map((v, i) => (i % 3 === 0 ? v * speed / rs.speed : v)), tilt: 0, drop: 0, settle: 0, frames: Math.round(T * HZ) });
   start.walk = null;
   start.terrain = { statics: [], polys: crag.polys, surface: crag.surface };

@@ -43,14 +43,17 @@ export function installPopDirector(ep, world, level, ctx) {
     else if (f.type === 'box') obstacles.push({ x0: f.x0, x1: f.x1, top: f.top, kind: 'caja' });
     else if (f.type === 'ball') { const b = balls[f.ball]; if (b) obstacles.push({ live: () => { const q = Box2D.b2Body_GetPosition(b.id); return { x0: q.x - b.r, x1: q.x + b.r, top: q.y + b.r, kind: 'bola' }; } }); }
   }
-  let wallDone = false, ropeDone = false, zoneF = -1, zoneNow = 'trail';
+  let wallDone = false, ropeDone = false, zoneF = -1, zoneNow = 'trail', wallOn = false, ropeOn = false;
   const zone = () => {
     if (zoneF === ep.frame) return zoneNow;
     zoneF = ep.frame;
     const px = world.px[0];
     if (!wallDone && chain && chain.mode === 'run2' && px > wall.summit + 2.5) wallDone = true;
     if (!ropeDone && rope && rope.phase === 'run2' && px > hole.x1 + 3) ropeDone = true;
-    zoneNow = !wallDone && px > wall.x0 - 4 ? 'wall' : wallDone && !ropeDone && px > hole.x0 - 4.5 ? 'rope' : 'trail';
+    // once a zone has started it stays on until its skill is through (a missed leap can step back out of it)
+    if (!wallDone && px > wall.x0 - 4) wallOn = true;
+    if (wallDone && !ropeDone && px > hole.x0 - 4.5) ropeOn = true;
+    zoneNow = wallOn && !wallDone ? 'wall' : ropeOn && !ropeDone ? 'rope' : 'trail';
     return zoneNow;
   };
   const vt = params.trail.vRun || 2.6;
