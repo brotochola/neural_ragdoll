@@ -44,7 +44,7 @@ export function installPopDirector(ep, world, level, ctx) {
     else if (f.type === 'box') obstacles.push({ x0: f.x0, x1: f.x1, top: f.top, kind: 'caja' });
     else if (f.type === 'ball') { const b = balls[f.ball]; if (b) obstacles.push({ live: () => { const q = Box2D.b2Body_GetPosition(b.id); return { x0: q.x - b.r, x1: q.x + b.r, top: q.y + b.r, kind: 'bola' }; } }); }
   }
-  let wallDone = false, ropeDone = false, zoneF = -1, zoneNow = 'trail', wallOn = false, ropeOn = false;
+  let wallDone = !!ctx.skipWall, ropeDone = false, zoneF = -1, zoneNow = 'trail', wallOn = false, ropeOn = false;
   // a fall on the trail (head low or tipped over for half a second, not in a pit, no hand holding): get up and go on
   let downF = 0, resumeAt = -1e9, rockGetups = 0;
   const fallCheck = () => {
@@ -90,7 +90,8 @@ export function installPopDirector(ep, world, level, ctx) {
   const vt = params.trail.vRun || 2.6;
   const net = ctx.trailNet ? { correct: ctx.trailNet.correct, theta: ctx.trailNet.theta } : null;
   // back to running after a get-up: the commanded speed comes up from a walk over two seconds
-  const speedT = () => Math.min(vt, 1.2 + Math.max(0, (ep.frame - resumeAt) / config.physics.hz) * 0.6);
+  const RAMP = ctx.ramp || +((globalThis.process && process.env && process.env.RAMP) || 0.6);
+  const speedT = () => Math.min(vt, 1.2 + Math.max(0, (ep.frame - resumeAt) / config.physics.hz) * RAMP);
   installRunner(ep, world, params.trail, { config, obstacles, floorAt, speed: speedT, net, active: () => zone() === 'trail' });
   const ropeNet = ctx.trailNet && params.ropeNet ? { correct: ctx.trailNet.correct, theta: params.ropeNet } : null;
   const rope = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift: Z.rope.lift, walkP: params.walkFast, net: ropeNet, active: () => zone() === 'rope' });

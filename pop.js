@@ -30,10 +30,27 @@ if (arg('--trail-net', null)) { const j = JSON.parse(fs.readFileSync(arg('--trai
 const weights = ElmanNetwork.copy(JSON.parse(fs.readFileSync(path.join(root, 'trained/stand-and-walk.json'), 'utf8')).theta);
 const STAGES = ['start', 'reached the rock', 'grabbed the rock', 'over the rock', 'on to the rope', 'across the rope', 'end'];
 
+// --at-rope: only the level's second half: the body starts running on the rock's top 3 m before trail B
+// (the rock and the first stretch gone), for measuring trail B, the rope and trail C quickly
+const atRope = args.includes('--at-rope');
+function ropeOnly(L) {
+  const Z = L.zones, d = -(Z.wall.plateauEnd - 3), H = Z.wall.H;
+  const keep = (x) => x + d > -6;
+  const statics = L.statics.filter((b) => keep(b.dx + (b.w || 0))).map((b) => Object.assign({}, b, { dx: +(b.dx + d).toFixed(3) }));
+  statics.unshift({ dx: -6, w: 9, h: H });
+  return Object.assign({}, L, {
+    statics, balls: L.balls.map((b) => Object.assign({}, b, { dx: b.dx + d })), polys: L.polys.map((q) => q.map(([x, y]) => [x - 300, y])), surface: L.surface.map(([x, y]) => [x - 300, y]), crag: L.crag,
+    features: L.features.filter((f) => keep(f.x1)).map((f) => Object.assign({}, f, { x0: f.x0 + d, x1: f.x1 + d })),
+    levels: [[-6, 3, H]].concat(L.levels.filter((l) => l[0] + d > 2.9).map((l) => [l[0] + d, l[1] + d, l[2]])),
+    ropes: L.ropes.map((q) => Object.assign({}, q, { dx: q.dx + d })), lift: H,
+    zones: { wall: Object.assign({}, Z.wall, { x0: -100, summit: -99, plateauEnd: 3 }), rope: Object.assign({}, Z.rope, { x0: Z.rope.x0 + d, x1: Z.rope.x1 + d }), down: -100 },
+  });
+}
 function episode(seed) {
   const r = makeSeededRandom(seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
-  const L = makePopLevel(r);
+  let L = makePopLevel(r);
+  if (atRope) L = ropeOnly(L);
   const rs = params.runStates[Math.floor(r() * params.runStates.length)];
   const v0 = params.trail.vRun || 2.6;
   const pz = rs.pose.slice();
@@ -45,7 +62,7 @@ function episode(seed) {
   const ep = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, start));
   ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   const correct = params.trailNet ? makeTrailNet(world, config, Box2D) : null;
-  const D = installPopDirector(ep, world, L, { config, pose, Box2D, ElmanNetwork, params, trailNet: correct ? { correct, theta: params.trailNet } : null });
+  const D = installPopDirector(ep, world, L, { config, pose, Box2D, ElmanNetwork, params, trailNet: correct ? { correct, theta: params.trailNet } : null, skipWall: atRope });
   const endX = D.hole.x1 + 25;
   let lastRec = null, stage = 0, down = 0, stallX = -1e9, stallT = 0, why = 'time';
   while (!ep.advanceOneFrame()) {
