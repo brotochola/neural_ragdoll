@@ -47,10 +47,11 @@ function episode(seed) {
   const correct = params.trailNet ? makeTrailNet(world, config, Box2D) : null;
   const D = installPopDirector(ep, world, L, { config, pose, Box2D, ElmanNetwork, params, trailNet: correct ? { correct, theta: params.trailNet } : null });
   const endX = D.hole.x1 + 25;
-  let stage = 0, down = 0, stallX = -1e9, stallT = 0, why = 'time';
+  let lastRec = null, stage = 0, down = 0, stallX = -1e9, stallT = 0, why = 'time';
   while (!ep.advanceOneFrame()) {
     const px = world.px[0], z = D.zone();
     if (process.env.DEBUG_POP && ep.frame % 300 === 0) { const pl = D.chain.planner; console.log('   t', (ep.frame / HZ).toFixed(0), 'zone', z, 'chain', D.chain.mode, pl ? 'move ' + (pl.move ? pl.move.kind + (pl.move.k != null ? pl.move.k : '') + '->' + (pl.move.to != null ? pl.move.to : '') : '-') + ' hands ' + pl.lim.hand.map((h) => h.rung + (h.grip ? 'g' : '')).join(',') + ' feet ' + pl.lim.foot.map((f) => f.rung).join(',') + ' phase ' + pl.phase : '', 'pelvis', px.toFixed(2), world.py[0].toFixed(2), 'leap', JSON.stringify({ aim: D.chain.leap.aimI, hold: D.chain.leap.holdI, missed: D.chain.leap.missed }), 'rec', D.rec ? D.rec.phase + '/' + D.rec.count : '-', 'log', D.chain.log.slice(-3).join(',')); }
+    if (process.env.DEBUG_REC && D.rec && D.rec.phase !== lastRec) { lastRec = D.rec.phase; const nx = D.features.filter((f) => f.x1 > px - 0.2).sort((a, b) => a.x0 - b.x0)[0]; console.log('   rec', (ep.frame / HZ).toFixed(1) + 's', lastRec, '#' + D.rec.count, 'x', px.toFixed(2), 'floor', D.floorAt(px).toFixed(2), 'zone', z, 'next', nx ? nx.type + ' at ' + (nx.x0 - px).toFixed(2) + (nx.top != null ? ' top ' + nx.top.toFixed(2) : nx.to != null ? ' to ' + nx.to.toFixed(2) : '') : '-'); }
     if (stage < 1 && z === 'wall') stage = 1;
     if (stage < 2 && D.chain.leap.caughtY != null) stage = 2;
     if (stage < 3 && D.wallDone) stage = 3;
