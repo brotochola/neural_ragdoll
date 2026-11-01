@@ -144,7 +144,8 @@ export function makeTrailCourse(r, opts = {}) {
       if (o.knobs) {
         f.knobs = [];
         const back = x + w;
-        for (let ky = 0.3; ky <= to - 0.2 + 1e-6; ky += 0.3) {
+        // spaced like the rock's ledges, the highest a quarter metre under the edge (room for the hands over it)
+        for (let ky = to - 0.25 - 0.29 * Math.floor((to - 0.5) / 0.29); ky <= to - 0.25 + 1e-6; ky += 0.29) {
           polys.push([[back - 0.1, ky], [back - 0.07, ky - 0.04], [back + 0.03, ky - 0.07], [back + 0.03, ky]]);
           f.knobs.push({ lip: back - 0.1, back, y: +ky.toFixed(3) });
         }
@@ -218,12 +219,22 @@ export function makePopLevel(r, opts = {}) {
   const ropeTop = lvR + 4.2 + r() * 0.3, ropeLow = lvR + 1.25 + r() * 0.15;
   const C = shift(makeTrailCourse(r, { start: lvR, minLevel: o.wallH - 0.3, maxLevel: o.wallH + 0.5, lead: 4, length: o.lenC, tail: 40, from: 0, knobs: o.knobs }), hx1);
   for (const c of [B, C]) { statics.push(...c.statics); balls.push(...c.balls); features.push(...c.features); levels.push(...c.levels); }
-  features.push({ type: 'ropehole', x0: hx0, x1: hx1, from: lvR, to: lvR });
+  const rh = { type: 'ropehole', x0: hx0, x1: hx1, from: lvR, to: C.levels.length ? C.levels[0][2] : lvR };
+  // ledges on the rope hole's far wall too: a body that falls in can climb out (o.knobs)
+  const ropeKnobPolys = [];
+  if (o.knobs) {
+    rh.knobs = [];
+    for (let ky = rh.to - 0.25 - 0.29 * Math.floor((rh.to - 0.5) / 0.29); ky <= rh.to - 0.25 + 1e-6; ky += 0.29) {
+      ropeKnobPolys.push([[hx1 - 0.1, ky], [hx1 - 0.07, ky - 0.04], [hx1 + 0.03, ky - 0.07], [hx1 + 0.03, ky]]);
+      rh.knobs.push({ lip: hx1 - 0.1, back: hx1, y: +ky.toFixed(3) });
+    }
+  }
+  features.push(rh);
   features.sort((a, b) => a.x0 - b.x0);
   levels.sort((a, b) => a[0] - b[0]);
   const ropes = [{ dx: hx0 + holeW / 2, top: ropeTop, length: ropeTop - ropeLow, seg: 0.3, density: 120 }];
   return {
-    statics, balls, polys: crag.polys.concat(B.polys, C.polys), surface: crag.surface, ropes, crag, features, levels, lift: A.lift,
+    statics, balls, polys: crag.polys.concat(B.polys, C.polys, ropeKnobPolys), surface: crag.surface, ropes, crag, features, levels, lift: A.lift,
     zones: { wall: { x0: wallX0, summit, plateauEnd, H: o.wallH }, rope: { x0: hx0, x1: hx1, lift: lvR }, down: downX },
   };
 }

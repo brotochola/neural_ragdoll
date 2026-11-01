@@ -292,7 +292,13 @@ export function installCragPlanner(ep, world, p, ctx) {
       } else {
         const q = smooth(Math.min(1, mt.t / p.tPull));
         pel = lerp(mt.from, { x: mt.from.x + p.pullStep, y: wallH + 0.15 }, q);
-        if (mt.t >= p.tPull + 0.2) { mt.k = 1 - mt.k; mt.phase = 'hand'; mt.t = 0; mt.from = { x: pv.x, y: wallH + 0.17 }; }
+        if (mt.t >= p.tPull + 0.2) {
+          // no headway over the last four pulls (the legs hooked on the edge): the next pulls kick too
+          mt.pulls = (mt.pulls || []).concat(pv.x).slice(-5);
+          if (mt.pulls.length === 5 && mt.pulls[4] - mt.pulls[0] < 0.1) { mt.kick = 4; mt.pulls = []; }
+          else if (mt.kick) mt.kick--;
+          mt.k = 1 - mt.k; mt.phase = 'hand'; mt.t = 0; mt.from = { x: pv.x, y: wallH + 0.17 };
+        }
       }
       if (pv.x > wallX + p.doneX) { mt.phase = 'lie'; mt.t = 0; }
     }
@@ -306,8 +312,9 @@ export function installCragPlanner(ep, world, p, ctx) {
       if (src !== e.network.action) for (let j = 0; j < OUT; j++) e.network.action[j] = src[j];
       for (let k = 0; k < 2; k++) e.action[J + k] = -1;
       const up = e.measure.headHeight - wallH > 1.35 && e.measure.torsoCos > 0.8;
-      if (mt.phase === 'getup' && t > hand + 1 && up) { mt.phase = 'stand'; e.options.getup = false; e.options.startTime = 0; stood = true; e.network = mt.stand; mt.stand = null; mt.getup = null; }
-      else if (mt.phase === 'getup' && t > hand + 6) { mt.phase = 'lie'; mt.t = 0; e.options.getup = false; e.options.startTime = 0; e.network = mt.stand; mt.stand = null; mt.getup = null; }
+      const back = () => { if (mt.marks !== undefined) { e.options.targets = mt.marks; mt.marks = undefined; } e.measure.getup = false; };
+      if (mt.phase === 'getup' && t > hand + 1 && up) { back(); mt.phase = 'stand'; e.options.getup = false; e.options.startTime = 0; stood = true; e.network = mt.stand; mt.stand = null; mt.getup = null; }
+      else if (mt.phase === 'getup' && t > hand + 6) { back(); mt.phase = 'lie'; mt.t = 0; e.options.getup = false; e.options.startTime = 0; e.network = mt.stand; mt.stand = null; mt.getup = null; }
       return;
     }
     if (mt.phase === 'lie') {
@@ -329,7 +336,11 @@ export function installCragPlanner(ep, world, p, ctx) {
         mt.getup = new ctx.nets.ElmanNetwork(Float32Array.from(ctx.nets.getupW));
         e.network = mt.getup;
         e.groundOffset = wallH;
-        if (!e.options.targets || e.options.targets.length !== config.targets.length) e.options.targets = config.targets.map((t) => Object.assign({}, t));
+        // the get-up's marks as it was trained with them (src/recover.js): head and hands on, planted once
+        // where it starts and frozen, flat; the episode's own marks come back after
+        mt.marks = e.options.targets;
+        e.options.targets = config.targets.map((t) => (t.ride ? { on: true, x: world.px[0] + (t.x || 0), y: wallH + (t.y || 0), angle: 0, span: 0.25, gain: 1.3, frozen: true } : { on: false, x: 0, y: 0, angle: 0, gain: 0 }));
+        e.measure.getup = true;
         e.options.getup = true;
         e.options.startTime = -e.frame / HZ;
         return;
@@ -349,6 +360,8 @@ export function installCragPlanner(ep, world, p, ctx) {
       const hipsOver = pv.x > wallX + 0.05;
       const flat = mt.phase === 'lie';
       for (const [h, kn, an] of [[5, 6, 7], [11, 12, 13]]) { jt[h] = flat ? 0.1 : hipsOver ? p.foldHip : p.hangHip; jt[kn] = flat ? -0.2 : hipsOver ? -2.2 : p.hangKnee; jt[an] = 0.3; }
+      // kicking: the legs straighten while the arms pull (the feet push off the knobs or the face)
+      if (mt.kick && mt.phase === 'pull') for (const [h, kn] of [[5, 6], [11, 12]]) { jt[h] = 0.2; jt[kn] = -0.3; }
     }
     pose.commandsFor(world, jt, tmp);
     for (let j = 0; j < J; j++) e.action[j] = tmp[j];
@@ -361,7 +374,7 @@ export function installCragPlanner(ep, world, p, ctx) {
     ep.decide = function () {
       // on the summit the networks' marks sit on the summit floor (they were at y = 0, 2.6 m below, and
       // the get-up threw the body off the edge reaching for them)
-      if (mt && (mt.phase === 'getup' || mt.phase === 'stand') && this.options.targets) {
+      if (mt && mt.phase === 'stand' && this.options.targets) {
         const t = this.options.targets, px = world.px[0];
         for (let i = 0; i < config.targets.length; i++) {
           const spec = config.targets[i], mk = t[i];

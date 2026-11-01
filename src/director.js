@@ -61,19 +61,25 @@ export function installPopDirector(ep, world, level, ctx) {
       // at the foot of the rock a get-up rarely works (the rock is in the way): three tries there at most
       if (atRock) { rockGetups++; if (rockGetups > 3) return; }
       if (rec.count >= 6) return; // six get-ups in one level: enough
+      rec.noWalk = false;
       rec.start();
     }
   };
   // PITS (holes with ledges on the far wall, terrain makeTrailCourse knobs): a body dropping into one reaches
   // for the far wall's top ledge, hangs and climbs out the way the rock is climbed (an obstacle runner for that
   // wall, installed when it is needed), crawls over the edge, stands, walks and runs on
-  const pits = features.filter((f) => f.type === 'hole' && f.knobs && f.knobs.length);
+  const pits = features.filter((f) => (f.type === 'hole' || f.type === 'ropehole') && f.knobs && f.knobs.length);
+  let pitDownF = 0;
   let pit = null;
   const pitLog = [];
   const pitCheck = () => {
-    if (pit || zoneNow !== 'trail' || (rec && rec.busy())) return;
+    if (pit || (rec && rec.busy())) return;
+    // on the trail; at the rope when not holding it (fell short, or off the far edge)
+    const ropeFall = zoneNow === 'rope' && !(ep.grips[0].joint || ep.grips[1].joint);
+    if (zoneNow !== 'trail' && !ropeFall) return;
     const px = world.px[0], vy = ep.measure.centerVelocityY || 0;
     for (const f of pits) {
+      if ((f.type === 'ropehole') !== ropeFall) continue;
       if (px > f.x0 + 0.02 && px < f.x1 + 0.1 && world.py[0] < f.from + 0.15 && vy < -0.4) {
         const x1 = f.x1, H = f.to;
         const knobs = f.knobs.map((k) => ({ lip: X(k.lip), back: X(k.back), y: k.y }));
@@ -94,9 +100,21 @@ export function installPopDirector(ep, world, level, ctx) {
     const px = world.px[0];
     if (rec && rec.busy()) { zoneNow = 'recover'; return zoneNow; }
     if (pit && !pit.done) {
-      // out: running again 4 m past the pit (or given up after 60 s)
-      if ((pit.OR.mode === 'run2' && px > pit.f.x1 + 4) || ep.frame - pit.t0 > 60 * config.physics.hz) { pit.done = true; pitLog[pitLog.length - 1].out = pit.OR.mode === 'run2'; pit = null; resumeAt = ep.frame - 10 * config.physics.hz; }
-      else { zoneNow = 'pit'; return zoneNow; }
+      // got up in the pit: walk to the far wall and climb it from standing
+      if (rec && rec.phase === 'done') { rec.phase = null; pit.OR.reset(true); }
+      // out: running again 4 m past the pit (or given up after 120 s)
+      if ((pit.OR.mode === 'run2' && px > pit.f.x1 + 4) || ep.frame - pit.t0 > 120 * config.physics.hz) {
+        pit.done = true; pitLog[pitLog.length - 1].out = pit.OR.mode === 'run2';
+        if (pit.f.type === 'ropehole' && pit.OR.mode === 'run2') ropeDone = true;
+        pit = null; resumeAt = ep.frame - 10 * config.physics.hz;
+      } else {
+        // down at the foot of the pit (missed the ledge, or let go): get up there first
+        const m = ep.measure, OM = pit.OR.mode, low = world.py[0] < pit.f.from - 0.5;
+        const down = low && (m.headHeight < 0.95 || (m.torsoCos || 0) < 0.3) && !(ep.grips[0].joint || ep.grips[1].joint) && ['walk', 'stop', 'hold', 'drop', 'leap'].includes(OM);
+        pitDownF = down ? pitDownF + 1 : 0;
+        if (rec && pitDownF > 0.5 * config.physics.hz && rec.count < 8) { pitDownF = 0; rec.noWalk = true; rec.start(); zoneNow = 'recover'; return zoneNow; }
+        zoneNow = 'pit'; return zoneNow;
+      }
     }
     if (rec && rec.phase === 'done') {
       rec.phase = null; resumeAt = ep.frame;
@@ -128,6 +146,6 @@ export function installPopDirector(ep, world, level, ctx) {
   const rope = installRopeRunner(ep, world, params.rope, { config, pose, Box2D, runnerP: params.runner, speed: () => 2.4, hole, rope: ep.terrain.ropes[0], lift: Z.rope.lift, walkP: params.walkFast, net: ropeNet, active: () => zone() === 'rope' });
   const chain = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag: level.crag, H: wall.H, speed: () => vt, stopAt: 0.6, vswitch: 1.3, leapP: params.leap, active: () => zone() === 'wall', params: { runP: params.runner, walkP: params.walkFast, slowP: params.slow, stopP: params.stop, stopK: params.stopK, cragP: params.cragLeap || params.cragObstacle, getup: params.getup } });
   // recovery last: its wrapper runs first, and the skills are off while it is busy
-  const rec = params.getup && params.walkFast ? installRecovery(ep, world, { config, ElmanNetwork, getup: params.getupTrail || params.getup, walkP: params.walkFast, floorAt }) : null;
+  const rec = params.getup && params.walkFast ? installRecovery(ep, world, { config, ElmanNetwork, getup: params.getupTrail || params.getup, walkP: params.walkFast, floorAt: (x) => (pit && !pit.done && x > pit.f.x0 - 0.15 && x < pit.f.x1 + 0.05 ? 0 : floorAt(x)) }) : null;
   return { pitLog, get pit() { return pit; }, rec, zone, chain, rope, floorAt, groundAt, features, obstacles, wall, hole, get wallDone() { return wallDone; }, get ropeDone() { return ropeDone; } };
 }

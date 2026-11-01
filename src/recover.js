@@ -70,7 +70,12 @@ export function installRecovery(ep, world, ctx) {
       else if (R.t > hand + 6) { restore(); if (R.tries < 2) toSettle(); else R.phase = 'failed'; }
     } else if (R.phase === 'stand') {
       for (let k = J; k < OUT; k++) this.action[k] = -1;
-      if (R.t > 1.2) { R.phase = 'walk'; R.t = 0; this.simbicon = { stance: 0, t: 0 }; }
+      if (R.t > 1.2) {
+        this.simbicon = { stance: 0, t: 0 };
+        // R.noWalk (in a pit, the wall a step away): done standing, the caller walks up to the wall itself
+        if (R.noWalk) { R.phase = 'done'; this.runner = { stance: 0, t: 0, flight: false, jumping: false, jumpNext: false, strides: 0 }; }
+        else { R.phase = 'walk'; R.t = 0; }
+      }
     } else if (R.phase === 'walk') {
       m.walkSpeed = Math.min(1.2, 0.3 + R.t * 0.3); m.walkDir = 1;
       walker(ctx.walkP, this, tmp);
