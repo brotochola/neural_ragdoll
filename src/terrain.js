@@ -238,3 +238,107 @@ export function makePopLevel(r, opts = {}) {
     zones: { wall: { x0: wallX0, summit, plateauEnd, H: o.wallH }, rope: { x0: hx0, x1: hx1, lift: lvR }, down: downX },
   };
 }
+
+// SANDBOX (the playground's "Armá tu pista"): a course from pieces the user places, in order of x (metres
+// from the start, relative to the feet). Piece types and their sizes:
+export const SANDBOX_PIECES = {
+  box: { label: 'Caja', size: [['w', 'ancho', 0.2, 0.8, 0.4], ['h', 'alto', 0.08, 0.4, 0.22]] },
+  ball: { label: 'Bola', size: [['r', 'radio', 0.08, 0.16, 0.12]] },
+  up: { label: 'Escalón arriba', size: [['d', 'alto', 0.1, 0.4, 0.25]] },
+  down: { label: 'Escalón abajo', size: [['d', 'alto', 0.15, 0.5, 0.3]] },
+  pit: { label: 'Pozo', size: [['w', 'ancho', 0.4, 1.0, 0.7]] },
+  rock: { label: 'Roca', size: [['H', 'alto', 1.8, 2.4, 2.0]] },
+  rope: { label: 'Soga', size: [['w', 'ancho del agujero', 1.4, 2.2, 1.8]] },
+};
+// The floor starts 1.2 m up (pits need a floor to be dug under). What a piece needs is put in by itself
+// (marked auto): steps up of 0.35 m before a pit (floor >= 0.8 m) or a rope hole (>= 1.5 m); before a rock,
+// steps down of 0.3 m every 2.5 m to the ground and 7.5 m of it to run at the rock (the leap needs a run-up);
+// after a rock, 8 m of its top to crawl over the edge, stand and run off; after a rope, 4.5 m to land. A piece
+// placed too close to the one before moves on. Returns the terrain, the features and big pieces the director
+// reads, where each piece ended up (spans) and the finish line.
+export function buildSandbox(pieces, opts = {}) {
+  const S0 = opts.start != null ? opts.start : 1.2;
+  const statics = [], balls = [], features = [], levels = [], polys = [], ropes = [], walls = [], ropeHoles = [], autos = [];
+  const spans = new Array(pieces.length).fill(null);
+  let lv = S0, segStart = -4, cursor = 3.5;
+  const close = (xe) => { if (xe > segStart + 1e-3) { if (lv > 0.005) statics.push({ dx: +segStart.toFixed(3), w: +(xe - segStart).toFixed(3), h: +lv.toFixed(3) }); levels.push([segStart, xe, lv]); } segStart = xe; };
+  const step = (x, to, auto) => {
+    to = +Math.max(0, to).toFixed(3);
+    if (Math.abs(to - lv) < 1e-3) return;
+    close(x);
+    features.push({ type: to > lv ? 'up' : 'down', x0: x, x1: x + 0.02, top: Math.max(lv, to), from: lv, to });
+    if (auto) autos.push({ type: to > lv ? 'up' : 'down', x0: x, x1: x + 0.02, from: lv, to });
+    lv = to;
+  };
+  // ledges on a pit's far wall, spaced like the rock's, the highest a quarter metre under the edge
+  const ledges = (back, to) => {
+    const ks = [];
+    for (let ky = to - 0.25 - 0.29 * Math.floor((to - 0.5) / 0.29); ky <= to - 0.25 + 1e-6; ky += 0.29) {
+      polys.push([[back - 0.1, ky], [back - 0.07, ky - 0.04], [back + 0.03, ky - 0.07], [back + 0.03, ky]]);
+      ks.push({ lip: back - 0.1, back, y: +ky.toFixed(3) });
+    }
+    return ks;
+  };
+  const raiseTo = (min) => { while (lv < min - 1e-6) { step(cursor, Math.min(lv + 0.35, min + 0.2), true); cursor += 1.8; } };
+  const order = pieces.map((p, i) => ({ p, i })).sort((a, b) => a.p.x - b.p.x);
+  for (const { p, i } of order) {
+    const def = SANDBOX_PIECES[p.type];
+    if (!def) continue;
+    const v = (k) => { const s = def.size.find((q) => q[0] === k); return Math.max(s[2], Math.min(s[3], p[k] != null ? p[k] : s[4])); };
+    if (p.type === 'box') {
+      const x0 = Math.max(p.x, cursor), w = v('w'), h = v('h');
+      statics.push({ dx: +x0.toFixed(3), w, h: +(lv + h).toFixed(3) });
+      features.push({ type: 'box', x0, x1: x0 + w, top: lv + h, from: lv, to: lv });
+      spans[i] = { x0, x1: x0 + w, top: lv + h, base: lv }; cursor = x0 + w + 1.6;
+    } else if (p.type === 'ball') {
+      const x0 = Math.max(p.x, cursor), r = v('r');
+      balls.push({ dx: +(x0 + r).toFixed(3), r, density: 150, y: +lv.toFixed(3) });
+      features.push({ type: 'ball', x0, x1: x0 + 2 * r, top: lv + 2 * r, from: lv, to: lv, ball: balls.length - 1 });
+      spans[i] = { x0, x1: x0 + 2 * r, top: lv + 2 * r, base: lv }; cursor = x0 + 2 * r + 1.6;
+    } else if (p.type === 'up' || p.type === 'down') {
+      const x0 = Math.max(p.x, cursor), from = lv;
+      step(x0, p.type === 'up' ? Math.min(2.6, lv + v('d')) : lv - v('d'));
+      spans[i] = { x0, x1: x0 + 0.02, top: Math.max(from, lv), base: Math.min(from, lv) }; cursor = x0 + 1.6;
+    } else if (p.type === 'pit') {
+      raiseTo(0.8);
+      const x0 = Math.max(p.x, cursor), w = v('w');
+      close(x0);
+      features.push({ type: 'hole', x0, x1: x0 + w, from: lv, to: lv, knobs: ledges(x0 + w, lv) });
+      segStart = x0 + w;
+      spans[i] = { x0, x1: x0 + w, top: lv, base: 0 }; cursor = x0 + w + 2.0;
+    } else if (p.type === 'rope') {
+      raiseTo(1.5);
+      const w = v('w'), x0 = Math.max(p.x, cursor + 4.5);
+      close(x0);
+      ropes.push({ dx: +(x0 + w / 2).toFixed(3), top: +(lv + 4.35).toFixed(3), length: 3.05, seg: 0.3, density: 120 });
+      features.push({ type: 'ropehole', x0, x1: x0 + w, from: lv, to: lv, knobs: ledges(x0 + w, lv) });
+      ropeHoles.push({ x0, x1: x0 + w, lift: lv, rope: ropes.length - 1 });
+      segStart = x0 + w;
+      spans[i] = { x0, x1: x0 + w, top: lv, base: 0, runFrom: x0 - 4 }; cursor = x0 + w + 4.5;
+    } else if (p.type === 'rock') {
+      // down to the ground first (the leap and the climb are made for a rock on the ground)
+      const downFrom = cursor;
+      while (lv > 0.32) { step(cursor, lv - 0.3, true); cursor += 2.5; }
+      if (lv > 0) { step(cursor, 0, true); cursor += 0.5; }
+      const H = v('H'), x0 = Math.max(p.x, cursor + 7.5);
+      close(x0);
+      const crag = makeCrag(mulberry32(p.seed || 7), H, x0, { plateau: 8 });
+      polys.push(...crag.polys);
+      const summit = crag.summitX, plateauEnd = summit + 8;
+      levels.push([x0, summit, 0], [summit, plateauEnd, H]);
+      walls.push({ x0, summit, plateauEnd, H, crag });
+      lv = H; segStart = plateauEnd;
+      spans[i] = { x0, x1: summit, top: H, base: 0, runFrom: x0 - 7, landing: plateauEnd, downFrom: downFrom < x0 - 7.6 ? downFrom : null }; cursor = plateauEnd + 1;
+    }
+  }
+  const finishX = cursor + 5;
+  close(finishX + 40);
+  features.sort((a, b) => a.x0 - b.x0);
+  levels.sort((a, b) => a[0] - b[0]);
+  return { statics, balls, polys, ropes, features, levels, walls, ropeHoles, lift: S0, spans, autos, finishX, end: finishX + 40 };
+}
+
+// a small seeded random (the rock's face stays the same while the course is edited)
+function mulberry32(a) {
+  return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}

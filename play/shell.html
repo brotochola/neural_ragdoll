@@ -76,13 +76,28 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
 .mlegend { display: flex; flex-wrap: wrap; gap: 10px; font: 0.74rem var(--mono); color: var(--muted); }
 .mlegend i { display: inline-block; width: 14px; height: 6px; vertical-align: 1px; margin-right: 5px; }
 .mlegend i.ring { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--ink); background: transparent; }
+.sb { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--rule); border-radius: 12px; background: var(--card); }
+.sb[hidden], .sbsel[hidden], .tl[hidden], .legend[hidden] { display: none; }
+.sb .bar button[data-tool] { padding: 7px 11px; }
+.sb .bar button.go { border-color: var(--accent); color: var(--accent); }
+.sb .bar button.go[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
+.sbsel { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 10px 12px; border: 1px dashed var(--accent); border-radius: 10px; }
+.sbsel b { font-size: 0.95rem; }
+.sbsel label { display: flex; align-items: center; gap: 8px; font: 0.82rem var(--mono); color: var(--muted); }
+.sbsel input[type=range] { width: 130px; }
+.sbstats { font: 0.82rem/1.5 var(--mono); color: var(--muted); margin: 0; }
+.sbstats b { color: var(--ink); }
+.tl { display: grid; gap: 6px; }
+#timeline { width: 100%; height: 46px; display: block; cursor: default; touch-action: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--stage); }
+.tlkeys { display: flex; flex-wrap: wrap; gap: 4px 14px; font: 0.76rem var(--mono); color: var(--muted); }
+.tlkeys i { display: inline-block; width: 12px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
 @media (max-width: 860px) { .pipe { grid-template-columns: 1fr 1fr; } .inspect-grid { grid-template-columns: 1fr; } }
 @media (max-width: 480px) { .pipe { grid-template-columns: 1fr; } }
 </style>
 <div class="wrap">
   <header>
     <h1>Ragdoll en vivo</h1>
-    <p class="lede">La física corre acá, en tu navegador. Vos sos el planificador: arrastrá las marcas de la cadera, las manos y los pies, y el cuerpo va hacia ellas solo con sus motores. Sin fuerzas mágicas.</p>
+    <p class="lede">La física corre acá, en tu navegador, y el muñeco se mueve solo con los motores de sus articulaciones: sin fuerzas mágicas. Armá tu propia pista con cajas, bolas, escalones, pozos, rocas y sogas y mirá cómo la pasa (y tirale pelotas), o elegí otra escena y movelo vos con las marcas.</p>
   </header>
   <div class="bar" role="group" aria-label="Quién lo mueve">
     <span class="label">Quién lo mueve</span>
@@ -95,6 +110,7 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
   <p class="note" id="modeNote"></p>
   <div class="bar" role="group" aria-label="Escenario">
     <span class="label">Escenario</span>
+    <button data-scene="sandbox" id="sc-sandbox">Armá tu pista</button>
     <button data-scene="floor" id="sc-floor">Piso</button>
     <button data-scene="holes" id="sc-holes">Agujeros</button>
     <button data-scene="wall" id="sc-wall">Pared con peldaños</button>
@@ -112,7 +128,44 @@ input[type=range] { width: 160px; accent-color: var(--accent); }
     <div id="loading">Cargando la física…</div>
     <div id="hud"></div>
   </div>
-  <div class="legend">
+  <div class="tl" id="tlBox" hidden>
+    <canvas id="timeline" aria-label="Quién maneja en cada momento del intento"></canvas>
+    <div class="tlkeys" id="tlKeys"></div>
+  </div>
+  <section class="sb" id="sbPanel" hidden aria-label="Armá tu pista">
+    <div class="bar" role="group" aria-label="Pista">
+      <span class="label">Tu pista</span>
+      <button id="sbRun" class="go">▶ Correr</button>
+      <button id="sbEdit">✎ Editar</button>
+      <button id="sbRepeat">Repetir al terminar</button>
+      <button id="sbGhost">Fantasma del intento anterior</button>
+    </div>
+    <div class="bar" role="group" aria-label="Poner piezas">
+      <span class="label">Poner</span>
+      <button data-tool="box">Caja</button>
+      <button data-tool="ball">Bola</button>
+      <button data-tool="up">Escalón ↑</button>
+      <button data-tool="down">Escalón ↓</button>
+      <button data-tool="pit">Pozo</button>
+      <button data-tool="rock">Roca</button>
+      <button data-tool="rope">Soga</button>
+      <button data-tool="throw">Tirar pelotas</button>
+    </div>
+    <div class="bar" role="group" aria-label="Pistas listas">
+      <span class="label">Pistas</span>
+      <button data-preset="pop">Prince of Persia</button>
+      <button data-preset="carrera">Carrera de obstáculos</button>
+      <button data-preset="pozos">Pozos</button>
+      <button data-preset="rocas">Dos rocas y una soga</button>
+      <button data-preset="azar">Al azar</button>
+      <button data-preset="vacia">Vaciar</button>
+      <button id="sbLink">Copiar link de la pista</button>
+    </div>
+    <div class="sbsel" id="sbSel" hidden></div>
+    <p class="note" id="sbHint"></p>
+    <p class="sbstats" id="sbStats"></p>
+  </section>
+  <div class="legend" id="marksLegend">
     <span><i class="dot" style="background:var(--mark-hips)"></i>cadera</span>
     <span><i class="dot" style="background:var(--mark-hand)"></i>manos</span>
     <span><i class="dot" style="background:var(--mark-foot)"></i>pies</span>
