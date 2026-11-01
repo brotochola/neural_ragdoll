@@ -154,7 +154,7 @@ if (!isMainThread) {
     const ep1 = await makeEnv(runner, seconds, course);
     const th = Float64Array.from(JSON.parse(fs.readFileSync(arg('--net', out), 'utf8')).theta);
     const dump = [];
-    for (let i = 0; i < +arg('--n', 200) && dump.length < +arg('--max', 120); i++) ep1(th, 20000 + i, false, dump);
+    for (let i = 0; i < +arg('--n', 200) && dump.length < +arg('--max', 120); i++) ep1(th, +arg('--dump-base', 20000) + i, false, dump);
     fs.writeFileSync(arg('--dump-falls'), JSON.stringify(dump));
     console.log('falls', dump.length, '->', arg('--dump-falls'));
     process.exit(0);

@@ -26,7 +26,9 @@ const evalEvery = +arg('--eval-every', 5);
 // --falls file: half the starts are real falls from the course (course.js --dump-falls), lying as they
 // fell, with the blocks around them rebuilt; the other half the usual lying starts.
 const fallsFile = arg('--falls', null);
-const falls = fallsFile ? JSON.parse(fs.readFileSync(path.resolve(root, fallsFile), 'utf8')) : null;
+// several files: comma-separated; --fall-share: the share of training starts that are real falls (0.5)
+const falls = fallsFile ? fallsFile.split(',').flatMap((f) => JSON.parse(fs.readFileSync(path.resolve(root, f), 'utf8'))) : null;
+const fallShare = +arg('--fall-share', 0.5);
 
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
@@ -50,7 +52,7 @@ function run(w, seed, phase) {
   const start = sim.fillTrainingStart({}, rand, evalMode(9));
   let side = start.tilt > 0 ? 'up' : 'down';
   // useFalls: true = always a fall, false = never (official eval), null = half and half (training)
-  if (falls && (useFalls === true || (useFalls === null && rand() < 0.5))) {
+  if (falls && (useFalls === true || (useFalls === null && rand() < fallShare))) {
     const f = falls[Math.floor(rand() * falls.length)];
     const P = config.partIndex;
     const mid = (f.pose[P.footLeft * 3] + f.pose[P.footRight * 3]) / 2;

@@ -18,16 +18,18 @@ export function installRecovery(ep, world, ctx) {
   const toSettle = () => { R.phase = 'settle'; R.t = 0; };
   R.start = () => { if (R.phase && R.phase !== 'done' && R.phase !== 'failed') return; R.tries = 0; R.count++; toSettle(); };
   R.busy = () => !!R.phase && R.phase !== 'done' && R.phase !== 'failed';
-  const restore = () => { if (R.stand) { ep.network = R.stand; R.stand = null; } ep.options.getup = false; ep.options.startTime = 0; };
+  const restore = () => { if (R.stand) { ep.network = R.stand; R.stand = null; } if (R.marks !== undefined) { ep.options.targets = R.marks; R.marks = undefined; } ep.options.getup = false; ep.measure.getup = false; ep.options.startTime = 0; };
   // the networks read their marks on the floor the body lies on
   const origDecide = ep.decide.bind(ep);
   ep.decide = function () {
-    if ((R.phase === 'getup' || R.phase === 'stand') && this.options.targets) {
+    // (the get-up's own marks stay where they were planted when it started, as in training: planted once at
+    // reset and frozen; marks that followed the hips told it the opposite of what it learned)
+    if (R.phase === 'stand' && this.options.targets) {
       const t = this.options.targets, px = world.px[0];
       for (let i = 0; i < config.targets.length; i++) {
         const spec = config.targets[i], mk = t[i];
         if (!mk) continue;
-        if (spec.ride) { mk.x = px + (spec.x || 0); mk.y = R.floor + (spec.y || 0); if (mk.walkBase != null) mk.walkBase = mk.x - (this.walkOffset ? this.walkOffset() : 0); }
+        if (spec.ride) { mk.x = px + (spec.x || 0); mk.y = R.floor + (spec.y || 0); mk.angle = 0; if (mk.walkBase != null) mk.walkBase = mk.x - (this.walkOffset ? this.walkOffset() : 0); }
         else { mk.x = world.px[spec.id === 'footR' ? P.footRight : P.footLeft]; mk.y = R.floor + config.skill.footGroundMeters; }
       }
     }
@@ -51,8 +53,12 @@ export function installRecovery(ep, world, ctx) {
         R.stand = this.network;
         this.network = new ElmanNetwork(Float32Array.from(ctx.getup.theta));
         this.groundOffset = R.floor;
-        if (!this.options.targets || this.options.targets.length !== config.targets.length) this.options.targets = config.targets.map((t) => Object.assign({}, t));
+        // the marks as the get-up was trained with them (a skill-9 start): head and hands on, flat (angle 0),
+        // span 0.25, gain 1.3; the feet off. The episode's own marks (another skill's) come back after.
+        R.marks = this.options.targets;
+        this.options.targets = config.targets.map((t) => (t.ride ? { on: true, x: world.px[0] + (t.x || 0), y: R.floor + (t.y || 0), angle: 0, span: 0.25, gain: 1.3, frozen: true } : { on: false, x: 0, y: 0, angle: 0, gain: 0 }));
         this.options.getup = true;
+        this.measure.getup = true; // the reward the networks read (an input) is the get-up's, as in training
         this.options.startTime = -this.frame / HZ;
       }
     } else if (R.phase === 'getup') {
