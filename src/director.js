@@ -88,7 +88,9 @@ export function installPopDirector(ep, world, level, ctx) {
         const P = params;
         const OR = installObstacleRunner(ep, world, { config, pose, Box2D, ElmanNetwork, crag, H, surface, aimTop: true, speed: () => vt, stopAt: 0.3, vswitch: 1.3, leapP: P.leap, active: () => pit && pit.OR === OR && !pit.done, params: { runP: P.runner, walkP: P.walkFast, slowP: P.slow, stopP: P.stop, stopK: P.stopK, cragP: P.cragLeap || P.cragObstacle, getup: P.getup } });
         pit = { f, OR, done: false, t0: ep.frame };
-        OR.leapNow();
+        // (in the rope's wide hole the reach caught the rope as often as the ledge: there it lands, gets up and
+        // climbs the far wall from standing)
+        if (f.type === 'ropehole') OR.reset(true); else OR.leapNow();
         pitLog.push({ x: +px.toFixed(2), t: +(ep.frame / config.physics.hz).toFixed(1) });
         return;
       }
