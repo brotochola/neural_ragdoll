@@ -55,6 +55,6 @@ for (let i = first; i < first + n; i++) {
     if (R.phase === 'failed') break;
   }
   if (walked) ok++;
-  if (args.includes('--log')) console.log('fall', i, walked ? 'OK' : 'no', phases.join('>'), sides.join(' | '), f.blocks.length + ' blocks', (ep.frame / HZ).toFixed(1) + 's');
+  if (args.includes('--log')) console.log('fall', i, walked ? 'OK' : 'no', phases.join('>'), sides.join(' | '), (() => { const px0 = f.pose[0]; const ah = f.blocks.filter((b) => b.x1 > px0).map((b) => (b.x0 - px0).toFixed(2) + '/' + b.top.toFixed(2)); return 'ahead ' + (ah.join(',') || '-'); })(), (ep.frame / HZ).toFixed(1) + 's');
 }
 console.log('got up and walked', ok + '/' + n, 'lift', lift);

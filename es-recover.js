@@ -15,6 +15,7 @@ const args = process.argv.slice(2);
 const arg = (n, f) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : f; };
 const fallsFiles = arg('--falls', 'trained/trail-falls.json,trained/trail-falls2.json');
 const HELD = +arg('--held', 40);
+const TRAVEL = +arg('--travel', 0);
 
 async function makeEnv(files) {
   const { config, setSkill } = await import('./config.js');
@@ -55,9 +56,10 @@ async function makeEnv(files) {
     const ep = new sim.Episode(world, weights, start.tilt || 0, start.drop || 0, Object.assign({ phase: 0 }, start));
     const R = installRecovery(ep, world, { config, ElmanNetwork, getup: { theta, handover }, walkP: params.walkFast, floorAt: () => 0 });
     R.start();
-    let maxHead = 0, stood = false, walkT = 0;
+    let maxHead = 0, stood = false, walkT = 0, gx = null, travel = 0;
     while (!ep.advanceOneFrame()) {
-      if (R.phase === 'getup') maxHead = Math.max(maxHead, ep.measure.headHeight);
+      if (R.phase === 'getup') { maxHead = Math.max(maxHead, ep.measure.headHeight); if (gx == null) gx = world.px[0]; }
+      if (R.phase === 'stand' && gx != null && !travel) travel = Math.abs(world.px[0] - gx) + 1e-6;
       if (R.phase === 'stand' || R.phase === 'walk') stood = true;
       if (R.phase === 'walk') walkT += 1 / HZ;
       if (R.phase === 'done' || R.phase === 'failed') break;
@@ -65,8 +67,11 @@ async function makeEnv(files) {
     const done = R.phase === 'done';
     const t = ep.frame / HZ;
     // up and walking (sooner is better), else how far it got
-    const score = done ? 3 + (16 - t) / 16 : (stood ? 1 : 0) + Math.min(1, walkT / 3) + 0.5 * Math.min(1, maxHead / 1.6);
-    return { score, done: done ? 1 : 0 };
+    // TRAVEL (> 0): less for every metre the get-up carries the hips past 0.8 m (it went 3 m and hit what was ahead)
+    let score = done ? 3 + (16 - t) / 16 : (stood ? 1 : 0) + Math.min(1, walkT / 3) + 0.5 * Math.min(1, maxHead / 1.6);
+    if (TRAVEL && stood) score -= TRAVEL * Math.max(0, travel - 0.8);
+    if (process.env.DEBUG_EP) console.log('ep', k, 'done', done, 't', t.toFixed(1), 'travel', travel.toFixed(2), 'score', score.toFixed(2), 'TRAVEL', TRAVEL);
+    return { score, done: done ? 1 : 0, travel: stood ? travel : 0 };
   };
 }
 
@@ -93,7 +98,7 @@ if (!isMainThread) {
   const trainPool = Array.from({ length: nFalls - HELD }, (_, i) => HELD + i).filter((k) => !args.includes('--hard') || hardOf(allFalls[k]));
   console.log('training falls', trainPool.length, 'of', nFalls - HELD);
   const nW = +arg('--workers', Math.max(1, os.cpus().length));
-  const workers = Array.from({ length: nW }, () => new Worker(new URL(import.meta.url), { workerData: { files: fallsFiles } }));
+  const workers = Array.from({ length: nW }, () => new Worker(new URL(import.meta.url), { argv: process.argv.slice(2), workerData: { files: fallsFiles } }));
   let nextId = 0;
   const pending = new Map();
   for (const w of workers) w.on('message', ({ id, res }) => { pending.get(id)(res); pending.delete(id); });
@@ -113,17 +118,17 @@ if (!isMainThread) {
     }));
     return res;
   }
-  const heldKs = Array.from({ length: HELD }, (_, i) => i).concat([-1, -2, -3, -4, -5, -6, -7, -8]);
-  const evalHeld = async (th) => { const [r] = await runAll([{ theta: th, ks: heldKs }]); return { done: r.reduce((a, x) => a + x.done, 0), score: r.reduce((a, x) => a + x.score, 0) / r.length }; };
+  const heldKs = Array.from({ length: Math.min(HELD, 30) }, (_, i) => i).concat(Array.from({ length: args.includes('--ordinary') ? 20 : 8 }, (_, i) => -1 - i));
+  const evalHeld = async (th) => { const [r] = await runAll([{ theta: th, ks: heldKs }]); const st = r.filter((x) => x.travel > 0); return { done: r.reduce((a, x) => a + x.done, 0), score: r.reduce((a, x) => a + x.score, 0) / r.length, travel: st.reduce((a, x) => a + x.travel, 0) / Math.max(1, st.length) }; };
   let best = await evalHeld(theta);
-  console.log('start held-out: up and walking', best.done + '/' + heldKs.length, 'score', best.score.toFixed(3));
+  console.log('start held-out: up and walking', best.done + '/' + heldKs.length, 'score', best.score.toFixed(3), 'travel', best.travel.toFixed(2));
   const rand = makeSeededRandom(+arg('--rng', 7));
   const normal = () => randomNormalSample(rand);
   const m = new Float64Array(NW), v = new Float64Array(NW);
   const t0 = Date.now();
   for (let g = 0; g < gens; g++) {
     // this generation's starts: falls outside the held-out ones, one ordinary lying start in six
-    const ks = Array.from({ length: per }, (_, i) => (i === per - 1 && g % 2 === 0 ? -100 - g : trainPool[Math.floor(rand() * trainPool.length)]));
+    const ks = Array.from({ length: per }, (_, i) => (args.includes('--ordinary') ? -1000 - g * per - i : i === per - 1 && g % 2 === 0 ? -100 - g : trainPool[Math.floor(rand() * trainPool.length)]));
     const eps = [], jobs = [];
     for (let p = 0; p < pairs; p++) {
       const e = new Float64Array(NW);
@@ -151,8 +156,8 @@ if (!isMainThread) {
     let msg = 'gen ' + g + ' mean ' + (f.reduce((a, b) => a + b, 0) / f.length).toFixed(3) + ' up ' + passes + '/' + pairs * 2 * per;
     if ((g + 1) % every === 0) {
       const e = await evalHeld(theta);
-      msg += ' | held-out ' + e.done + '/' + heldKs.length + ' score ' + e.score.toFixed(3);
-      if (e.done > best.done || (e.done === best.done && e.score > best.score)) {
+      msg += ' | held-out ' + e.done + '/' + heldKs.length + ' score ' + e.score.toFixed(3) + ' travel ' + e.travel.toFixed(2);
+      if (e.score > best.score && e.done >= best.done - 2) {
         best = e;
         fs.writeFileSync(path.resolve(root, out), JSON.stringify(Object.assign({}, saved, { role: 'getup-expert-rec', gen: g, eval: { held: e.done + '/' + heldKs.length }, theta: Array.from(theta) })));
         msg += ' -> saved';
