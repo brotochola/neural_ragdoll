@@ -48,6 +48,10 @@ const wf = JSON.parse(fs.readFileSync(path.join(root, 'trained/walk-fast-control
 const walkP = Object.assign(simbMod.decode(wf.best), { track: !!wf.track });
 config.walk.maxStandSpeed = Math.max(config.walk.maxStandSpeed, 3);
 const runnerP = JSON.parse(fs.readFileSync(path.join(root, arg('--runner', 'trained/runner-gap-12c.json')), 'utf8')).params;
+// --net: the rope's landing network (rope-es.js) on during the search, so the numbers are tuned with it
+const netFile = arg('--net', null);
+const { makeTrailNet } = await import('./src/trail-net.js');
+const ropeNet = netFile ? { correct: makeTrailNet(world, config, Box2D), theta: Float64Array.from(JSON.parse(fs.readFileSync(path.join(root, netFile), 'utf8')).theta) } : null;
 
 const decode = (v) => {
   const p = {};
@@ -72,7 +76,8 @@ function episode(p, seed, record) {
   const x0 = (world.px[P.footLeft] + world.px[P.footRight]) / 2;
   ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
   const hole = { x0: x0 + course.hole.x0, x1: x0 + course.hole.x1 };
-  const RS = installRopeRunner(ep, world, p, { config, pose, Box2D, runnerP, speed: () => speed, hole, rope: ep.terrain.ropes[0], lift: LIFT, walkP, debug: !!process.env.DEBUG_ROPE });
+  if (ropeNet) { ep.floorAt = () => LIFT; ep.groundAt = (x) => (x > hole.x0 && x < hole.x1 ? 0 : LIFT); }
+  const RS = installRopeRunner(ep, world, p, { config, pose, Box2D, runnerP, speed: () => speed, hole, rope: ep.terrain.ropes[0], lift: LIFT, walkP, net: ropeNet, debug: !!process.env.DEBUG_ROPE });
   let fell = false, frames = 0, caught = false, landedX = null, upAfter = 0, maxX = -1e9;
   const recFrames = record ? [] : null;
   while (!ep.advanceOneFrame()) {
