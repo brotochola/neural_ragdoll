@@ -10,7 +10,7 @@ import { config, setSkill } from './config.js';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const arg = (n, f) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : f; };
-const seeds = +arg('--seeds', 10), base = +arg('--base', 100), seconds = +arg('--seconds', 150);
+const seeds = +arg('--seeds', 10), base = +arg('--base', 100), seconds = +arg('--seconds', 300);
 const Box2D = await import(pathToFileURL(path.join(root, 'vendor/PhaserBox2D.min.js')).href);
 const { createSim } = await import('./src/sim.js');
 const { ElmanNetwork } = await import('./src/net.js');
@@ -50,7 +50,7 @@ function episode(seed) {
   let stage = 0, down = 0, stallX = -1e9, stallT = 0, why = 'time';
   while (!ep.advanceOneFrame()) {
     const px = world.px[0], z = D.zone();
-    if (process.env.DEBUG_POP && ep.frame % 300 === 0) { const pl = D.chain.planner; console.log('   t', (ep.frame / HZ).toFixed(0), 'zone', z, 'chain', D.chain.mode, pl ? 'move ' + (pl.move ? pl.move.kind + (pl.move.k != null ? pl.move.k : '') + '->' + (pl.move.to != null ? pl.move.to : '') : '-') + ' hands ' + pl.lim.hand.map((h) => h.rung + (h.grip ? 'g' : '')).join(',') + ' feet ' + pl.lim.foot.map((f) => f.rung).join(',') + ' phase ' + pl.phase : '', 'pelvis', px.toFixed(2), world.py[0].toFixed(2), 'leap', JSON.stringify({ aim: D.chain.leap.aimI, hold: D.chain.leap.holdI, missed: D.chain.leap.missed })); }
+    if (process.env.DEBUG_POP && ep.frame % 300 === 0) { const pl = D.chain.planner; console.log('   t', (ep.frame / HZ).toFixed(0), 'zone', z, 'chain', D.chain.mode, pl ? 'move ' + (pl.move ? pl.move.kind + (pl.move.k != null ? pl.move.k : '') + '->' + (pl.move.to != null ? pl.move.to : '') : '-') + ' hands ' + pl.lim.hand.map((h) => h.rung + (h.grip ? 'g' : '')).join(',') + ' feet ' + pl.lim.foot.map((f) => f.rung).join(',') + ' phase ' + pl.phase : '', 'pelvis', px.toFixed(2), world.py[0].toFixed(2), 'leap', JSON.stringify({ aim: D.chain.leap.aimI, hold: D.chain.leap.holdI, missed: D.chain.leap.missed }), 'rec', D.rec ? D.rec.phase + '/' + D.rec.count : '-', 'log', D.chain.log.slice(-3).join(',')); }
     if (stage < 1 && z === 'wall') stage = 1;
     if (stage < 2 && D.chain.leap.caughtY != null) stage = 2;
     if (stage < 3 && D.wallDone) stage = 3;
@@ -58,24 +58,24 @@ function episode(seed) {
     if (stage < 5 && D.ropeDone) stage = 5;
     if (px > endX) { stage = 6; why = 'end'; break; }
     // falls, as the playground counts them
-    const busy = (z === 'wall' && D.chain.mode !== 'run' && D.chain.mode !== 'run2') || ep.grips[0].joint || ep.grips[1].joint;
+    const busy = (z === 'wall' && D.chain.mode !== 'run' && D.chain.mode !== 'run2') || ep.grips[0].joint || ep.grips[1].joint || (D.rec && D.rec.busy());
     const fl = D.floorAt(world.px[2]);
     const isDown = !busy && (world.py[2] - fl < 0.95 + 0.0 && ep.measure.headHeight - fl < 0.95 || (ep.measure.torsoCos || 0) < 0.3 || world.py[0] < D.floorAt(px) - 0.1);
     down = isDown ? down + 1 : 0;
-    if (down > 1.2 * HZ) {
+    if (down > (D.rec ? 3 : 1.2) * HZ) {
       const f = D.features.reduce((a, b) => (Math.abs((b.x0 + b.x1) / 2 - px) < Math.abs((a.x0 + a.x1) / 2 - px) ? b : a), D.features[0]);
       why = 'fell in ' + z + (z === 'wall' ? '/' + D.chain.mode : z === 'rope' ? '/' + D.rope.phase : '') + ' at x ' + px.toFixed(1) + ' near ' + f.type + ' (' + (px - f.x0).toFixed(1) + ' m) floor ' + D.floorAt(px).toFixed(2) + ' rock at ' + D.wall.x0.toFixed(1);
       break;
     }
     if (px > stallX + 0.5 || busy) { stallX = px; stallT = 0; } else if (++stallT > 25 * HZ) { why = 'stuck in ' + z; break; }
   }
-  return { stage, why, t: ep.frame / HZ, x: world.px[0] };
+  return { stage, why, t: ep.frame / HZ, x: world.px[0], getups: D.rec ? D.rec.count : 0 };
 }
 
 const count = new Array(STAGES.length).fill(0);
 for (let i = 0; i < seeds; i++) {
   const e = episode(base + i);
   for (let s = 0; s <= e.stage; s++) count[s]++;
-  console.log('seed', base + i, STAGES[e.stage].padEnd(18), '|', e.why, (e.t).toFixed(0) + 's');
+  console.log('seed', base + i, STAGES[e.stage].padEnd(18), '|', e.why, (e.t).toFixed(0) + 's', e.getups ? '(got up ' + e.getups + 'x)' : '');
 }
 console.log(STAGES.map((s, i) => s + ' ' + count[i] + '/' + seeds).join(' · '));

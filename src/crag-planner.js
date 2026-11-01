@@ -72,7 +72,21 @@ export function installCragPlanner(ep, world, p, ctx) {
     // hands first while they can still reach from the feet, the lower hand first; then the lower foot
     const hk = lim.hand[0].rung <= lim.hand[1].rung ? 0 : 1;
     const hTo = lim.hand[hk].rung + 1;
-    if (hTo < TOP && ry(hTo) - feetY <= p.spanMax) return { kind: 'hand', k: hk, to: hTo };
+    if (hTo < TOP && ry(hTo) - feetY <= p.spanMax) {
+      // a hand move that failed 4 times: that hand takes its knob again (if it let go), else the other hand up,
+      // else a foot up (a little stretched), else start counting again
+      if ((fails['hand' + hk + ':' + hTo] || 0) >= 4) {
+        if (!lim.hand[hk].grip && (fails['hand' + hk + ':' + lim.hand[hk].rung] || 0) < 4) return { kind: 'hand', k: hk, to: lim.hand[hk].rung };
+        const ho = 1 - hk;
+        if (lim.hand[ho].grip && lim.hand[ho].rung < hTo && (fails['hand' + ho + ':' + hTo] || 0) < 4) return { kind: 'hand', k: ho, to: hTo };
+        if (lim.hand[hk].grip) {
+          const fk3 = lim.foot[0].rung <= lim.foot[1].rung ? 0 : 1;
+          for (let i = N; i > lim.foot[fk3].rung; i--) if (handsY - ry(i) >= p.spanLow - 0.1 && (fails['foot' + fk3 + ':' + i] || 0) < 4) return { kind: 'foot', k: fk3, to: i };
+        }
+        for (const key in fails) delete fails[key];
+      }
+      return { kind: 'hand', k: hk, to: hTo };
+    }
     // onto the top only once the feet are high enough for the hips to bring the shoulders up to the edge
     if (hTo === TOP && wallH - feetY <= p.spanTop) {
       // the edge out of reach three times (feet too low under it, the body too far out): the hand takes its

@@ -22,7 +22,7 @@ export function installObstacleRunner(ep, world, ctx) {
   const speedOf = () => ctx.speed();
   const walker = simb.makeController(world), runner = runMod.makeController(world);
   const tmp = new Float64Array(J + 2);
-  let mode = 'run', modeT = 0, PL = null, holdFeet = null;
+  let mode = 'run', modeT = 0, PL = null, holdFeet = null, climbBest = -1, climbT = 0;
   const LP = ctx.leapP || null;
   // the knobs, absolute (shifted like the terrain), and the one the leap aims at: the highest under reachH
   const kdx = S[1][0] - crag.surface[1][0];
@@ -146,8 +146,23 @@ export function installObstacleRunner(ep, world, ctx) {
         // the crag planner takes over (it wraps updateGrip from outside; this wrapper then only passes on)
         PL = installCragPlanner(ep, world, cragP, { config, pose, Box2D, crag, nets: { ElmanNetwork, getupW: getup.theta, handover: getup.handover } });
       }
+    } else if (mode === 'drop') {
+      // gave up a climb from a leap: let go, legs under the body; once down, stand and climb from standing
+      for (let j = 0; j < J; j++) tmp[j] = 0;
+      // knees a little bent and the hips a little forward to take the landing, arms down at the sides
+      for (const [h, kn, an] of [[5, 6, 7], [11, 12, 13]]) { tmp[h] = command(h, 0.35); tmp[kn] = command(kn, -0.6); tmp[an] = command(an, 0.25); }
+      for (const sh of [2, 8]) tmp[sh] = command(sh, -angleOf(1));
+      for (let k = J; k < tmp.length; k++) tmp[k] = -1;
+      if (modeT > 0.8 && (m.touch[P.footLeft] || m.touch[P.footRight])) { holdFeet = null; setMode('hold'); }
     } else if (mode === 'climb') {
       this.speedCap = 0;
+      // no limb has gone higher for 25 s (and not over the edge yet): from a leap, drop and climb from standing
+      if (PL && !PL.phase) {
+        const prog = PL.lim.hand[0].rung + PL.lim.hand[1].rung + PL.lim.foot[0].rung + PL.lim.foot[1].rung;
+        if (prog > climbBest) { climbBest = prog; climbT = 0; } else climbT += 1 / HZ;
+        if (climbT > 25 && LP && !leap.dropped) { leap.dropped = true; PL.handOff(); PL = null; climbBest = -1; climbT = 0; setMode('drop'); }
+      }
+      if (mode === 'drop') { orig(); return; }
       if (PL.stood && PL.phase === 'stand' && modeT > 1) {
         // standing on top for a moment: walk off, then run
         if (!this.standT) this.standT = 0;
@@ -167,5 +182,8 @@ export function installObstacleRunner(ep, world, ctx) {
     for (let j = 0; j < tmp.length; j++) this.action[j] = j < J || gripping ? tmp[j] : -1;
     orig();
   })(ep.updateGrip.bind(ep));
-  return { get mode() { return mode; }, get planner() { return PL; }, log, leap };
+  // back to the start of the approach (after a get-up, src/recover.js): run at the rock and leap again
+  // walkUp: got up near the rock, too close for a run-up: walk up to it and climb from standing (the old way)
+  const reset = (walkUp) => { mode = walkUp ? 'walk' : 'run'; modeT = 0; holdFeet = null; Object.assign(leap, { caughtY: null, caughtAt: null, missed: !!walkUp, tookOff: null, landed: false, minD: null }); };
+  return { get mode() { return mode; }, get planner() { return PL; }, log, leap, reset };
 }

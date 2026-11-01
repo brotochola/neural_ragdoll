@@ -224,7 +224,7 @@ function reset() {
   $('modeNote').textContent = (state.mode === 'run' && state.scene === 'rope' ? 'Corre, salta en el borde, agarra la soga en el aire, cruza el agujero, cae y sigue corriendo. En la simulación cruza y sigue corriendo cerca de la mitad de las veces. Si se cae, vuelve a empezar solo con otro agujero; si cruza, cuenta el cruce y prueba con otro.' : state.mode === 'run' && state.scene === 'dash' ? DASH_NOTE : state.mode === 'run' && state.scene === 'pop' ? POP_NOTE : state.mode === 'run' && state.scene === 'trail' ? TRAIL_NOTE : state.mode === 'run' && state.scene === 'leap' ? LEAP_NOTE : state.mode === 'run' && state.scene === 'obstacle' ? 'Corre, frena antes de la roca de 2 m, trepa, se arrastra sobre el borde, se levanta arriba y vuelve a correr. Tarda casi un minuto y en la simulación sale 4 de cada 10 veces (a veces se traba trepando).' : MODE_NOTE[state.mode]) + (state.mode === 'climb' && !['wall', 'mountain'].includes(state.scene) ? ' Elegí la pared o la montaña.' : '');
 }
 const DASH_NOTE = 'Corre a la derecha lo más rápido que puede sobre cajas y bolas al azar, saltándolas. Las bolas están sueltas: si las patea, ruedan. El corredor (números ajustados por búsqueda) lleva encima una red neuronal chica, entrenada con estrategias evolutivas en miles de recorridos al azar, que corrige caderas, rodillas, tobillos y cintura según cómo viene el cuerpo y qué tiene adelante. Si se cae, vuelve a empezar con otro recorrido.';
-const POP_NOTE = 'Nivel tipo Prince of Persia: terreno con escalones, agujeros, cajas y bolas; baja al piso, corre hacia una roca de 2 m, salta, se agarra y trepa; arriba sigue corriendo sobre más obstáculos (los agujeros acá son pozos de 2 m) y cruza un agujero grande colgado de una soga. Un director en código le pasa el control a cada habilidad según la zona. Cada intento es un nivel distinto.';
+const POP_NOTE = 'Nivel tipo Prince of Persia: terreno con escalones, agujeros, cajas y bolas; baja al piso, corre hacia una roca de 2 m, salta, se agarra y trepa; arriba sigue corriendo sobre más obstáculos (los agujeros acá son pozos de 2 m) y cruza un agujero grande colgado de una soga. Un director en código le pasa el control a cada habilidad según la zona, y si se cae en el terreno lo hace levantarse (con la red de levantarse), caminar y seguir corriendo. Cada intento es un nivel distinto.';
 const TRAIL_NOTE = 'Terreno libre: el piso sube y baja en escalones, tiene agujeros, cajas y bolas. Corre lo más rápido que puede sin caerse. El corredor lleva encima una red correctora que ve el perfil del terreno hasta casi 3 m adelante; en recorridos nuevos pasa el 87% de los obstáculos (el corredor solo, el 64%) y la mitad de las veces corre 12 s sin caerse. Si se cae, empieza otro recorrido.';
 const LEAP_NOTE = 'Corre hacia una roca de 2 m sin frenar, salta y se agarra en el aire del saliente más alto que alcanza, se cuelga, trepa con el planificador, pasa el borde, se levanta y sigue corriendo. Si no llega a agarrarse, vuelve al método lento: camina, frena y trepa desde parado. En rocas nuevas se agarra casi siempre y hace todo el recorrido unas 7 de cada 10 veces.';
 const MODE_NOTE = {
@@ -548,9 +548,24 @@ function runFacts(info, vTarget) {
   }
 }
 
+const RECOVER_PHASES = [['settle', 'Se queda quieto'], ['getup', 'Se levanta (red)'], ['stand', 'Se para (red)'], ['walk', 'Camina'], ['done', 'Vuelve a correr']].map(([id, label]) => ({ id, label }));
+function describeRecover(R) {
+  const info = { stages: {}, phases: RECOVER_PHASES, phase: R.phase, facts: [], net: null, sel: null };
+  const st = info.stages;
+  st.motors = MOTORS;
+  const net = R.phase === 'getup' || R.phase === 'stand';
+  st.sense = net ? { who: R.phase === 'getup' ? 'Red "levantarse"' : 'Red "pararse"', kind: 'net', detail: 'Ángulos y velocidades de las articulaciones, inclinación, rayos de visión y contactos, con el piso a la altura donde cayó.' } : { who: 'Código', kind: 'rules', detail: 'Mira si el cuerpo ya está quieto y qué pie toca el piso.' };
+  st.decide = { who: 'Director del nivel → levantarse y seguir', kind: 'rules', detail: 'Se cayó en el terreno: en vez de empezar de nuevo, se levanta, camina unos pasos y vuelve a correr.' };
+  st.limbs = { who: 'Nadie', kind: 'none', detail: 'Para levantarse no hay objetivos de manos ni pies: la red saca los ángulos directo.' };
+  st.joints = R.phase === 'getup' ? { who: 'Red "levantarse"', kind: 'net', detail: 'Aprendió a levantarse imitando a un controlador maestro y después se afinó con estrategias evolutivas.' } : R.phase === 'stand' ? { who: 'Red "pararse"', kind: 'net', detail: 'Mantiene el equilibrio parada un momento.' } : R.phase === 'walk' ? { who: 'Caminata SIMBICON', kind: 'tuned', detail: 'Unos pasos acelerando de 0,3 a 1,2 m/s antes de volver a correr.' } : { who: 'Cuerpo suelto', kind: 'rules', detail: 'Motores relajados hasta quedar quieto.' };
+  if (net) info.net = R.phase === 'getup' ? elmanNet('Red "levantarse"', 'Se levanta desde el piso.') : elmanNet('Red "pararse"', 'Mantiene el equilibrio parada.');
+  info.facts.push(['Zona del nivel', 'levantándose después de una caída', true], ['Fase', (RECOVER_PHASES.find((q) => q.id === R.phase) || { label: R.phase }).label + ' · ' + R.t.toFixed(1) + ' s'], ['Levantadas en este nivel', String(R.count)], ['Piso', 'a ' + R.floor.toFixed(2) + ' m']);
+  return info;
+}
 function describe() {
   // in the level, describe whichever skill the director has on, as its own scene would
   const zn = popDir ? popDir.zone() : null;
+  if (zn === 'recover') return describeRecover(popDir.rec);
   const sc = zn ? (zn === 'trail' ? 'trail' : zn === 'wall' ? 'leap' : 'rope') : state.scene;
   const ch = popDir ? (zn === 'rope' ? popDir.rope : popDir.chain) : chain;
   const ropeHoleNow = popDir ? popDir.hole : ropeHole;
@@ -719,7 +734,7 @@ function loop(now) {
   // in the automatic modes a fall (head near the ground for 2 s) restarts the run
   const headUp = ep.measure.headHeight - (trailInfo ? trailInfo.floorAt(world.px[2]) : groundAt(world.px[2]));
   // on the dash course sitting or crawling counts too (as dash.js scores it: head under 0.95 m or the trunk past ~70°)
-  const popBusy = popDir && (popDir.zone() === 'wall' && popDir.chain.mode !== 'run' && popDir.chain.mode !== 'run2' || (ep.grips[0].joint || ep.grips[1].joint));
+  const popBusy = popDir && (popDir.zone() === 'wall' && popDir.chain.mode !== 'run' && popDir.chain.mode !== 'run2' || (ep.grips[0].joint || ep.grips[1].joint) || (popDir.rec && popDir.rec.busy()));
   const down = state.scene === 'pop' ? !popBusy && (headUp < 0.95 || (ep.measure.torsoCos || 0) < 0.3 || world.py[0] < popDir.floorAt(world.px[0]) - 0.1) : state.scene === 'dash' || state.scene === 'trail' ? headUp < 0.95 || (ep.measure.torsoCos || 0) < 0.3 || (trailInfo && world.py[0] < trailInfo.floorAt(world.px[0]) - 0.1) : headUp < 0.45;
   downFor = down ? downFor + dt : 0;
   // crawling over the summit edge the head is low on purpose: not a fall
@@ -736,13 +751,14 @@ function loop(now) {
   // over the rock and running on 5 m past its edge: one more pass, then a new rock (its top ends at 14 m)
   if ((state.scene === 'leap' || state.scene === 'obstacle') && chain && chain.mode === 'run2' && terrain.surface && world.px[0] > terrain.surface[terrain.surface.length - 2][0] + 5) { crossed++; holeFor = 0; downFor = 0; state.seed++; reset(); }
   // a new course each restart (the same seed replayed the same fall exactly)
-  if ((state.scene === 'dash' || state.scene === 'trail' || state.scene === 'pop') && downFor > 1.2) downFor = 2.01;
+  if ((state.scene === 'dash' || state.scene === 'trail') && downFor > 1.2) downFor = 2.01;
+  if (state.scene === 'pop' && downFor > 3) downFor = 2.01; // the level's director gets up on its own first
   // stuck in the level (no progress for 25 s): a new level
   if (popDir) { if (world.px[0] > stallX + 0.5 || popBusy) { stallX = world.px[0]; stallT = 0; } else stallT += dt; }
   const stalled = popDir && stallT > 25;
   if ((state.scene === 'dash' || state.scene === 'trail' || state.scene === 'pop') && downFor === 0) bestDash = Math.max(bestDash, world.px[0] - startX); // the farthest it got while up
   if (state.mode !== 'manual' && (downFor > 2 || stuck || stalled)) { stallT = 0; stallX = -1e9; downFor = 0; holeFor = 0; falls++; state.seed++; reset(); }
-  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '') + ((state.scene === 'rope' || state.scene === 'leap' || state.scene === 'obstacle') && crossed ? ` · ${state.scene === 'rope' ? 'cruces' : 'pasadas'} ${crossed}` : '') + ((state.scene === 'dash' || state.scene === 'trail' || state.scene === 'pop') ? ` · ${((world.px[0] - startX) / Math.max(0.1, ep.frame / HZ)).toFixed(1)} m/s · récord ${bestDash.toFixed(0)} m` : '');
+  $('hud').textContent = `cabeza ${headUp.toFixed(2)} m sobre el suelo · agarres ${(ep.grips[0].joint ? 1 : 0) + (ep.grips[1].joint ? 1 : 0)} · avanzó ${(world.px[0] - startX).toFixed(1)} m · t ${(ep.frame / HZ).toFixed(1)} s` + (state.mode !== 'manual' && falls ? ` · caídas ${falls}` : '') + ((state.scene === 'rope' || state.scene === 'leap' || state.scene === 'obstacle') && crossed ? ` · ${state.scene === 'rope' ? 'cruces' : 'pasadas'} ${crossed}` : '') + (popDir && popDir.rec && popDir.rec.count ? ` · levantadas ${popDir.rec.count}` : '') + ((state.scene === 'dash' || state.scene === 'trail' || state.scene === 'pop') ? ` · ${((world.px[0] - startX) / Math.max(0.1, ep.frame / HZ)).toFixed(1)} m/s · récord ${bestDash.toFixed(0)} m` : '');
   requestAnimationFrame(loop);
 }
 const inspector = createInspector({ $, css, Box2D, world });

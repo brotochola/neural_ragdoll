@@ -37,7 +37,9 @@ async function makeEnv(runnerFile, seconds, course) {
   return function episode(theta, seed, log) {
     const r = makeSeededRandom(9100 + seed);
     const start = sim.fillTrainingStart({}, r, evalMode(6));
-    const c = makeTrailCourse(r, Object.assign({ length: 4 + 5.2 * seconds }, course));
+    // course.mix: every other course is like the level's first stretch (on the ground, boxes, balls, low steps, no holes)
+    const ground = course.mix && seed % 2 === 1;
+    const c = makeTrailCourse(r, Object.assign({ length: 4 + 5.2 * seconds }, ground ? { start: 0, minLevel: 0, maxLevel: 0.45, pHole: 0, pBox: 0.3, pBall: 0.2 } : {}, course));
     const rs = runStates[Math.floor(r() * runStates.length)];
     const v = p.vRun || 2.6;
     const pz = rs.pose.slice();

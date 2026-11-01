@@ -43,7 +43,7 @@ const PIECES = [
   ['Secuencia de la soga', 'tuned', 'Fases de saltar con la soga'],
   ['Secuencia del obstáculo', 'tuned', 'Encadena correr, frenar, trepar y seguir'],
   ['Secuencia del salto a la pared', 'tuned', 'Corre, salta, se agarra en el aire y le pasa al planificador'],
-  ['Director del nivel', 'rules', 'Elige la habilidad por zona del nivel'],
+  ['Director del nivel', 'rules', 'Elige la habilidad por zona del nivel; si se cae, lo hace levantarse y seguir'],
   ['Ejecutor de poses', 'rules', 'Convierte cadera, manos y pies en ángulos'],
 ];
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
