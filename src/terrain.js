@@ -200,7 +200,8 @@ export function makePopLevel(r, opts = {}) {
   // the rock as a floor piece for the level's floor line: its top from the summit edge on
   levels.push([summit, plateauEnd, o.wallH]);
   // trail B on the top, a rope over a wide hole, trail C
-  const B = shift(makeTrailCourse(r, { start: o.wallH, minLevel: o.wallH - 0.3, maxLevel: o.wallH + 0.5, lead: 2, length: o.lenB, tail: 4, pHole: 0.2, from: 0 }), plateauEnd);
+  // B ends in 6 m of flat floor before the rope's hole: the rope runner's run-up (it knows no obstacles)
+  const B = shift(makeTrailCourse(r, { start: o.wallH, minLevel: o.wallH - 0.3, maxLevel: o.wallH + 0.5, lead: 2, length: o.lenB, tail: 6, pHole: 0.2, from: 0 }), plateauEnd);
   const holeW = 1.4 + r() * 0.8, hx0 = B.end, hx1 = hx0 + holeW, lvR = B.endLevel;
   const ropeTop = lvR + 4.2 + r() * 0.3, ropeLow = lvR + 1.25 + r() * 0.15;
   const C = shift(makeTrailCourse(r, { start: lvR, minLevel: o.wallH - 0.3, maxLevel: o.wallH + 0.5, lead: 4, length: o.lenC, tail: 40, from: 0 }), hx1);
