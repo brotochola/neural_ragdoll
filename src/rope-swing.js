@@ -94,6 +94,8 @@ export function installRopeRunner(ep, world, p, ctx) {
         }
       }
       if (S.phase === 'run' && st && st.jumping && st.flight) { S.phase = 'reach'; S.t = 0; }
+      // ctx.net = { correct, theta } (src/trail-net.js): corrections on the landing run and the run on after it
+      if (ctx.net && (S.phase === 'land' || S.phase === 'run2') && this.runner) ctx.net.correct(ctx.net.theta, this, this.runner, ctx.netObstacles || [], ctx.speed(), tmp);
       for (let j = 0; j < tmp.length; j++) this.action[j] = j < J ? tmp[j] : -1;
       if (S.phase === 'land' && S.t > 0.3 && (m.touch[P.footLeft] || m.touch[P.footRight]) && S.t > 1.2) { S.phase = 'run2'; S.t = 0; }
       if (S.phase === 'land' && !(m.touch[P.footLeft] || m.touch[P.footRight])) {

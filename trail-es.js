@@ -32,6 +32,7 @@ async function makeEnv(runnerFile, seconds, course) {
   const weights = ElmanNetwork.copy(JSON.parse(fs.readFileSync(path.join(root, 'trained/stand-and-walk.json'), 'utf8')).theta);
   const runStates = JSON.parse(fs.readFileSync(path.join(root, 'trained/run-states.json'), 'utf8'));
   const p = JSON.parse(fs.readFileSync(path.join(root, runnerFile), 'utf8')).params;
+  for (const k of Object.keys(process.env)) if (k.startsWith('P_')) p[k.slice(2)] = +process.env[k]; // overrides to try
   const correct = makeTrailNet(world, config, Box2D);
   return function episode(theta, seed, log) {
     const r = makeSeededRandom(9100 + seed);

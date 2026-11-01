@@ -68,7 +68,9 @@ export function installRunner(ep, world, p, ctx) {
       sel.next = next || null; sel.fx = fx; sel.win = win; sel.dropH = st.dropH;
       if (next && next.x0 - fx > 0.03 && next.x0 - fx < win) {
         st.jumping = true;
-        st.jumpScale = Math.max(0.3, Math.min(3, 1 + (p.jumpGainH || 0) * dh / HREF));
+        // a hole: the jump also grows with its width (jumpGainW per 0.4 m over 0.6 m)
+        const dw = next.top == null ? (next.x1 - next.x0) - 0.6 : 0;
+        st.jumpScale = Math.max(0.3, Math.min(3, 1 + (p.jumpGainH || 0) * dh / HREF + (p.jumpGainW || 0) * dw / 0.4));
         sel.jumpAt = this.frame; sel.jumpScale = st.jumpScale;
       } else if (next && st.avgL && p.kStride) {
         const D = next.x0 - fx - p.takeoff - (p.takeoffH || 0) * dh;
