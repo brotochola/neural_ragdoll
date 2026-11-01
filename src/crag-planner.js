@@ -39,6 +39,10 @@ export function installCragPlanner(ep, world, p, ctx) {
     const L = rungs[i - 1];
     return { x: L.back - 0.07 + p.footIn, y: L.y + 0.005 };
   };
+  // ctx.start = { hands: [i0, i1], handPos: [{x, y}, {x, y}] }: it starts already hanging (a leap caught a
+  // knob): both hands on those knobs, holding, the feet where they are (in the air, rung 0)
+  const started = !!(ctx.start && ctx.start.hands);
+  if (started) for (let k = 0; k < 2; k++) lim.hand[k] = { rung: ctx.start.hands[k], pos: { ...ctx.start.handPos[k] }, grip: true };
   const handsTop = () => lim.hand[0].rung === TOP && lim.hand[1].rung === TOP;
   const feetTop = () => lim.foot.filter((f) => f.rung === TOP).length;
   // first rung the hands can reach standing
@@ -50,7 +54,7 @@ export function installCragPlanner(ep, world, p, ctx) {
   if (!reach) reach = 1; // about shoulder height: an arm raised overhead next to the wall hit the rungs
   // the move list is generated as the climb goes
   let move = null;
-  let retry = 0, lastKey = '';
+  let retry = 0, lastKey = '', topFails = 0;
   const pv0 = pose.pelvisOf(world);
   let pelvisGoal = { x: pv0.x, y: pv0.y };
   let pelvisFrom = { ...pelvisGoal };
@@ -69,9 +73,21 @@ export function installCragPlanner(ep, world, p, ctx) {
     const hTo = lim.hand[hk].rung + 1;
     if (hTo < TOP && ry(hTo) - feetY <= p.spanMax) return { kind: 'hand', k: hk, to: hTo };
     // onto the top only once the feet are high enough for the hips to bring the shoulders up to the edge
-    if (hTo === TOP && wallH - feetY <= p.spanTop) return { kind: 'hand', k: hk, to: hTo };
+    if (hTo === TOP && wallH - feetY <= p.spanTop) {
+      // the edge out of reach three times (feet too low under it, the body too far out): the hand takes its
+      // knob again, then a foot goes as high as it can before the edge is tried again
+      if (topFails >= 3) {
+        if (!lim.hand[hk].grip) { const rk = 'hand' + hk + ':' + lim.hand[hk].rung; return { kind: 'hand', k: hk, to: Math.max(1, lim.hand[hk].rung - (lastKey === rk && retry >= 2 ? 1 : 0)) }; }
+        const fk2 = lim.foot[0].rung <= lim.foot[1].rung ? 0 : 1;
+        for (let i = N; i > lim.foot[fk2].rung; i--) if (handsY - ry(i) >= p.spanLow) { topFails = 0; return { kind: 'foot', k: fk2, to: i }; }
+        topFails = 0;
+      }
+      return { kind: 'hand', k: hk, to: hTo };
+    }
     const fk = lim.foot[0].rung <= lim.foot[1].rung ? 0 : 1;
-    const fTo = lim.foot[fk].rung + 1;
+    let fTo = lim.foot[fk].rung + 1;
+    // hanging from a leap with a foot in the air: it goes to the highest knob far enough under the hands
+    if (started && lim.foot[fk].rung === 0) { for (let i = N; i >= 1; i--) if (handsY - ry(i) >= p.spanMin) { fTo = i; break; } }
     // MANTLE: both hands on top; the feet walk up the last rungs, then step onto the top
     if (handsTop()) {
       // BELLY MANTLE (p.belly): press up on the arms, tip the chest over the edge and crawl onto the top
@@ -407,7 +423,7 @@ export function installCragPlanner(ep, world, p, ctx) {
           lim.hand[move.k] = { rung: bi, pos: { x: hp.x, y: hp.y }, grip: true };
           move = null;
         }
-        else if ((move.wait += 1 / HZ) > 0.6) { if (ENV.DEBUG_CW) { const hp = pose.handOf(world, move.k === 0 ? P.handLeft : P.handRight); console.log('  grip miss hand', move.k, 'at', hp.x.toFixed(2), hp.y.toFixed(2), 'target', move.target.x.toFixed(2), move.target.y.toFixed(2)); } move = null; retry++; } // retry the same move
+        else if ((move.wait += 1 / HZ) > 0.6) { if (move.to === TOP) topFails++; if (ENV.DEBUG_CW) { const hp = pose.handOf(world, move.k === 0 ? P.handLeft : P.handRight); console.log('  grip miss hand', move.k, 'at', hp.x.toFixed(2), hp.y.toFixed(2), 'target', move.target.x.toFixed(2), move.target.y.toFixed(2)); } move = null; retry++; } // retry the same move
       } else if (move.kind === 'foot') {
         // standing on the rung? (sole within 6 cm of its top and over it); else try again
         const so = pose.soleOf(world, move.k === 0 ? P.footLeft : P.footRight);

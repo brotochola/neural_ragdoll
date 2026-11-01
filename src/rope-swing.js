@@ -69,6 +69,8 @@ export function installRopeRunner(ep, world, p, ctx) {
   };
   const S = { phase: 'run', t: 0 };
   ep.updateGrip = ((orig) => function () {
+    // ctx.active(): a director (src/director.js) may switch this skill off; off, it leaves the motors alone
+    if (ctx.active && !ctx.active()) { orig(); return; }
     const m = this.measure;
     S.t += 1 / HZ;
     m.walkSpeed = S.phase === 'run2' ? Math.min(ctx.speed(), 1.2 + S.t * 0.6) : ctx.speed() * (S.phase === 'land' ? 1 + p.landSpeed * 0.3 : 1);

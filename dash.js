@@ -33,7 +33,9 @@ const { makeSeededRandom, randomNormalSample } = await import('./src/utils.js');
 const { evalMode } = await import('./src/training.js');
 const { SPEC: RSPEC } = await import('./src/runner.js');
 const { installRunner } = await import('./src/run-selector.js');
-const { makeDashCourse } = await import('./src/terrain.js');
+const { makeDashCourse, makeTrailCourse } = await import('./src/terrain.js');
+const { installTrail } = await import('./src/trail.js');
+const TRAIL = args.includes('--trail'); // the trail course (steps, holes, boxes, balls on a raised floor) instead of the dash course
 
 setSkill(6);
 config.walk.maxStandSpeed = 20;
@@ -60,7 +62,43 @@ const decode = (v) => {
 // start from a saved parameter set by NAME (runner files differ in length and order of the extras)
 function encode(params) { return Float64Array.from(SPEC.map(([name, base]) => (params[name] != null ? params[name] - base : 0))); }
 
+function trailEpisode(p, seed, log) {
+  // the same episode trail-es.js runs, without a network
+  const r = makeSeededRandom(9100 + seed);
+  const start = sim.fillTrainingStart({}, r, evalMode(6));
+  const c = makeTrailCourse(r, Object.assign({ length: 4 + 5.2 * seconds }, courseOpts));
+  const rs = runStates[Math.floor(r() * runStates.length)];
+  const v = p.vRun;
+  const pz = rs.pose.slice();
+  for (let q = 0; q < world.parts.length; q++) pz[q * 3 + 1] += c.lift;
+  Object.assign(start, { startPose: pz, startVel: rs.vel.map((q, i) => (i % 3 === 0 ? q * v / rs.speed : q)), tilt: 0, drop: 0, settle: 0, frames: Math.round(seconds * HZ) });
+  start.walk = null;
+  start.terrain = { statics: c.statics, balls: c.balls };
+  world.rebuild();
+  const ep = new sim.Episode(world, weights, 0, 0, Object.assign({ phase: 0 }, start));
+  ep.runner = { stance: rs.stance, t: -0.1, flight: false, jumping: false, jumpNext: false, strides: 0 };
+  const tr = installTrail(ep, c, Box2D);
+  installRunner(ep, world, p, { config, obstacles: tr.obstacles, floorAt: tr.floorAt, speed: () => v });
+  const x0 = world.px[0];
+  let frames = 0, fell = false, low = 0;
+  while (!ep.advanceOneFrame()) {
+    frames++;
+    const m = ep.measure, fl = tr.floorAt(world.px[0]), head = world.py[2] - fl;
+    low = head < 1.15 || (m.torsoCos || 0) < 0.3 ? low + 1 : 0;
+    if (world.py[0] < fl - 0.1 || head < 0.85 || low > 15) { fell = true; break; }
+  }
+  const T = frames / HZ, dist = world.px[0] - x0;
+  const feats = tr.features.filter((f) => f.type !== 'down');
+  const passed = feats.filter((f) => f.x1 < world.px[0] - 0.3).length;
+  let where = '';
+  if (fell) { const px = world.px[0]; const o = tr.features.reduce((a, b) => (Math.abs((b.x0 + b.x1) / 2 - px) < Math.abs((a.x0 + a.x1) / 2 - px) ? b : a), tr.features[0]); where = (px < o.x0 ? 'before ' : px <= o.x1 ? 'over ' : 'after ') + o.type; if (log) failLog.push(where); }
+  const score = 2 * Math.max(0, dist) / seconds + 4 * Math.min(1, frames / (seconds * HZ)) + (fell ? 0 : 1);
+  if (log) console.log('seed', seed, fell ? 'FELL ' + T.toFixed(1) + 's ' + where : 'ok', 'dist', dist.toFixed(1), 'passed', passed);
+  return { score, pass: fell ? 0 : 1, dist, T, passed, fell };
+}
+
 function episode(p, seed, log) {
+  if (TRAIL) return trailEpisode(p, seed, log);
   const r = makeSeededRandom(7000 + seed);
   const start = sim.fillTrainingStart({}, r, evalMode(6));
   const course = makeDashCourse(r, Object.assign({ length: 4 + 5.2 * seconds }, courseOpts));

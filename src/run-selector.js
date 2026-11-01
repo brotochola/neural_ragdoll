@@ -9,6 +9,8 @@
 // take-off window grows by winH * (top - 0.2). Both 0 (or missing) = the old selector exactly.
 // ctx.speed(): the commanded speed; without it, p.vRun.
 // ctx.net: an optional corrective network (src/dash-net.js) run every frame after the runner.
+// ctx.floorAt(x): the floor level there (holes bridged) when the floor is not flat: obstacle heights are then
+// taken from the floor it stands on, and stepping down is read from the floor a stride ahead.
 import { makeController } from './runner.js';
 
 export const HREF = 0.2; // the obstacle height the jump parameters are tuned at
@@ -33,6 +35,9 @@ export function installRunner(ep, world, p, ctx) {
   // and the runner's commands before (base) and the network's change to them (corr)
   const sel = ep.sel = { next: null, fx: 0, win: 0, jumpAt: -1e9, jumpScale: 1, placeAdj: 0, dropH: 0, base: new Float64Array(J), corr: new Float64Array(J), net: !!ctx.net };
   ep.updateGrip = ((orig) => function () {
+    // ctx.active(): a director (src/director.js) may switch this skill off; off, it leaves the motors alone
+    if (ctx.active && !ctx.active()) { orig(); return; }
+    ep.sel = sel;
     const m = this.measure;
     m.walkSpeed = speed();
     this.speedCap = config.body.maxJointSpeed;
@@ -48,9 +53,17 @@ export function installRunner(ep, world, p, ctx) {
       // standing on top of something with the next step coming down off it: dropH = how far down (the runner
       // reaches further and leans less by dropPlace, dropLean per metre)
       const fy = world.py[st.stance ? P.footRight : P.footLeft];
-      const on = now.find((o) => o.top != null && o.top > 0.05 && fx >= o.x0 - 0.03 && fx <= o.x1 + 0.03 && fy > o.top - 0.08);
-      st.dropH = on && st.avgL && on.x1 - fx < st.avgL ? on.top : 0;
-      const dh = next && next.top != null ? next.top - HREF : 0;
+      if (ctx.floorAt) {
+        // a floor whose level changes (the trail course): the next step comes down if the floor a stride ahead is lower
+        const drop = st.avgL ? ctx.floorAt(fx) - ctx.floorAt(fx + st.avgL) : 0;
+        st.dropH = drop > 0.08 ? drop : 0;
+      } else {
+        const on = now.find((o) => o.top != null && o.top > 0.05 && fx >= o.x0 - 0.03 && fx <= o.x1 + 0.03 && fy > o.top - 0.08);
+        st.dropH = on && st.avgL && on.x1 - fx < st.avgL ? on.top : 0;
+      }
+      // heights from where it stands (the sole reads ~4 cm over the ground); on a floor at 0 this is the old absolute height
+      const ground = ctx.floorAt ? ctx.floorAt(fx) : 0;
+      const dh = next && next.top != null ? next.top - ground - HREF : 0;
       const win = (st.avgL ? st.avgL + p.jumpMargin : p.jumpWin) + (p.winH || 0) * dh;
       sel.next = next || null; sel.fx = fx; sel.win = win; sel.dropH = st.dropH;
       if (next && next.x0 - fx > 0.03 && next.x0 - fx < win) {
